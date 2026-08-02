@@ -1,0 +1,12 @@
+# Runtime dependencies for TV Vision Processor.
+#
+# The debug window needs GUI bindings, so the default is the full
+# opencv-python build.  On a headless box (systemd service, no X/Wayland)
+# swap it for opencv-python-headless -- everything except `--debug` works.
+numpy>=1.26
+opencv-python>=4.9
+PyYAML>=6.0
+
+# Everything else (web calibration wizard, MJPEG server, V4L2 output,
+# DDP output) is implemented on top of the standard library on purpose:
+# this runs on a 2012 i5 and every dependency is a liability there.

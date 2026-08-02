@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV Vision Processor &mdash; Calibration</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2318a0fb'/><rect x='6' y='9' width='20' height='13' rx='2' fill='%230b0e14'/></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" id="health-dot"></span>
+    <h1>TV Vision Processor</h1>
+  </div>
+  <div class="pills" id="pills">
+    <div class="pill"><span class="pill-label">in</span><span class="pill-value" id="stat-in">–</span></div>
+    <div class="pill"><span class="pill-label">out</span><span class="pill-value" id="stat-out">–</span></div>
+    <div class="pill"><span class="pill-label">latency</span><span class="pill-value" id="stat-latency">–</span></div>
+    <div class="pill"><span class="pill-label">pipeline</span><span class="pill-value" id="stat-cpu">–</span></div>
+    <div class="pill"><span class="pill-label">TV lock</span><span class="pill-value" id="stat-lock">–</span></div>
+  </div>
+  <div class="actions">
+    <input id="save-path" class="path-input" placeholder="config.yaml" spellcheck="false">
+    <button id="btn-save" class="btn btn-primary">Save to YAML</button>
+  </div>
+</header>
+
+<main>
+  <!-- ------------------------------------------------------------------ -->
+  <section class="card span-6">
+    <div class="card-head">
+      <h2><span class="step">1</span> Mark the TV corners</h2>
+      <div class="card-tools">
+        <button id="btn-auto" class="btn">Auto-detect</button>
+        <button id="btn-clear" class="btn">Clear</button>
+        <button id="btn-full" class="btn">Full frame</button>
+        <button id="btn-apply" class="btn btn-primary" disabled>Apply</button>
+      </div>
+    </div>
+    <p class="hint" id="picker-hint">
+      Click the four corners of the screen, going clockwise from the top-left.
+      Drag any handle to fine-tune &mdash; the loupe shows a magnified view.
+    </p>
+    <div class="stage-wrap" id="picker-wrap">
+      <img id="picker-img" class="stage-img" src="/stream/source" alt="camera view">
+      <canvas id="picker-canvas" class="stage-canvas"></canvas>
+    </div>
+    <div class="row">
+      <label class="field">
+        <span>Boundary mode</span>
+        <select id="boundary-mode" data-path="boundary.mode">
+          <option value="auto">auto &mdash; detect continuously</option>
+          <option value="hybrid">hybrid &mdash; saved corners, re-detect if bumped</option>
+          <option value="manual">manual &mdash; always use saved corners</option>
+        </select>
+      </label>
+      <button id="btn-recal" class="btn">Force recalibration</button>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section class="card span-6">
+    <div class="card-head">
+      <h2><span class="step">2</span> Result</h2>
+      <div class="card-tools">
+        <select id="view-select" class="compact"></select>
+      </div>
+    </div>
+    <p class="hint">
+      Top: what the virtual camera outputs right now. Bottom: any pipeline
+      stage, for checking a single step in isolation.
+    </p>
+    <div class="stage-wrap">
+      <img id="output-img" class="stage-img" src="/stream/output" alt="processed output">
+      <span class="corner-tag" id="output-size">–</span>
+    </div>
+    <div class="stage-wrap tight">
+      <img id="view-img" class="stage-img" src="/stream/boundary" alt="stage view">
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section class="card span-8">
+    <div class="card-head">
+      <h2><span class="step">3</span> Tune</h2>
+      <div class="card-tools">
+        <span class="muted" id="tune-status">changes apply live</span>
+      </div>
+    </div>
+    <div id="controls" class="controls"></div>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section class="card span-4">
+    <div class="card-head"><h2>Pipeline</h2></div>
+    <p class="hint">Toggle any stage off to see what it contributes.</p>
+    <ul id="stage-list" class="stage-list"></ul>
+    <div class="card-head"><h2>Cost per frame</h2></div>
+    <ul id="timing-list" class="timing-list"></ul>
+    <div class="card-head"><h2>Detected</h2></div>
+    <dl id="detected" class="detected"></dl>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

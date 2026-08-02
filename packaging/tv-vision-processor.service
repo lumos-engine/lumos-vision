@@ -1,0 +1,46 @@
+[Unit]
+Description=TV Vision Processor (RTSP camera -> rectified virtual webcam)
+Documentation=https://github.com/your/repo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Adjust these three to match your install.
+User=tvvp
+Group=video
+WorkingDirectory=/opt/tv-vision-processor
+
+Environment=PYTHONUNBUFFERED=1
+Environment=TVVP_CONFIG=/etc/tv-vision-processor/config.yaml
+ExecStart=/opt/tv-vision-processor/.venv/bin/python -m processor run
+
+# The camera can be unreachable at boot, or rebooted itself; the processor
+# handles that internally, but restart anyway if it ever exits.
+Restart=always
+RestartSec=5
+
+# The service only needs to read its config and write to the loopback device.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Needed for /dev/videoN.
+DeviceAllow=char-video4linux rw
+SupplementaryGroups=video
+
+# Uncomment if you enable output.file or debug snapshots.
+# ReadWritePaths=/var/lib/tv-vision-processor
+
+# It is a video pipeline on a slow machine; do not let it starve the desktop,
+# but do give it priority over background housekeeping.
+Nice=-5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=4
+
+[Install]
+WantedBy=multi-user.target

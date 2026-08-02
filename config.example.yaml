@@ -1,0 +1,105 @@
+# TV Vision Processor -- example configuration
+#
+# Copy to config.yaml and edit.  Everything here is optional: any key you
+# leave out keeps its default, so a working config can be four lines long.
+# Run `tvvp config` to print the full expanded configuration with defaults.
+
+camera:
+  source: rtsp                      # rtsp | file | image | synthetic
+  rtsp_url: "rtsp://admin:CHANGEME@192.168.1.93:5543/live/channel10"
+  transport: tcp                    # tcp is much more reliable than udp
+  # The camera almost certainly streams more pixels than a 640x360 output
+  # needs.  Downscaling once, here, is the single biggest CPU saving.
+  process_width: 960
+  read_timeout: 8.0                 # seconds without a frame before reconnect
+  reconnect_delay: 2.0
+
+output:
+  width: 640
+  height: 360
+  fps: 15
+  v4l2:
+    enabled: true
+    device: /dev/video10
+    pixel_format: YUYV              # YUYV | RGB24 | BGR24
+
+  # Handy for checking the result from another machine; off by default
+  # because encoding JPEGs costs CPU that the pipeline would rather have.
+  mjpeg:
+    enabled: false
+    host: 0.0.0.0
+    port: 8090
+
+# The browser calibration wizard: http://localhost:8080
+web:
+  enabled: false
+  host: 127.0.0.1                   # 0.0.0.0 exposes an unauthenticated tuner
+  port: 8080
+
+boundary:
+  # auto   -- find the TV continuously
+  # manual -- always use the corners below (what the wizard writes)
+  # hybrid -- use the corners below until the camera is bumped, then re-detect
+  mode: hybrid
+  auto_recalibrate: true
+  # Normalised 0..1, top-left, top-right, bottom-right, bottom-left.
+  # Leave null to detect automatically.
+  corners: null
+
+movement:
+  enabled: true
+  check_interval: 0.5
+  ncc_threshold: 1.0                # lower = more eager to recalibrate
+
+perspective:
+  # Rectified working size.  The main CPU knob: everything downstream scales
+  # with it.  Drop to 640x360 on a very slow machine.
+  width: 768
+  height: 432
+
+crop:
+  inset_percent: 2.0                # trims bezel and the glowing panel rim
+
+blackbars:
+  enabled: true
+  luma_threshold: 22                # what counts as "black"
+  max_crop_percent: 30
+  # Anti-flicker.  Raise window/hold_frames if the crop still twitches;
+  # lower max_step_percent to make changes ease in more slowly.
+  window: 15
+  hold_frames: 10
+  max_step_percent: 0.5
+
+reflection:
+  margin_percent: 2.0               # ignore this much of each edge
+  # Blank out a static logo or clock so it stops tinting one LED all evening.
+  # Each entry is [x, y, width, height], normalised.
+  exclusions: []
+
+color:
+  white_balance: "off"              # off | auto | manual (quoted: YAML reads
+                                    # a bare off as the boolean false)
+  gamma: 1.0                        # >1 brightens midtones
+  saturation: 1.2
+  brightness: 1.0
+  contrast: 1.0
+  exposure:
+    enabled: false
+    target_luma: 110
+
+debug:
+  enabled: false
+  view: output                      # or: source, boundary, perspective, grid
+
+logging:
+  level: INFO
+  stats_interval: 30                # seconds between throughput log lines
+
+# Send LED colours straight to WLED and skip HyperHDR entirely.
+# ddp:
+#   enabled: true
+#   host: 192.168.1.50
+#   leds_top: 42
+#   leds_right: 24
+#   leds_bottom: 42
+#   leds_left: 24

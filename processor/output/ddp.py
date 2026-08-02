@@ -1,0 +1,147 @@
+"""DDP output straight to WLED.
+
+The long-term escape hatch: sample LED colours here and push them to the ESP32
+over UDP, removing HyperHDR from the chain entirely.  Off by default -- the
+supported path today is the virtual camera.
+
+DDP (Distributed Display Protocol) is what WLED listens for on UDP 4048.
+"""
+
+from __future__ import annotations
+
+import socket
+import time
+from typing import Any
+
+import numpy as np
+
+from processor.config.schema import DdpConfig
+from processor.led.sampler import LedLayout, LedSampler
+from processor.output.base import Sink
+from processor.utils.logging import get_logger
+
+log = get_logger(__name__)
+
+DDP_PORT = 4048
+DDP_HEADER_LEN = 10
+DDP_FLAGS1_VER1 = 0x40
+DDP_FLAGS1_PUSH = 0x01
+DDP_ID_DISPLAY = 1
+#: Keep each datagram inside a typical 1500-byte MTU: 480 LEDs x 3 bytes.
+DDP_MAX_PAYLOAD = 1440
+
+
+def build_packets(pixels: np.ndarray, sequence: int, output_id: int = DDP_ID_DISPLAY) -> list[bytes]:
+    """Split an RGB array into DDP datagrams, PUSH set on the last one."""
+    data = np.ascontiguousarray(pixels, dtype=np.uint8).tobytes()
+    packets: list[bytes] = []
+    total = len(data)
+    offset = 0
+
+    while offset < total:
+        chunk = data[offset : offset + DDP_MAX_PAYLOAD]
+        is_last = offset + len(chunk) >= total
+        flags1 = DDP_FLAGS1_VER1 | (DDP_FLAGS1_PUSH if is_last else 0)
+        header = bytes(
+            [
+                flags1,
+                sequence & 0x0F,
+                0,  # data type: 0 lets the receiver use its configured format
+                output_id,
+                (offset >> 24) & 0xFF,
+                (offset >> 16) & 0xFF,
+                (offset >> 8) & 0xFF,
+                offset & 0xFF,
+                (len(chunk) >> 8) & 0xFF,
+                len(chunk) & 0xFF,
+            ]
+        )
+        packets.append(header + chunk)
+        offset += len(chunk)
+
+    return packets
+
+
+class DdpSink(Sink):
+    name = "ddp"
+
+    def __init__(self, config: DdpConfig):
+        self.config = config
+        if not config.host:
+            raise ValueError("output.ddp.host is required when DDP output is enabled")
+
+        self.sampler = LedSampler(
+            LedLayout(
+                top=config.leds_top,
+                right=config.leds_right,
+                bottom=config.leds_bottom,
+                left=config.leds_left,
+                depth=config.sample_depth,
+                start_corner=config.start_corner,
+                clockwise=config.clockwise,
+            ),
+            smoothing=config.smoothing,
+        )
+        if self.sampler.layout.count == 0:
+            raise ValueError("output.ddp needs at least one non-zero leds_* count")
+
+        self._socket: socket.socket | None = None
+        self._sequence = 0
+        self._frames = 0
+        self._errors = 0
+        self._next_send = 0.0
+
+    def open(self, width: int, height: int) -> None:
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.setblocking(False)
+        log.info(
+            "DDP output to %s:%d (%d LEDs)",
+            self.config.host,
+            self.config.port,
+            self.sampler.layout.count,
+        )
+
+    def write(self, image: np.ndarray) -> bool:
+        if self._socket is None:
+            return False
+
+        if self.config.fps > 0:
+            now = time.monotonic()
+            if now < self._next_send:
+                return True
+            self._next_send = now + 1.0 / self.config.fps
+
+        pixels = self.sampler.sample(image)
+        self._sequence = (self._sequence % 15) + 1
+        address = (self.config.host, self.config.port)
+
+        for packet in build_packets(pixels, self._sequence):
+            try:
+                self._socket.sendto(packet, address)
+            except BlockingIOError:
+                # The socket buffer is full; dropping this frame is strictly
+                # better than blocking the pipeline for a light strip.
+                self._errors += 1
+                return True
+            except OSError as exc:
+                self._errors += 1
+                if self._errors <= 3:
+                    log.warning("DDP send failed: %s", exc)
+                return False
+
+        self._frames += 1
+        return True
+
+    def close(self) -> None:
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+
+    @property
+    def stats(self) -> dict[str, Any]:
+        return {
+            "target": f"{self.config.host}:{self.config.port}",
+            "leds": self.sampler.layout.count,
+            "frames": self._frames,
+            "errors": self._errors,
+        }
