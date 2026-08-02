@@ -66,6 +66,10 @@ rate limit. Ambient lighting amplifies 1–2 px wobble.
   strings (e.g. `"off"`).
 - Never hardcode RTSP credentials. Never log full RTSP URLs; redact passwords
   everywhere the web UI or logs can see them.
+- CP PLUS RTSP paths (`/live/channel10`, `/live/channel1`) are stable; **encoder
+  resolution is not**. Always verify with `ffprobe` before calling a channel
+  “main/high-res”. Both have been seen at 640×360; channel10 was previously
+  also 2304×1296. Do not bake a fixed resolution into docs or code.
 - Paths/branding: `screen-sight`, env `SCREENSIGHT_CONFIG`, V4L2
   `card_label="Screen Sight"`, service `packaging/screen-sight.service`.
 

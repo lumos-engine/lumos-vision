@@ -6,10 +6,12 @@
 
 camera:
   source: rtsp                      # rtsp | file | image | synthetic
+  # Paths are stable; encoder resolution is not.  Verify with ffprobe before
+  # assuming channel10 is the high-res stream (it may be 640x360).
   rtsp_url: "rtsp://admin:CHANGEME@192.168.1.93:5543/live/channel10"
   transport: tcp                    # tcp is much more reliable than udp
-  # The camera almost certainly streams more pixels than a 640x360 output
-  # needs.  Downscaling once, here, is the single biggest CPU saving.
+  # Downscale before the pipeline when the camera sends more than you need.
+  # Harmless if the stream is already <= this width (e.g. 640x360).
   process_width: 960
   read_timeout: 8.0                 # seconds without a frame before reconnect
   reconnect_delay: 2.0

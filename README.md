@@ -45,6 +45,19 @@ python -m processor run \
 The RTSP URL is never hardcoded and never logged in full — credentials are
 redacted from logs and from everything the web UI can see.
 
+**Verify the encoder size before assuming which channel is “main”.** On CP PLUS
+cameras the path (`/live/channel10`, `/live/channel1`, …) is stable, but the
+resolution behind it can change (ezyKam+ quality, ONVIF, NVR, reboot). Check
+with:
+
+```bash
+ffprobe -rtsp_transport tcp \
+  "rtsp://admin:PASSWORD@192.168.1.93:5543/live/channel10"
+```
+
+Use whichever URL currently delivers the resolution you want. Do not treat
+`channel10` as permanently 2304×1296 — it has also been observed at 640×360.
+
 ---
 
 ## Installing on Ubuntu 24.04
