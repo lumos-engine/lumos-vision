@@ -1,4 +1,4 @@
-/* TV Vision Processor -- calibration wizard front end.
+/* Screen Sight -- calibration wizard front end.
  *
  * No build step and no framework on purpose: this runs on the same machine as
  * the pipeline, and the pipeline needs the CPU more than the UI does.

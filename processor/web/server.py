@@ -44,7 +44,7 @@ def public_config(processor: Processor) -> dict[str, Any]:
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "TVVisionProcessor/0.1"
+    server_version = "ScreenSight/0.1"
 
     @property
     def processor(self) -> Processor:

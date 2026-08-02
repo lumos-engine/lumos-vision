@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tv-vision-processor"
+name = "screen-sight"
 version = "0.1.0"
-description = "Turn an RTSP camera pointed at a TV into a rectified, cropped, low-latency virtual webcam."
+description = "Turn an RTSP camera pointed at a screen into a rectified, cropped, low-latency virtual webcam."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -19,7 +19,7 @@ dependencies = [
 dev = ["pytest>=8.0"]
 
 [project.scripts]
-tvvp = "processor.cli:main"
+screensight = "processor.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["processor*"]

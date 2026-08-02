@@ -1,4 +1,4 @@
-# Runtime dependencies for TV Vision Processor.
+# Runtime dependencies for Screen Sight.
 #
 # The debug window needs GUI bindings, so the default is the full
 # opencv-python build.  On a headless box (systemd service, no X/Wayland)

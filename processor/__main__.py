@@ -1,4 +1,4 @@
-"""Allow ``python -m processor`` as well as the ``tvvp`` console script."""
+"""Allow ``python -m processor`` as well as the ``screensight`` console script."""
 
 from processor.cli import main
 

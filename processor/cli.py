@@ -19,16 +19,16 @@ log = get_logger(__name__)
 EPILOG = """\
 examples:
   # live camera to the virtual webcam HyperHDR will read
-  tvvp run --rtsp-url rtsp://user:pass@192.168.1.93:5543/live/channel10
+  screensight run --rtsp-url rtsp://user:pass@192.168.1.93:5543/live/channel10
 
   # same, with the calibration wizard on http://localhost:8080
-  tvvp run --rtsp-url rtsp://... --web
+  screensight run --rtsp-url rtsp://... --web
 
   # develop with no camera at all
-  tvvp run --source synthetic --no-v4l2 --mjpeg --debug
+  screensight run --source synthetic --no-v4l2 --mjpeg --debug
 
   # replay a recording through the pipeline
-  tvvp run --source file --input samples/livingroom.mp4 --no-v4l2 --debug
+  screensight run --source file --input samples/livingroom.mp4 --no-v4l2 --debug
 """
 
 
@@ -37,7 +37,7 @@ examples:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="tvvp",
+        prog="screensight",
         description="Turn an RTSP camera pointed at a TV into a rectified, "
         "cropped, low-latency virtual webcam.",
         epilog=EPILOG,
@@ -225,7 +225,7 @@ def command_run(args: argparse.Namespace) -> int:
             "or try --source synthetic to run without hardware."
         )
 
-    # Imported here so `tvvp --help` and the offline subcommands stay fast and
+    # Imported here so `screensight --help` and the offline subcommands stay fast and
     # do not need a GUI-capable OpenCV build.
     from processor.app import Processor
 
@@ -383,7 +383,7 @@ def command_stages(_args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    # `tvvp --rtsp-url ...` should work without typing `run`.
+    # `screensight --rtsp-url ...` should work without typing `run`.
     commands = {"run", "record", "samples", "config", "stages"}
     if not argv or (argv[0] not in commands and argv[0] not in ("-h", "--help", "--version")):
         argv.insert(0, "run")

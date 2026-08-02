@@ -300,7 +300,7 @@ class DebugConfig:
     enabled: bool = False
     #: Which stage output to display; "grid" shows them all at once.
     view: str = "output"
-    window_name: str = "TV Vision Processor"
+    window_name: str = "Screen Sight"
     scale: float = 1.0
     overlay: bool = True
     snapshot_dir: str = "snapshots"

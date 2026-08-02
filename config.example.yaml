@@ -1,8 +1,8 @@
-# TV Vision Processor -- example configuration
+# Screen Sight -- example configuration
 #
 # Copy to config.yaml and edit.  Everything here is optional: any key you
 # leave out keeps its default, so a working config can be four lines long.
-# Run `tvvp config` to print the full expanded configuration with defaults.
+# Run `screensight config` to print the full expanded configuration with defaults.
 
 camera:
   source: rtsp                      # rtsp | file | image | synthetic

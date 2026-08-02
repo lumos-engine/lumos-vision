@@ -15,14 +15,14 @@ from processor.config.schema import Config, ConfigError
 DEFAULT_CONFIG_PATHS = (
     Path("config.yaml"),
     Path("config/config.yaml"),
-    Path.home() / ".config" / "tv-vision-processor" / "config.yaml",
-    Path("/etc/tv-vision-processor/config.yaml"),
+    Path.home() / ".config" / "screen-sight" / "config.yaml",
+    Path("/etc/screen-sight/config.yaml"),
 )
 
 
 def find_config() -> Path | None:
     """First existing path from :data:`DEFAULT_CONFIG_PATHS`."""
-    env = os.environ.get("TVVP_CONFIG")
+    env = os.environ.get("SCREENSIGHT_CONFIG")
     if env:
         candidate = Path(env).expanduser()
         return candidate if candidate.exists() else None
@@ -66,7 +66,7 @@ def save_config(config: Config | dict, path: str | os.PathLike) -> Path:
     tmp = target.with_suffix(target.suffix + ".tmp")
     with open(tmp, "w", encoding="utf-8") as handle:
         handle.write(
-            "# TV Vision Processor configuration\n"
+            "# Screen Sight configuration\n"
             "# Written by the calibration wizard; hand edits are fine too.\n"
         )
         yaml.safe_dump(data, handle, sort_keys=False, default_flow_style=False, indent=2)

@@ -23,7 +23,7 @@ from processor.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-BOUNDARY = "tvvpframe"
+BOUNDARY = "screensightframe"
 
 
 def encode_jpeg(image: np.ndarray, quality: int = 70) -> bytes | None:
@@ -101,14 +101,14 @@ def _write_chunk(handler: BaseHTTPRequestHandler, payload: bytes) -> bool:
 
 class _MjpegHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "TVVisionProcessor/0.1"
+    server_version = "ScreenSight/0.1"
 
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
         server: "MjpegServer" = self.server  # type: ignore[assignment]
         if self.path in ("/", "/index.html"):
             body = (
                 "<!doctype html><meta charset=utf-8>"
-                "<title>TV Vision Processor</title>"
+                "<title>Screen Sight</title>"
                 "<style>body{margin:0;background:#111;display:grid;place-items:center;"
                 "height:100vh}img{max-width:100%;image-rendering:pixelated}</style>"
                 '<img src="/stream.mjpg">'

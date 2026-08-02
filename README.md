@@ -1,11 +1,11 @@
-# TV Vision Processor
+# Screen Sight
 
 Takes an RTSP stream from a camera pointed at a television and turns it into a
 clean, rectified, cropped, low-latency video stream, published as a virtual
 V4L2 webcam.
 
 ```
-RTSP camera ─▶ decode ─▶ TV Vision Processor ─▶ /dev/video10 ─▶ HyperHDR ─▶ ESP32 + WLED
+RTSP camera ─▶ decode ─▶ Screen Sight ─▶ /dev/video10 ─▶ HyperHDR ─▶ ESP32 + WLED
 ```
 
 The processor knows nothing about HyperHDR. It produces frames and hands them
@@ -53,16 +53,16 @@ redacted from logs and from everything the web UI can see.
 sudo apt update
 sudo apt install -y python3-venv python3-pip v4l2loopback-dkms v4l-utils
 
-git clone <this repo> tv-vision-processor && cd tv-vision-processor
+git clone <this repo> screen-sight && cd screen-sight
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .            # optional: provides the `tvvp` command
+pip install -e .            # optional: provides the `screensight` command
 ```
 
 ### The virtual camera
 
 ```bash
-sudo modprobe v4l2loopback video_nr=10 card_label="TV Vision" exclusive_caps=1
+sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1
 ```
 
 `exclusive_caps=1` matters. Without it the device advertises both capture and
@@ -73,7 +73,7 @@ To load it at every boot:
 
 ```bash
 echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf
-printf 'options v4l2loopback video_nr=10 card_label="TV Vision" exclusive_caps=1\n' \
+printf 'options v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1\n' \
   | sudo tee /etc/modprobe.d/v4l2loopback.conf
 ```
 
@@ -86,7 +86,7 @@ v4l2-ctl -d /dev/video10 --all
 
 ### Pointing HyperHDR at it
 
-In HyperHDR, add a **USB capture** device, select `TV Vision` (`/dev/video10`),
+In HyperHDR, add a **USB capture** device, select `Screen Sight` (`/dev/video10`),
 set the resolution to 640x360 and the format to YUYV. Leave HyperHDR's own
 cropping and signal detection off — this processor has already done that work,
 and layering two croppers on top of each other only makes both wrong.
@@ -94,14 +94,14 @@ and layering two croppers on top of each other only makes both wrong.
 ### Running as a service
 
 ```bash
-sudo cp packaging/tv-vision-processor.service /etc/systemd/system/
+sudo cp packaging/screen-sight.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now tv-vision-processor
-journalctl -u tv-vision-processor -f
+sudo systemctl enable --now screen-sight
+journalctl -u screen-sight -f
 ```
 
-Edit the unit first: it expects the checkout in `/opt/tv-vision-processor` and
-a config at `/etc/tv-vision-processor/config.yaml`.
+Edit the unit first: it expects the checkout in `/opt/screen-sight` and
+a config at `/etc/screen-sight/config.yaml`.
 
 ---
 
@@ -137,8 +137,8 @@ something playing.
 ## Configuration
 
 Copy `config.example.yaml` to `config.yaml`; it is picked up automatically from
-the working directory, `~/.config/tv-vision-processor/`, or
-`/etc/tv-vision-processor/`. Anything you leave out keeps its default, so a
+the working directory, `~/.config/screen-sight/`, or
+`/etc/screen-sight/`. Anything you leave out keeps its default, so a
 useful config can be four lines:
 
 ```yaml
@@ -148,7 +148,7 @@ output:
   fps: 15
 ```
 
-`tvvp config` prints the full expanded configuration, every key with its
+`screensight config` prints the full expanded configuration, every key with its
 default, which is the most reliable reference.
 
 ---

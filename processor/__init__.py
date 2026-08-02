@@ -1,6 +1,6 @@
-"""TV Vision Processor.
+"""Screen Sight.
 
-Takes a camera feed pointed at a TV and turns it into a rectified, cropped,
+Takes a camera feed pointed at a screen and turns it into a rectified, cropped,
 low-latency video stream suitable for ambient lighting systems.
 
 The package deliberately knows nothing about HyperHDR, WLED or any other

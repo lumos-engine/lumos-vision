@@ -7,7 +7,7 @@ zero and the per-frame cost at one colour conversion plus one syscall.
 Requires the ``v4l2loopback`` kernel module (Linux only)::
 
     sudo apt install v4l2loopback-dkms v4l2loopback-utils
-    sudo modprobe v4l2loopback video_nr=10 card_label="TV Vision" exclusive_caps=1
+    sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1
 
 ``exclusive_caps=1`` matters: without it the device advertises both capture and
 output capabilities and many consumers, HyperHDR included, refuse to open it.
@@ -158,7 +158,7 @@ class V4L2Sink(Sink):
             raise FileNotFoundError(
                 f"{self.device} does not exist. Load the loopback module first:\n"
                 f"  sudo modprobe v4l2loopback video_nr={self._device_number()} "
-                f'card_label="TV Vision" exclusive_caps=1'
+                f'card_label="Screen Sight" exclusive_caps=1'
             )
 
         fd = os.open(self.device, os.O_WRONLY)
