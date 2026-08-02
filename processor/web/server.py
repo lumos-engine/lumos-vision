@@ -65,8 +65,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        if content_type.startswith("image/"):
-            self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -190,16 +189,24 @@ class _Handler(BaseHTTPRequestHandler):
         enabled = body.get("enabled")
         processor = self.processor
 
-        def run() -> tuple[bool, bool]:
+        def run_toggle() -> tuple[bool, bool]:
             stage = processor.pipeline.get(name)
             if stage is None:
                 return False, False
             if enabled is None:
-                return True, stage.toggle()
-            stage.enabled = bool(enabled)
-            return True, stage.enabled
+                state = stage.toggle()
+            else:
+                stage.enabled = bool(enabled)
+                state = stage.enabled
 
-        found, state = processor.call(run)
+            # Persist into config so a later slider update does not revive the
+            # stage via apply_config(section.enabled).
+            section = getattr(processor.config, name, None)
+            if section is not None and hasattr(section, "enabled"):
+                section.enabled = state
+            return True, state
+
+        found, state = processor.call(run_toggle)
         if not found:
             return self._send_json({"ok": False, "error": f"unknown stage {name}"}, status=404)
         self._send_json({"ok": True, "name": name, "enabled": state})

@@ -144,7 +144,8 @@ def apply_config(pipeline: Pipeline, config: Config) -> None:
         rebuilt.append(stage)
 
     pipeline.replace_stages(rebuilt)
-    pipeline.collect_debug = config.pipeline.collect_debug
+    # Do not force collect_debug off here: process_frame enables it whenever
+    # the web UI (or another broker) has subscribers.
 
 
 def describe_stages() -> list[dict[str, Any]]:

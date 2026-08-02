@@ -112,11 +112,18 @@ async function pushUpdates() {
   const updates = { ...pendingUpdates };
   for (const key of Object.keys(pendingUpdates)) delete pendingUpdates[key];
   if (!Object.keys(updates).length) return;
+  const status = $('tune-status');
   try {
     suppressEcho = true;
+    if (status) status.textContent = 'applying…';
     const result = await api('/api/config', { updates });
     applyConfig(result.config, { skipFocused: true });
+    if (status) {
+      const keys = Object.keys(updates);
+      status.textContent = `applied ${keys[0]}${keys.length > 1 ? ` +${keys.length - 1}` : ''}`;
+    }
   } catch (err) {
+    if (status) status.textContent = 'update failed';
     toast(err.message, 'error');
   } finally {
     suppressEcho = false;
@@ -507,7 +514,11 @@ async function refresh() {
   renderStages(status);
   renderTimings(status.pipeline.timings_ms);
   renderDetected(status);
-  if (!suppressEcho) applyConfig(status.config, { skipFocused: true });
+  // Do not re-push config into the sliders every second: it races with
+  // in-flight tuner updates and makes picture controls feel broken.
+  if (!suppressEcho && !Object.keys(pendingUpdates).length && pushTimer == null) {
+    applyConfig(status.config, { skipFocused: true });
+  }
 
   // Adopt the pipeline's corners only while the user is not editing them.
   if (!picker.dirty && picker.dragging < 0 && state.corners && state.frame_size) {
