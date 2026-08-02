@@ -29,12 +29,12 @@ Try it with no camera and no kernel modules:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# A synthetic living room, streamed to http://localhost:8090
+# A synthetic living room, streamed to http://localhost:7661
 python -m processor run --source synthetic --no-v4l2 --mjpeg
 ```
 
 Against a real camera, with the calibration wizard on
-<http://localhost:8080>:
+<http://localhost:7660>:
 
 ```bash
 python -m processor run \
@@ -107,7 +107,7 @@ a config at `/etc/screen-sight/config.yaml`.
 
 ## Calibrating
 
-Start with `--web` and open <http://localhost:8080>.
+Start with `--web` and open <http://localhost:7660>.
 
 1. **Mark the TV corners.** Press *Auto-detect* first; it is usually right. If
    not, click the four corners of the screen clockwise from the top-left and

@@ -28,13 +28,13 @@ output:
   mjpeg:
     enabled: false
     host: 0.0.0.0
-    port: 8090
+    port: 7661
 
-# The browser calibration wizard: http://localhost:8080
+# The browser calibration wizard: http://localhost:7660
 web:
   enabled: false
   host: 127.0.0.1                   # 0.0.0.0 exposes an unauthenticated tuner
-  port: 8080
+  port: 7660
 
 boundary:
   # auto   -- find the TV continuously

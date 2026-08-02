@@ -21,7 +21,7 @@ examples:
   # live camera to the virtual webcam HyperHDR will read
   screensight run --rtsp-url rtsp://user:pass@192.168.1.93:5543/live/channel10
 
-  # same, with the calibration wizard on http://localhost:8080
+  # same, with the calibration wizard on http://localhost:7660
   screensight run --rtsp-url rtsp://... --web
 
   # develop with no camera at all
@@ -100,7 +100,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     output.add_argument("--pixel-format", choices=("YUYV", "RGB24", "BGR24"))
     output.add_argument("--no-v4l2", action="store_true", help="disable the virtual camera output")
     output.add_argument("--mjpeg", action="store_true", help="serve the output as MJPEG over HTTP")
-    output.add_argument("--mjpeg-port", type=int, help="MJPEG port (default 8090)")
+    output.add_argument("--mjpeg-port", type=int, help="MJPEG port (default 7661)")
     output.add_argument("--record", metavar="PATH", help="also write the output to a video file")
     output.add_argument("--ddp-host", help="send LED colours straight to WLED at this address")
 
@@ -108,7 +108,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     ui.add_argument("--debug", action="store_true", help="open the debug window")
     ui.add_argument("--view", help="initial debug view (source, boundary, output, grid, ...)")
     ui.add_argument("--web", action="store_true", help="serve the calibration wizard")
-    ui.add_argument("--web-port", type=int, help="wizard port (default 8080)")
+    ui.add_argument("--web-port", type=int, help="wizard port (default 7660)")
     ui.add_argument("--web-host", help="wizard bind address (default 127.0.0.1)")
 
     tuning = parser.add_argument_group("pipeline")

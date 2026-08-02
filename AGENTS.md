@@ -17,7 +17,7 @@ processor/
   stages/       # movement → boundary → perspective → crop → blackbars → …
   output/       # V4L2, MJPEG, file, null, DDP
   config/       # typed YAML schema + loader (dotted live updates)
-  web/          # calibration wizard (localhost:8080)
+  web/          # calibration wizard (localhost:7660)
   debug/        # OpenCV viewer
   testing/      # synthetic living-room scene + sample generator
   cli.py, app.py

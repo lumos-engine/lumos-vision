@@ -252,7 +252,7 @@ class V4L2Config:
 class MjpegConfig:
     enabled: bool = False
     host: str = "0.0.0.0"
-    port: int = 8090
+    port: int = 7661
     quality: int = 70
 
 
@@ -310,7 +310,7 @@ class DebugConfig:
 class WebConfig:
     enabled: bool = False
     host: str = "127.0.0.1"
-    port: int = 8080
+    port: int = 7660
     #: Preview stream rate; deliberately lower than the pipeline rate so the
     #: wizard does not steal CPU from the actual output.
     stream_fps: float = 10.0
