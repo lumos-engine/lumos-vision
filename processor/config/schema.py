@@ -159,8 +159,10 @@ class BlackBarsConfig:
     #: broadcast and film content, and it halves the flicker sources).
     symmetric: bool = True
     #: Temporal stabilisation, in frames / percent of the dimension.
-    window: int = 15
-    hold_frames: int = 8
+    #: Noisy USB cams need a wider median and longer hold or cinema bars
+    #: strobe on/off in the blackbars debug view.
+    window: int = 21
+    hold_frames: int = 14
     change_threshold_percent: float = 0.8
     max_step_percent: float = 1.0
     #: Ignore bar detection entirely while the whole frame is dark (fade to

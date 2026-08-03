@@ -137,8 +137,37 @@ def test_aspect_change_is_followed_but_gradually():
     stage.process(ctx)
     assert stage.status()["pixels"]["top"] == pytest.approx(start, abs=2), "reacted too fast"
 
-    run(stage, widescreen, frames=80)
+    # Sticky release + hold needs a long clean streak before cinema unlocks.
+    run(stage, widescreen, frames=160)
     assert stage.status()["pixels"]["top"] <= 2, "never followed the change"
+
+
+def test_symmetric_crop_keeps_top_and_bottom_equal():
+    stage = make_stage()
+    panel = render_panel(3.0, PANEL, 2.39)
+    run(stage, panel, frames=80)
+    pixels = stage.status()["pixels"]
+    assert pixels["top"] == pixels["bottom"]
+
+
+def test_crop_does_not_strobe_when_detection_flaps():
+    """Noisy cams alternate 'bars' / 'no bars'; the applied crop must stick."""
+    stage = make_stage()
+    cinema = render_panel(3.0, PANEL, 2.39)
+    flat = render_panel(3.0, PANEL, 16 / 9)
+    run(stage, cinema, frames=80)
+    locked = stage.status()["pixels"]["top"]
+    assert locked > 30
+
+    history = []
+    for i in range(90):
+        panel = flat if i % 3 == 0 else cinema
+        ctx = FrameContext(source=panel, image=panel)
+        stage.process(ctx)
+        history.append(stage.status()["pixels"]["top"])
+
+    assert min(history) >= locked - 3, f"crop strobed off: {history[:20]}..."
+    assert max(history) - min(history) <= 4
 
 
 def test_max_crop_percent_is_respected():

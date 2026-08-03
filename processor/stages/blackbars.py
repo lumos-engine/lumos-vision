@@ -130,6 +130,12 @@ class BlackBarStage(Stage):
         super().__init__(config, state)
         self.config: BlackBarsConfig = config
         self._filters: dict[str, StableValue] = {}
+        self._vertical: StableValue | None = None
+        self._horizontal: StableValue | None = None
+        self._letterbox_locked = False
+        self._pillarbox_locked = False
+        self._vertical_misses = 0
+        self._horizontal_misses = 0
         self._raw: dict[str, float] = {edge: 0.0 for edge in EDGES}
         self._pixels: dict[str, int] = {edge: 0 for edge in EDGES}
         self._dark_frames = 0
@@ -137,51 +143,84 @@ class BlackBarStage(Stage):
 
     # -- lifecycle ---------------------------------------------------------
 
-    def _build_filters(self) -> None:
+    def _filter_kwargs(self) -> dict[str, float | int]:
         cfg = self.config
-        self._filters = {
-            edge: StableValue(
-                window=cfg.window,
-                change_threshold=cfg.change_threshold_percent / 100.0,
-                hold_frames=cfg.hold_frames,
-                max_step=cfg.max_step_percent / 100.0,
-                initial=0.0,
-            )
-            for edge in EDGES
+        # Noisy USB cams flap below the hold window; bias stickier than the
+        # YAML minimum so cinema bars do not strobe on and off.
+        return {
+            "window": max(cfg.window, 21),
+            "change_threshold": cfg.change_threshold_percent / 100.0,
+            "hold_frames": max(cfg.hold_frames, 14),
+            "max_step": cfg.max_step_percent / 100.0,
+            "initial": 0.0,
         }
+
+    def _release_frames(self) -> int:
+        # Once cinema bars are on, demand a long streak of "no bars" before
+        # we even *propose* releasing.  Median+hold alone still strobes when
+        # noisy frames alternate bar / no-bar every few samples.
+        return max(self.config.hold_frames * 4, 40)
+
+    def _build_filters(self) -> None:
+        kwargs = self._filter_kwargs()
+        if self.config.symmetric:
+            # One filter per axis so top/bottom cannot animate apart and make
+            # the debug overlay (and the crop) strobe.
+            self._vertical = StableValue(**kwargs)
+            self._horizontal = StableValue(**kwargs)
+            self._filters = {
+                "top": self._vertical,
+                "bottom": self._vertical,
+                "left": self._horizontal,
+                "right": self._horizontal,
+            }
+        else:
+            self._vertical = None
+            self._horizontal = None
+            self._filters = {edge: StableValue(**kwargs) for edge in EDGES}
 
     def reset(self) -> None:
         self._build_filters()
         self._raw = {edge: 0.0 for edge in EDGES}
         self._pixels = {edge: 0 for edge in EDGES}
         self._dark_frames = 0
+        self._letterbox_locked = False
+        self._pillarbox_locked = False
+        self._vertical_misses = 0
+        self._horizontal_misses = 0
 
     def on_config_changed(self) -> None:
         # Keep the current crop so a slider nudge does not make the picture
         # jump; only the filter behaviour changes.
+        previous_v = self._filters["top"].value
+        previous_h = self._filters["left"].value
         previous = {edge: f.value for edge, f in self._filters.items()}
         self._build_filters()
-        for edge, value in previous.items():
-            self._filters[edge].force(value)
+        if self.config.symmetric and self._vertical and self._horizontal:
+            self._vertical.force(previous_v)
+            self._horizontal.force(previous_h)
+        else:
+            for edge, value in previous.items():
+                self._filters[edge].force(value)
 
     def status(self) -> dict[str, Any]:
+        applied = self._applied_fractions()
         return {
             "enabled": self.enabled,
             "raw_percent": {k: round(v * 100, 2) for k, v in self._raw.items()},
-            "applied_percent": {
-                k: round(f.value * 100, 2) for k, f in self._filters.items()
-            },
+            "applied_percent": {k: round(v * 100, 2) for k, v in applied.items()},
             "pixels": dict(self._pixels),
             "content_aspect": self._content_aspect(),
+            "letterbox_locked": self._letterbox_locked,
         }
 
+    def _applied_fractions(self) -> dict[str, float]:
+        return {edge: float(self._filters[edge].value) for edge in EDGES}
+
     def _content_aspect(self) -> float | None:
-        top = self._filters["top"].value
-        bottom = self._filters["bottom"].value
-        left = self._filters["left"].value
-        right = self._filters["right"].value
-        remaining_h = 1.0 - top - bottom
-        remaining_w = 1.0 - left - right
+        applied = self._applied_fractions()
+        remaining_h = 1.0 - applied["top"] - applied["bottom"]
+        remaining_w = 1.0 - applied["left"] - applied["right"]
         if remaining_h <= 0 or remaining_w <= 0:
             return None
         return round((16.0 / 9.0) * (remaining_w / remaining_h), 3)
@@ -216,10 +255,42 @@ class BlackBarStage(Stage):
             self._raw = measured
 
         limit = max(0.0, self.config.max_crop_percent) / 100.0
-        applied: dict[str, float] = {}
-        for edge in EDGES:
-            sample = self._raw[edge] if measured is not None else self._filters[edge].committed
-            applied[edge] = float(np.clip(self._filters[edge].update(sample), 0.0, limit))
+        if self.config.symmetric and self._vertical and self._horizontal:
+            if measured is None:
+                v_sample = self._vertical.committed
+                h_sample = self._horizontal.committed
+            else:
+                v_sample = self._sticky_sample(
+                    measured["top"],
+                    self._vertical,
+                    locked=self._letterbox_locked,
+                    misses_attr="_vertical_misses",
+                )
+                h_sample = self._sticky_sample(
+                    measured["left"],
+                    self._horizontal,
+                    locked=self._pillarbox_locked,
+                    misses_attr="_horizontal_misses",
+                )
+            vertical = float(np.clip(self._vertical.update(v_sample), 0.0, limit))
+            horizontal = float(np.clip(self._horizontal.update(h_sample), 0.0, limit))
+            applied = {
+                "top": vertical,
+                "bottom": vertical,
+                "left": horizontal,
+                "right": horizontal,
+            }
+            # Lock from the committed target, not the rate-limited display
+            # value, so a slow walk-down does not unlock early.
+            self._letterbox_locked = self._vertical.committed >= 0.02
+            self._pillarbox_locked = self._horizontal.committed >= 0.02
+        else:
+            applied = {}
+            for edge in EDGES:
+                sample = (
+                    self._raw[edge] if measured is not None else self._filters[edge].committed
+                )
+                applied[edge] = float(np.clip(self._filters[edge].update(sample), 0.0, limit))
 
         top = int(round(height * applied["top"]))
         bottom = int(round(height * applied["bottom"]))
@@ -243,19 +314,48 @@ class BlackBarStage(Stage):
             dark_frame=measured is None,
         )
 
+    def _sticky_sample(
+        self,
+        sample: float,
+        filt: StableValue,
+        *,
+        locked: bool,
+        misses_attr: str,
+    ) -> float:
+        """While locked, ignore brief 'no bar' blips instead of feeding zeros."""
+        if not locked:
+            setattr(self, misses_attr, 0)
+            return sample
+        if sample >= 0.02:
+            setattr(self, misses_attr, 0)
+            return sample
+        misses = int(getattr(self, misses_attr)) + 1
+        setattr(self, misses_attr, misses)
+        if misses < self._release_frames():
+            return filt.committed
+        return sample
+
     def _postprocess(self, measured: dict[str, float]) -> dict[str, float]:
         limit = max(0.0, self.config.max_crop_percent) / 100.0
 
         if self.config.symmetric:
-            # Real letterbox/pillarbox is on *both* opposite edges.  Taking the
-            # larger of a agreeing pair handles subtitles that shrink one side;
-            # if only one side looks dark (Jellyfin cast row, UI chrome, a
-            # gradient) that is not letterbox -- cropping it eats real content.
+            # Sticky floors: once locked on letterbox, allow more asymmetry so
+            # noisy frames do not drop the crop to zero and strobe the overlay.
+            vertical = _symmetric_pair(
+                measured["top"],
+                measured["bottom"],
+                min_side=0.012 if self._letterbox_locked else 0.03,
+            )
+            horizontal = _symmetric_pair(
+                measured["left"],
+                measured["right"],
+                min_side=0.012 if self._pillarbox_locked else 0.03,
+            )
             measured = {
-                "top": _symmetric_pair(measured["top"], measured["bottom"]),
-                "bottom": _symmetric_pair(measured["top"], measured["bottom"]),
-                "left": _symmetric_pair(measured["left"], measured["right"]),
-                "right": _symmetric_pair(measured["left"], measured["right"]),
+                "top": vertical,
+                "bottom": vertical,
+                "left": horizontal,
+                "right": horizontal,
             }
 
         # Letterbox and pillarbox at the same time means the measurement is
