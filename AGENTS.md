@@ -85,6 +85,9 @@ python -m processor run --source synthetic --no-v4l2 --mjpeg
 
 # USB webcam (not the loopback output device)
 python -m processor run --source v4l2 --camera-device /dev/video2 --web --mjpeg
+# Hardware exposure/gain/WB: wizard "Camera hardware" section, or
+#   v4l2-ctl -d /dev/video2 --list-ctrls
+# Software Colour sliders only post-process; use UVC controls for real exposure.
 
 # calibration wizard
 python -m processor run --source synthetic --no-v4l2 --web

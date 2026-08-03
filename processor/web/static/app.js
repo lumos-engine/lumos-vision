@@ -59,7 +59,7 @@ const CONTROLS = [
     ],
   },
   {
-    group: 'Colour',
+    group: 'Colour (software — after the camera)',
     items: [
       { path: 'color.white_balance', type: 'select', label: 'White balance', options: ['off', 'auto', 'manual'] },
       { path: 'color.wb_strength', label: 'White balance strength', min: 0, max: 1, step: 0.01 },
@@ -67,7 +67,7 @@ const CONTROLS = [
       { path: 'color.saturation', label: 'Saturation', min: 0, max: 2.5, step: 0.01 },
       { path: 'color.brightness', label: 'Brightness', min: 0.3, max: 2, step: 0.01 },
       { path: 'color.contrast', label: 'Contrast', min: 0.3, max: 2, step: 0.01 },
-      { path: 'color.exposure.enabled', type: 'toggle', label: 'Auto exposure' },
+      { path: 'color.exposure.enabled', type: 'toggle', label: 'Software auto exposure' },
       { path: 'color.exposure.target_luma', label: 'Exposure target', min: 20, max: 220, step: 1 },
     ],
   },
@@ -128,6 +128,109 @@ async function pushUpdates() {
   } finally {
     suppressEcho = false;
   }
+}
+
+const pendingCameraControls = {};
+let cameraPushTimer = null;
+
+function queueCameraControl(name, value) {
+  pendingCameraControls[name] = value;
+  clearTimeout(cameraPushTimer);
+  cameraPushTimer = setTimeout(pushCameraControls, 120);
+}
+
+async function pushCameraControls() {
+  const controls = { ...pendingCameraControls };
+  for (const key of Object.keys(pendingCameraControls)) delete pendingCameraControls[key];
+  if (!Object.keys(controls).length) return;
+  const status = $('tune-status');
+  try {
+    if (status) status.textContent = 'applying camera…';
+    const result = await api('/api/camera/controls', { controls });
+    if (!result.ok && result.error) throw new Error(result.error);
+    if (result.errors && Object.keys(result.errors).length) {
+      toast(Object.values(result.errors)[0], 'error');
+    }
+    if (status) {
+      const keys = Object.keys(result.applied || controls);
+      status.textContent = `camera ${keys[0] || 'ok'}`;
+    }
+  } catch (err) {
+    if (status) status.textContent = 'camera update failed';
+    toast(err.message, 'error');
+  }
+}
+
+async function buildCameraControls() {
+  const root = $('camera-controls');
+  if (!root) return;
+  root.innerHTML = '';
+  let data;
+  try {
+    data = await api('/api/camera/controls');
+  } catch {
+    return;
+  }
+  if (!data.supported || !data.controls || !data.controls.length) {
+    return;
+  }
+
+  const section = document.createElement('div');
+  section.className = 'control-group';
+  section.innerHTML = `
+    <h3>Camera hardware (${data.device || 'USB'})</h3>
+    <p class="hint">These change the sensor (exposure, gain, WB). Use these first;
+    the Colour sliders below only recolour frames after capture.</p>`;
+
+  for (const ctrl of data.controls) {
+    const row = document.createElement('div');
+    row.className = 'control';
+    const label = ctrl.name.replace(/_/g, ' ');
+
+    if (ctrl.type === 'menu' && ctrl.menu) {
+      row.innerHTML = `<label>${label}</label>`;
+      const select = document.createElement('select');
+      for (const [value, text] of Object.entries(ctrl.menu)) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = `${text} (${value})`;
+        if (Number(value) === Number(ctrl.value)) opt.selected = true;
+        select.append(opt);
+      }
+      select.addEventListener('change', () => {
+        queueCameraControl(ctrl.name, parseInt(select.value, 10));
+      });
+      row.append(select);
+    } else if (ctrl.type === 'bool' || (ctrl.min === 0 && ctrl.max === 1 && ctrl.step === 1)) {
+      const wrap = document.createElement('label');
+      wrap.className = 'switch';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = Boolean(ctrl.value);
+      input.addEventListener('change', () => {
+        queueCameraControl(ctrl.name, input.checked ? 1 : 0);
+      });
+      wrap.append(input, document.createTextNode(label));
+      row.append(wrap);
+    } else {
+      row.innerHTML = `<label>${label}</label><output>${ctrl.value}</output>`;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = ctrl.min;
+      input.max = ctrl.max;
+      input.step = ctrl.step || 1;
+      input.value = ctrl.value;
+      const out = row.querySelector('output');
+      input.addEventListener('input', () => {
+        const value = parseInt(input.value, 10);
+        out.textContent = String(value);
+        queueCameraControl(ctrl.name, value);
+      });
+      row.append(input);
+    }
+    section.append(row);
+  }
+  root.append(section);
 }
 
 function buildControls() {
@@ -581,6 +684,7 @@ function wireButtons() {
 
 async function init() {
   buildControls();
+  await buildCameraControls();
   setupPicker();
   wireButtons();
   try {

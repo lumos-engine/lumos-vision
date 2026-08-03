@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from processor.camera.base import Frame, FrameSource
+from processor.camera.controls import preferred_controls, set_controls
 from processor.config.schema import CameraConfig
 from processor.utils.logging import get_logger
 
@@ -207,7 +208,21 @@ class V4l2Source(FrameSource):
         got_h = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         got_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
         log.info("V4L2 mode: %dx%d @ %.1f fps", got_w, got_h, got_fps)
+        if self.config.controls:
+            self.apply_controls(dict(self.config.controls))
         return True
+
+    def _device_path(self) -> str:
+        if isinstance(self.device, int):
+            return f"/dev/video{self.device}"
+        return str(self.device)
+
+    def apply_controls(self, values: dict[str, int]) -> dict:
+        """Push hardware controls to the device (exposure, gain, …)."""
+        return set_controls(self._device_path(), values)
+
+    def list_controls(self) -> list[dict]:
+        return [c.to_dict() for c in preferred_controls(self._device_path())]
 
     def _release(self) -> None:
         capture, self._capture = self._capture, None

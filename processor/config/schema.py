@@ -26,6 +26,10 @@ class CameraConfig:
     capture_width: int = 0
     capture_height: int = 0
     capture_fps: float = 0.0
+    #: Hardware UVC controls applied via v4l2-ctl, e.g.
+    #: ``{exposure_auto: 1, exposure_absolute: 300, brightness: 128}``.
+    #: Empty means leave the driver defaults alone.
+    controls: dict[str, int] = field(default_factory=dict)
     #: Video file or image path used by the ``file`` / ``image`` sources.
     path: str = ""
     #: Replay files in a loop (development convenience).
@@ -407,6 +411,18 @@ def _coerce(annotation, value, path: str):
         if not args:
             return list(value)
         return [_coerce(args[0], v, f"{path}[{i}]") for i, v in enumerate(value)]
+
+    if origin is dict or annotation is dict:
+        if not isinstance(value, dict):
+            raise ConfigError(f"{path}: expected a mapping")
+        key_type, val_type = str, int
+        args = get_args(annotation) if origin is dict else ()
+        if len(args) == 2:
+            key_type, val_type = args
+        return {
+            _coerce(key_type, k, f"{path}.key"): _coerce(val_type, v, f"{path}.{k}")
+            for k, v in value.items()
+        }
 
     if annotation is bool:
         if isinstance(value, bool):

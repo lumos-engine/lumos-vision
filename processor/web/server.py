@@ -102,6 +102,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(self._status())
             if route == "/api/config":
                 return self._send_json(public_config(self.processor))
+            if route == "/api/camera/controls":
+                return self._send_json(self.processor.list_camera_controls())
             if route == "/api/snapshot":
                 return self._serve_snapshot(query.get("view", ["source"])[0])
             self.send_error(404, "not found")
@@ -133,6 +135,13 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True})
             if route == "/api/stage":
                 return self._toggle_stage(body)
+            if route == "/api/camera/controls":
+                controls = body.get("controls")
+                if not isinstance(controls, dict) or not controls:
+                    return self._send_json(
+                        {"ok": False, "error": "controls mapping required"}, status=400
+                    )
+                return self._send_json(self.processor.set_camera_controls(controls))
             self.send_error(404, "not found")
         except (BrokenPipeError, ConnectionResetError):
             pass

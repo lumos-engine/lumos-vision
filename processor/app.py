@@ -266,10 +266,72 @@ class Processor:
             new_config = apply_updates(self.config, updates)
             self.config = new_config
             apply_pipeline_config(self.pipeline, new_config)
+            # Hardware UVC knobs (exposure etc.) live on the camera, not in
+            # the colour stage -- push them when the controls map changes.
+            if any(key == "camera.controls" or key.startswith("camera.controls.") for key in updates):
+                self._apply_camera_controls(dict(new_config.camera.controls))
             log.info("Config updated: %s", ", ".join(sorted(updates)))
             return config_to_dict(new_config)
 
         return self.call(apply)
+
+    def _apply_camera_controls(self, values: dict[str, int]) -> dict[str, Any]:
+        source = self.source
+        apply = getattr(source, "apply_controls", None)
+        if not callable(apply):
+            return {"ok": False, "error": "current source has no hardware controls"}
+        return apply(values)
+
+    def list_camera_controls(self) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            source = self.source
+            lister = getattr(source, "list_controls", None)
+            if not callable(lister):
+                return {
+                    "ok": False,
+                    "supported": False,
+                    "device": self.config.camera.device,
+                    "controls": [],
+                    "error": "hardware controls require --source v4l2",
+                }
+            controls = lister()
+            return {
+                "ok": True,
+                "supported": True,
+                "device": self.config.camera.device,
+                "controls": controls,
+                "saved": dict(self.config.camera.controls),
+            }
+
+        return self.call(run)
+
+    def set_camera_controls(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Set UVC controls live and remember them in config.camera.controls."""
+
+        def run() -> dict[str, Any]:
+            cleaned: dict[str, int] = {}
+            for name, value in values.items():
+                if not isinstance(name, str) or not name:
+                    continue
+                try:
+                    cleaned[name] = int(value)
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": f"control {name!r} must be an integer"}
+
+            result = self._apply_camera_controls(cleaned)
+            if result.get("applied"):
+                merged = dict(self.config.camera.controls)
+                merged.update(result["applied"])
+                self.config = apply_updates(self.config, {"camera.controls": merged})
+            return {
+                "ok": bool(result.get("ok")),
+                "applied": result.get("applied", {}),
+                "errors": result.get("errors", {}),
+                "error": result.get("error"),
+                "controls": dict(self.config.camera.controls),
+            }
+
+        return self.call(run)
 
     def save(self, path: str | Path | None = None) -> str:
         target = Path(path) if path else self.config_path or Path("config.yaml")
