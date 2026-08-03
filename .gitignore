@@ -16,6 +16,7 @@ env/
 htmlcov/
 
 # Local runtime artefacts
+config.yaml
 config.local.yaml
 *.local.yaml
 samples/generated/

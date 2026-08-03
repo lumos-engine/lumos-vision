@@ -3,30 +3,33 @@
 # Copy to config.yaml and edit.  Everything here is optional: any key you
 # leave out keeps its default, so a working config can be four lines long.
 # Run `screensight config` to print the full expanded configuration with defaults.
+#
+# With this file as config.yaml you can start with:
+#   python -m processor run
 
 camera:
-  source: rtsp                      # rtsp | v4l2 | usb | file | image | synthetic
-  # Paths are stable; encoder resolution is not.  Verify with ffprobe before
-  # assuming channel10 is the high-res stream (it may be 640x360).
-  rtsp_url: "rtsp://admin:CHANGEME@192.168.1.93:5543/live/channel10"
-  transport: tcp                    # tcp is much more reliable than udp
-  # USB webcam on the same machine (Logitech etc.).  Example:
-  #   source: v4l2
-  #   device: /dev/video2
-  #   capture_width: 1280
-  #   capture_height: 720
-  #   controls:                   # hardware (v4l2-ctl); names vary by camera
-  #     exposure_auto: 1          # 1 = manual on many Logitech cams
-  #     exposure_absolute: 300
-  #     brightness: 128
-  #     gain: 0
-  device: ""
+  source: v4l2                      # rtsp | v4l2 | usb | file | image | synthetic
+  device: /dev/video2               # check with: v4l2-ctl --list-devices
+  capture_width: 1280
+  capture_height: 720
+  # controls:                       # hardware (v4l2-ctl); names vary by camera
+  #   exposure_auto: 1              # 1 = manual on many Logitech cams
+  #   exposure_absolute: 300
+  #   brightness: 128
+  #   gain: 0
   controls: {}
   # 0 = keep native camera resolution (preferred).  Set e.g. 960 only if the
   # host is too slow for full-res processing.
   process_width: 0
-  read_timeout: 8.0                 # seconds without a frame before reconnect
+  read_timeout: 8.0
   reconnect_delay: 2.0
+
+  # Wi-Fi / ONVIF RTSP alternative:
+  # source: rtsp
+  # rtsp_url: "rtsp://admin:CHANGEME@192.168.1.93:5543/live/channel10"
+  # transport: tcp
+  rtsp_url: ""
+  transport: tcp
 
 output:
   width: 1280
@@ -37,17 +40,15 @@ output:
     device: /dev/video10
     pixel_format: YUYV              # YUYV | RGB24 | BGR24
 
-  # Handy for checking the result from another machine; off by default
-  # because encoding JPEGs costs CPU that the pipeline would rather have.
   mjpeg:
-    enabled: false
+    enabled: true
     host: 0.0.0.0
     port: 7661
 
-# The browser calibration wizard: http://localhost:7660
+# Calibration wizard: http://<host>:7660
 web:
-  enabled: false
-  host: 127.0.0.1                   # 0.0.0.0 exposes an unauthenticated tuner
+  enabled: true
+  host: 0.0.0.0                     # 127.0.0.1 if you only want local access
   port: 7660
 
 boundary:
@@ -76,12 +77,10 @@ crop:
 
 blackbars:
   enabled: true
-  luma_threshold: 40                # USB letterbox is rarely true-black; raise if bars remain
-  max_crop_percent: 40              # cinema 2.39:1 needs ~13%+ per side; headroom helps
-  # Anti-flicker.  Raise window/hold_frames if the crop still twitches;
-  # lower max_step_percent to make changes ease in more slowly.
-  window: 15
-  hold_frames: 8
+  luma_threshold: 48                # USB letterbox is rarely true-black
+  max_crop_percent: 40              # cinema 2.39:1 needs ~13%+ per side
+  window: 21
+  hold_frames: 14
   max_step_percent: 1.0
 
 reflection:
