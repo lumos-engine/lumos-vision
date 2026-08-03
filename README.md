@@ -108,6 +108,21 @@ sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=
 output capabilities, and many consumers — HyperHDR included — refuse to open
 it.
 
+If HyperHDR shows a pink / doubled / wrong-aspect image while the Screen Sight
+window and `:7661` look fine, the loopback format is stale. Reload it, start
+Screen Sight first, then HyperHDR:
+
+```bash
+sudo pkill -f "python -m processor" || true
+sudo systemctl stop hyperhdr@$USER 2>/dev/null || pkill hyperhdr || true
+sudo modprobe -r v4l2loopback
+sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1
+python -m processor run
+# then start HyperHDR; match width/height/pixel format to the log line
+# "V4L2 output ready: /dev/video10 YUYV WxH"
+v4l2-ctl -d /dev/video10 -c keep_format=1
+```
+
 To load it at every boot:
 
 ```bash

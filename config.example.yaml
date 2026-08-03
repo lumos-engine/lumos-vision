@@ -38,7 +38,7 @@ output:
   v4l2:
     enabled: true
     device: /dev/video10
-    pixel_format: YUYV              # YUYV | RGB24 | BGR24
+    pixel_format: YUYV              # must match HyperHDR; YUYV | RGB24 | BGR24
 
   mjpeg:
     enabled: true

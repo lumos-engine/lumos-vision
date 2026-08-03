@@ -1,8 +1,9 @@
 [Unit]
-Description=Screen Sight (RTSP camera -> rectified virtual webcam)
-Documentation=https://github.com/your/repo
+Description=Screen Sight (camera -> rectified virtual webcam)
+Documentation=https://github.com/shivanshBTW/screen-sight
 After=network-online.target
 Wants=network-online.target
+# Load loopback before us if you use the modprobe.d snippet in the README.
 
 [Service]
 Type=simple
