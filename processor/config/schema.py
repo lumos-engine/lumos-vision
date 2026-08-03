@@ -142,10 +142,10 @@ class CropConfig:
 @dataclass
 class BlackBarsConfig:
     enabled: bool = True
-    #: A row/column counts as "bar" when its bright tail is below this luma.
-    #: Real USB cams rarely produce true 0-black letterbox; 40 catches the
-    #: usual dark-gray bars without eating dim content.
-    luma_threshold: int = 40
+    #: Absolute luma floor used alongside content-relative detection.
+    #: Real USB cams often show "black" bars as dark red/gray around 45-55;
+    #: relative measurement handles that, and this still catches clean blacks.
+    luma_threshold: int = 48
     #: Which percentile of the row is compared against the threshold.  Using
     #: a high percentile instead of the mean means a single bright subtitle
     #: pixel does not disqualify an otherwise black row -- but a real image

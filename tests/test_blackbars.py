@@ -1,6 +1,8 @@
 """Black bar detection: accuracy first, then the far more important question
 of whether the crop stays still when it should."""
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
@@ -63,6 +65,21 @@ def test_subtitles_and_logos_do_not_defeat_detection():
 def test_a_fully_black_frame_reports_nothing():
     black = np.zeros((432, 768), dtype=np.uint8)
     assert measure_bars(black, 22, 96.0) == {"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["minions_glow.png", "minions_red_bars.png"],
+)
+def test_noisy_camera_letterbox_frames_are_detected(filename):
+    """Captured Logitech frames: bars are dark red/gray, not true black."""
+    path = Path(__file__).parent / "fixtures" / "blackbars" / filename
+    gray = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2GRAY)
+    bars = measure_bars(gray, luma_threshold=48, percentile=96.0)
+    assert bars["top"] == pytest.approx(0.125, abs=0.03)
+    assert bars["bottom"] == pytest.approx(0.125, abs=0.03)
+    assert bars["left"] < 0.02
+    assert bars["right"] < 0.02
 
 
 # ---------------------------------------------------------------- the stage
@@ -138,7 +155,7 @@ def test_aspect_change_is_followed_but_gradually():
     assert stage.status()["pixels"]["top"] == pytest.approx(start, abs=2), "reacted too fast"
 
     # Sticky release + hold needs a long clean streak before cinema unlocks.
-    run(stage, widescreen, frames=160)
+    run(stage, widescreen, frames=220)
     assert stage.status()["pixels"]["top"] <= 2, "never followed the change"
 
 

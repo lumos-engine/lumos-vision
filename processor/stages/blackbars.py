@@ -3,16 +3,11 @@
 No aspect-ratio profiles and no per-film configuration: the bars are measured
 from the picture itself, every frame, and then aggressively stabilised.
 
-Measurement uses a high percentile of each row rather than its mean.  A row of
-a real image almost always contains *something* bright; a letterbox bar does
-not, even when a subtitle sits a few rows below it.  The percentile makes that
-distinction robust without being fooled by a handful of noisy pixels.
-
-Stabilisation is where the real work is.  A crop that moves by two pixels is
-invisible on a monitor and glaringly obvious on a light strip, so every
-measurement passes through a median window, then a hysteresis gate that
-demands the new value hold for most of a second, and finally a rate limiter so
-even a committed change eases in over a second or two.
+Measurement combines an absolute/few-bright row mask (clean blacks) with a
+luma-profile edge finder (USB cams that render cinema bars as dark red/gray).
+Results are forced symmetric per axis, ignored until the TV boundary is
+trusted, and then frozen through noisy "no bars" blips so the crop cannot
+strobe.
 """
 
 from __future__ import annotations
@@ -65,36 +60,86 @@ def measure_bars(
 ) -> dict[str, float]:
     """Raw bar sizes as a fraction of each dimension (before smoothing).
 
-    "The Nth percentile of this row is below the threshold" is the same
-    statement as "no more than (100-N)% of the row's pixels are above it", and
-    the second form is a compare-and-sum instead of a sort per row.  On a
-    540-row image that is the difference between 7 ms and 0.3 ms, which at
-    15 fps is a tenth of the entire CPU budget.
+    Two detectors, take the larger reading per edge:
+
+    1. Absolute / few-bright mask -- reliable on clean blacks and the
+       synthetic pipeline tests.
+    2. Profile edge -- finds the bar→picture luma jump when USB cams render
+       cinema bars as dark red/gray (luma 45-55) that miss the absolute cut.
     """
     height, width = gray.shape[:2]
     result = {edge: 0.0 for edge in EDGES}
-    tail = max(0.0, min(1.0, 1.0 - percentile / 100.0))
+    if height < 8 or width < 8:
+        return result
 
-    # Striding rather than resizing: averaging would dim a thin bright object
-    # into the noise floor, and we want to notice those.
+    tail = max(0.0, min(1.0, 1.0 - percentile / 100.0))
     col_step = max(1, width // 320)
     row_step = max(1, height // 320)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    if detect_top_bottom and height >= 8:
+    if detect_top_bottom:
         sampled = gray[:, ::col_step]
         is_bar = _bar_mask(sampled, axis=1, luma_threshold=luma_threshold, tail=tail)
+        abs_top = abs_bottom = 0.0
         if not is_bar.all():
-            result["top"] = _leading_run(is_bar) / height
-            result["bottom"] = _leading_run(is_bar[::-1]) / height
+            abs_top = _leading_run(is_bar) / height
+            abs_bottom = _leading_run(is_bar[::-1]) / height
+        row_means = blur.mean(axis=1)
+        edge_top = _profile_edge_depth(row_means, luma_threshold) / height
+        edge_bottom = _profile_edge_depth(row_means[::-1], luma_threshold) / height
+        result["top"] = max(abs_top, edge_top)
+        result["bottom"] = max(abs_bottom, edge_bottom)
 
-    if detect_left_right and width >= 8:
+    if detect_left_right:
         sampled = gray[::row_step, :]
         is_bar = _bar_mask(sampled, axis=0, luma_threshold=luma_threshold, tail=tail)
+        abs_left = abs_right = 0.0
         if not is_bar.all():
-            result["left"] = _leading_run(is_bar) / width
-            result["right"] = _leading_run(is_bar[::-1]) / width
+            abs_left = _leading_run(is_bar) / width
+            abs_right = _leading_run(is_bar[::-1]) / width
+        col_means = blur.mean(axis=0)
+        edge_left = _profile_edge_depth(col_means, luma_threshold) / width
+        edge_right = _profile_edge_depth(col_means[::-1], luma_threshold) / width
+        result["left"] = max(abs_left, edge_left)
+        result["right"] = max(abs_right, edge_right)
 
     return result
+
+
+def _profile_edge_depth(means: np.ndarray, luma_threshold: float) -> int:
+    """Pixels of letterbox from one edge, via the strongest luma rise."""
+    n = int(means.size)
+    if n < 8:
+        return 0
+
+    mid = means[n // 5 : 4 * n // 5]
+    if mid.size == 0:
+        return 0
+    content = float(np.percentile(mid, 80))
+    # Whole-frame black / TV off: every row looks the same.
+    if content < max(8.0, float(luma_threshold) * 0.35):
+        return 0
+
+    search = max(8, int(n * 0.38))
+    deltas = np.diff(means.astype(np.float64))
+    region = deltas[:search]
+    if region.size == 0:
+        return 0
+
+    idx = int(np.argmax(region))
+    jump = float(region[idx])
+    if jump < max(10.0, content * 0.10):
+        return 0
+
+    before = float(means[: max(1, idx + 1)].mean())
+    after = float(means[idx + 1 : idx + 1 + max(8, n // 25)].mean())
+    if before >= after * 0.9:
+        return 0
+    # Outside must look like a bar relative to the picture, not just a soft
+    # gradient inside the scene.
+    if before > max(float(luma_threshold) * 1.25, content * 0.55):
+        return 0
+    return idx + 1
 
 
 def _bar_mask(
@@ -116,7 +161,6 @@ def _bar_mask(
     length = sampled.shape[axis]
     few_bright = bright_counts <= tail * length
     means = sampled.mean(axis=axis)
-    # axis=1 → per-row stats over columns; axis=0 → per-column over rows.
     peaks = np.percentile(sampled, 92, axis=axis)
     peak_cap = max(float(luma_threshold) * 3.0, 70.0)
     dark_noisy = (means < float(luma_threshold) * 1.15) & (peaks < peak_cap)
@@ -159,7 +203,7 @@ class BlackBarStage(Stage):
         # Once cinema bars are on, demand a long streak of "no bars" before
         # we even *propose* releasing.  Median+hold alone still strobes when
         # noisy frames alternate bar / no-bar every few samples.
-        return max(self.config.hold_frames * 4, 40)
+        return max(self.config.hold_frames * 6, 60)
 
     def _build_filters(self) -> None:
         kwargs = self._filter_kwargs()
@@ -237,7 +281,16 @@ class BlackBarStage(Stage):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         bright = float(np.percentile(gray[::4, ::4], 99.0))
 
-        if bright < self.config.dark_frame_luma:
+        # Until the TV quad is trusted, the warp invents fake letterbox and
+        # sticky filters freeze it.  Unit tests (no boundary stage) leave
+        # corners unset -- allow measuring in that case.
+        boundary_ready = self.state.corner_confidence >= 0.35 or (
+            self.state.corners is None and self.state.corners_source == "none"
+        )
+
+        if not boundary_ready:
+            measured = None
+        elif bright < self.config.dark_frame_luma:
             # Fade to black, or the TV is off.  Every row looks like a bar, so
             # measuring now would collapse the crop; hold what we have.
             self._dark_frames += 1
@@ -322,17 +375,22 @@ class BlackBarStage(Stage):
         locked: bool,
         misses_attr: str,
     ) -> float:
-        """While locked, ignore brief 'no bar' blips instead of feeding zeros."""
+        """While locked, freeze the crop through noisy / missed detections."""
         if not locked:
             setattr(self, misses_attr, 0)
             return sample
+        committed = filt.committed
         if sample >= 0.02:
             setattr(self, misses_attr, 0)
+            # Size wobble from noise looks like strobing in the debug view;
+            # hold the committed crop unless the new reading clearly moved.
+            if abs(sample - committed) < 0.04:
+                return committed
             return sample
         misses = int(getattr(self, misses_attr)) + 1
         setattr(self, misses_attr, misses)
         if misses < self._release_frames():
-            return filt.committed
+            return committed
         return sample
 
     def _postprocess(self, measured: dict[str, float]) -> dict[str, float]:
