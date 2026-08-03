@@ -1,11 +1,11 @@
 # Screen Sight
 
-Takes an RTSP stream from a camera pointed at a television and turns it into a
-clean, rectified, cropped, low-latency video stream, published as a virtual
-V4L2 webcam.
+Takes a camera pointed at a television (USB webcam or RTSP IP cam) and turns
+it into a clean, rectified, cropped, low-latency virtual webcam for ambient
+lighting.
 
 ```
-RTSP camera ─▶ decode ─▶ Screen Sight ─▶ /dev/video10 ─▶ HyperHDR ─▶ ESP32 + WLED
+USB or RTSP camera ─▶ Screen Sight ─▶ /dev/video10 ─▶ HyperHDR ─▶ ESP32 + WLED
 ```
 
 The processor knows nothing about HyperHDR. It produces frames and hands them
@@ -21,56 +21,9 @@ reflections near the edges, and normalises the colour — all at 640x360 and
 
 ---
 
-## Quick start
+## Quick start (USB webcam)
 
-Try it with no camera and no kernel modules:
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-# A synthetic living room, streamed to http://localhost:7661
-python -m processor run --source synthetic --no-v4l2 --mjpeg
-```
-
-Against a real camera, with the calibration wizard on
-<http://localhost:7660>:
-
-```bash
-python -m processor run \
-  --rtsp-url rtsp://admin:PASSWORD@192.168.1.93:5543/live/channel10 \
-  --web
-```
-
-Or a USB webcam plugged into the same machine (`v4l2-ctl --list-devices` to
-find the node — do not use the Screen Sight loopback `/dev/video10`):
-
-```bash
-python -m processor run \
-  --source v4l2 --camera-device /dev/video2 \
-  --capture-width 1280 --capture-height 720 \
-  --web --mjpeg
-```
-
-The RTSP URL is never hardcoded and never logged in full — credentials are
-redacted from logs and from everything the web UI can see.
-
-**Verify the encoder size before assuming which channel is “main”.** On CP PLUS
-cameras the path (`/live/channel10`, `/live/channel1`, …) is stable, but the
-resolution behind it can change (ezyKam+ quality, ONVIF, NVR, reboot). Check
-with:
-
-```bash
-ffprobe -rtsp_transport tcp \
-  "rtsp://admin:PASSWORD@192.168.1.93:5543/live/channel10"
-```
-
-Use whichever URL currently delivers the resolution you want. Do not treat
-`channel10` as permanently 2304×1296 — it has also been observed at 640×360.
-
----
-
-## Installing on Ubuntu 24.04
+Recommended path on Ubuntu: a UVC webcam (e.g. Logitech) on the same machine.
 
 ```bash
 sudo apt update
@@ -79,10 +32,64 @@ sudo apt install -y python3-venv python3-pip v4l2loopback-dkms v4l-utils
 git clone <this repo> screen-sight && cd screen-sight
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .            # optional: provides the `screensight` command
+pip install -e .
+
+# Virtual camera HyperHDR will read (once per boot unless you make it persistent)
+sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1
+
+# Find the Logitech node — do NOT use /dev/video10 (that is the loopback output)
+v4l2-ctl --list-devices
 ```
 
-### The virtual camera
+Run (one line — avoid spaces after `\` if you split lines):
+
+```bash
+python -m processor run --source v4l2 --camera-device /dev/video2 --capture-width 1280 --capture-height 720 --web --web-host 0.0.0.0 --mjpeg
+```
+
+Then open:
+
+- Calibration wizard: <http://localhost:7660> (or `http://PC_IP:7660` from another machine)
+- MJPEG preview: <http://localhost:7661>
+
+In the wizard, use **Camera hardware** first (exposure / gain / white balance on
+the UVC sensor). The **Colour (software)** sliders only post-process frames
+after capture.
+
+If ports are busy from a previous run:
+
+```bash
+pkill -f 'python -m processor'
+ss -tlnp | grep -E '7660|7661' || echo "ports free"
+```
+
+### No camera (dev / CI)
+
+```bash
+python -m processor run --source synthetic --no-v4l2 --mjpeg
+```
+
+### RTSP IP camera (optional)
+
+```bash
+python -m processor run --rtsp-url 'rtsp://admin:PASSWORD@192.168.1.93:5543/live/channel10' --web --web-host 0.0.0.0 --mjpeg
+```
+
+Credentials are never logged in full. On CP PLUS and similar cams, RTSP **paths**
+are stable but **encoder resolution is not** — verify with `ffprobe` before
+assuming a channel is high-res.
+
+---
+
+## Installing on Ubuntu 24.04
+
+See [Quick start (USB webcam)](#quick-start-usb-webcam) for the full install.
+`pip install -e .` also provides the `screensight` command.
+
+X11 is more reliable than Wayland for some OpenCV / desktop capture paths; if
+the machine misbehaves under Wayland, switch the session to Xorg.
+
+### The virtual camera (HyperHDR output)
 
 ```bash
 sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1
@@ -100,8 +107,6 @@ printf 'options v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_cap
   | sudo tee /etc/modprobe.d/v4l2loopback.conf
 ```
 
-Check it is there, then run the processor and confirm the format:
-
 ```bash
 v4l2-ctl --list-devices
 v4l2-ctl -d /dev/video10 --all
@@ -109,10 +114,13 @@ v4l2-ctl -d /dev/video10 --all
 
 ### Pointing HyperHDR at it
 
-In HyperHDR, add a **USB capture** device, select `Screen Sight` (`/dev/video10`),
-set the resolution to 640x360 and the format to YUYV. Leave HyperHDR's own
-cropping and signal detection off — this processor has already done that work,
-and layering two croppers on top of each other only makes both wrong.
+1. Start Screen Sight so it is writing to `/dev/video10`
+2. Restart HyperHDR so it rescans devices
+3. Open **Video capturing** (not “add device” — there isn’t one)
+4. Choose **Screen Sight** / `/dev/video10`
+5. Resolution **640×360**, format **YUYV**, ~15 fps
+6. Turn off HyperHDR’s own crop / black-bar / signal detection — Screen Sight
+   already did that work
 
 ### Running as a service
 
@@ -383,12 +391,19 @@ output:
 ## Troubleshooting
 
 **`/dev/video10 does not exist`** — the loopback module is not loaded. See
-[The virtual camera](#the-virtual-camera).
+[The virtual camera](#the-virtual-camera-hyperhdr-output).
+
+**`Address already in use` (7660 / 7661)** — a previous Screen Sight is still
+running. `pkill -f 'python -m processor'` then retry.
+
+**`zsh: command not found: --source`** — a line-continuation `\` had a trailing
+space (or the lines were pasted badly). Use the one-line command in
+[Quick start](#quick-start-usb-webcam).
 
 **HyperHDR cannot open the device** — reload v4l2loopback with
-`exclusive_caps=1`, and make sure the processor is actually running and
-writing to it. `v4l2-ctl -d /dev/video10 --all` should show a 640x360 YUYV
-format.
+`exclusive_caps=1`, start Screen Sight **before** enabling capture, and pick
+the device under **Video capturing**. `v4l2-ctl -d /dev/video10 --all` should
+show a 640x360 YUYV format.
 
 **The TV is never detected** — the detector needs moving picture; a paused
 frame or a static menu gives it nothing to work with. Play something, or mark
