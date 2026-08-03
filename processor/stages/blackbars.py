@@ -38,6 +38,22 @@ def _leading_run(is_bar: np.ndarray) -> int:
     return int(nonbar[0]) if nonbar.size else int(is_bar.size)
 
 
+def _symmetric_pair(a: float, b: float, agree: float = 0.45) -> float:
+    """Common crop for opposite edges, or 0 if they do not both look like bars.
+
+    ``agree`` is the minimum ratio of the smaller measurement to the larger.
+    Letterbox with a subtitle in the lower bar still agrees (~0.5–1.0);
+    a single dark UI strip on one edge does not.
+    """
+    hi = max(float(a), float(b))
+    lo = min(float(a), float(b))
+    if hi < 0.015:
+        return 0.0
+    if lo < hi * agree:
+        return 0.0
+    return hi
+
+
 def measure_bars(
     gray: np.ndarray,
     luma_threshold: float,
@@ -227,17 +243,15 @@ class BlackBarStage(Stage):
         limit = max(0.0, self.config.max_crop_percent) / 100.0
 
         if self.config.symmetric:
-            # Real content is symmetric.  Taking the larger of the pair is the
-            # right call because the only thing that *shrinks* a measurement is
-            # bright pixels intruding (subtitles parked in the lower bar),
-            # while the median window already discards transient over-reads.
-            vertical = max(measured["top"], measured["bottom"])
-            horizontal = max(measured["left"], measured["right"])
+            # Real letterbox/pillarbox is on *both* opposite edges.  Taking the
+            # larger of a agreeing pair handles subtitles that shrink one side;
+            # if only one side looks dark (Jellyfin cast row, UI chrome, a
+            # gradient) that is not letterbox -- cropping it eats real content.
             measured = {
-                "top": vertical,
-                "bottom": vertical,
-                "left": horizontal,
-                "right": horizontal,
+                "top": _symmetric_pair(measured["top"], measured["bottom"]),
+                "bottom": _symmetric_pair(measured["top"], measured["bottom"]),
+                "left": _symmetric_pair(measured["left"], measured["right"]),
+                "right": _symmetric_pair(measured["left"], measured["right"]),
             }
 
         # Letterbox and pillarbox at the same time means the measurement is

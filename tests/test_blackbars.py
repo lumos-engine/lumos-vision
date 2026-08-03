@@ -7,8 +7,16 @@ import pytest
 
 from processor.config.schema import BlackBarsConfig
 from processor.pipeline.context import FrameContext, PipelineState
-from processor.stages.blackbars import BlackBarStage, measure_bars
+from processor.stages.blackbars import BlackBarStage, _symmetric_pair, measure_bars
 from processor.testing.scene import render_panel
+
+
+def test_symmetric_pair_ignores_one_sided_dark_strips():
+    # Cinema letterbox: both sides agree → keep the larger reading.
+    assert _symmetric_pair(0.13, 0.10) == pytest.approx(0.13)
+    # Jellyfin-style dark cast row only at the bottom → do not crop.
+    assert _symmetric_pair(0.0, 0.18) == 0.0
+    assert _symmetric_pair(0.02, 0.20) == 0.0
 
 PANEL = (768, 432)
 
