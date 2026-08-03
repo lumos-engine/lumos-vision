@@ -8,6 +8,17 @@ Product name: **Screen Sight**. Package directory stays `processor/`. CLI:
 The processor must **not** depend on HyperHDR. It produces frames; sinks are
 pluggable.
 
+## Git — never commit unless asked
+
+**Do not ever create commits, amend commits, or push on the user's behalf.**
+
+- Never run `git commit`, `git commit --amend`, or `git push` unless the user
+  explicitly asks for that action in the current message.
+- Finishing a feature, syncing to another machine, or “the natural next step”
+  is **not** permission to commit or push. Leave changes uncommitted and tell
+  the user what to run if they want to publish.
+- Staging (`git add`) for a commit the user did not request is also forbidden.
+
 ## Layout
 
 ```
