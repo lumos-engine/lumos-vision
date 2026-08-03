@@ -22,16 +22,16 @@ camera:
   #     gain: 0
   device: ""
   controls: {}
-  # Downscale before the pipeline when the camera sends more than you need.
-  # Harmless if the stream is already <= this width (e.g. 640x360).
-  process_width: 960
+  # 0 = keep native camera resolution (preferred).  Set e.g. 960 only if the
+  # host is too slow for full-res processing.
+  process_width: 0
   read_timeout: 8.0                 # seconds without a frame before reconnect
   reconnect_delay: 2.0
 
 output:
-  width: 640
-  height: 360
-  fps: 15
+  width: 1280
+  height: 720
+  fps: 20
   v4l2:
     enabled: true
     device: /dev/video10
@@ -66,23 +66,23 @@ movement:
   ncc_threshold: 1.0                # lower = more eager to recalibrate
 
 perspective:
-  # Rectified working size.  The main CPU knob: everything downstream scales
-  # with it.  Drop to 640x360 on a very slow machine.
-  width: 768
-  height: 432
+  # Rectified working size.  Match output for best letterbox detection.
+  # Drop to 640x360 on a very slow machine.
+  width: 1280
+  height: 720
 
 crop:
   inset_percent: 2.0                # trims bezel and the glowing panel rim
 
 blackbars:
   enabled: true
-  luma_threshold: 22                # what counts as "black"
-  max_crop_percent: 30
+  luma_threshold: 40                # USB letterbox is rarely true-black; raise if bars remain
+  max_crop_percent: 40              # cinema 2.39:1 needs ~13%+ per side; headroom helps
   # Anti-flicker.  Raise window/hold_frames if the crop still twitches;
   # lower max_step_percent to make changes ease in more slowly.
   window: 15
-  hold_frames: 10
-  max_step_percent: 0.5
+  hold_frames: 8
+  max_step_percent: 1.0
 
 reflection:
   margin_percent: 2.0               # ignore this much of each edge

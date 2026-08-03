@@ -104,9 +104,9 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     source.add_argument("--capture-height", type=int, help="request this height from a USB camera")
 
     output = parser.add_argument_group("output")
-    output.add_argument("--width", type=int, help="output width (default 640)")
-    output.add_argument("--height", type=int, help="output height (default 360)")
-    output.add_argument("--fps", type=float, help="target output frame rate (default 15)")
+    output.add_argument("--width", type=int, help="output width (default 1280)")
+    output.add_argument("--height", type=int, help="output height (default 720)")
+    output.add_argument("--fps", type=float, help="target output frame rate (default 20)")
     output.add_argument("--device", help="V4L2 loopback *output* device (default /dev/video10)")
     output.add_argument("--pixel-format", choices=("YUYV", "RGB24", "BGR24"))
     output.add_argument("--no-v4l2", action="store_true", help="disable the virtual camera output")

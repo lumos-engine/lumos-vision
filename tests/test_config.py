@@ -15,8 +15,10 @@ from processor.config.schema import Config, ConfigError
 
 def test_defaults_match_the_documented_targets():
     config = Config()
-    assert (config.output.width, config.output.height) == (640, 360)
-    assert config.output.fps == 15.0
+    assert (config.output.width, config.output.height) == (1280, 720)
+    assert config.output.fps == 20.0
+    assert config.camera.process_width == 0
+    assert (config.perspective.width, config.perspective.height) == (1280, 720)
     assert config.output.v4l2.device == "/dev/video10"
     assert config.camera.transport == "tcp"
     assert config.blackbars.enabled is True
@@ -25,7 +27,7 @@ def test_defaults_match_the_documented_targets():
 def test_partial_config_keeps_defaults():
     config = Config.from_dict({"output": {"fps": 24}})
     assert config.output.fps == 24
-    assert config.output.width == 640
+    assert config.output.width == 1280
     assert config.crop.inset_percent == 2.0
 
 

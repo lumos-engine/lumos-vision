@@ -99,6 +99,8 @@ python -m processor run --source v4l2 --camera-device /dev/video2 --web --mjpeg
 # Hardware exposure/gain/WB: wizard "Camera hardware" section, or
 #   v4l2-ctl -d /dev/video2 --list-ctrls
 # Software Colour sliders only post-process; use UVC controls for real exposure.
+# Defaults are 1280x720 with process_width=0 (no early downscale). Downscale in
+# HyperHDR if needed; only lower Screen Sight res on a slow host.
 
 # calibration wizard
 python -m processor run --source synthetic --no-v4l2 --web

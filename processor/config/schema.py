@@ -42,10 +42,9 @@ class CameraConfig:
     read_timeout: float = 8.0
     reconnect_delay: float = 2.0
     max_reconnect_delay: float = 20.0
-    #: Cap the resolution we actually process.  0 keeps the native size.
-    #: The camera almost always streams more pixels than a 640x360 output
-    #: needs, and downscaling once at the source is the single biggest CPU win.
-    process_width: int = 960
+    #: Cap the width we feed the pipeline.  0 keeps the camera's native size
+    #: (preferred -- let HyperHDR or a later sink downscale if it needs to).
+    process_width: int = 0
     #: Extra FFmpeg options appended to OPENCV_FFMPEG_CAPTURE_OPTIONS.
     ffmpeg_options: str = ""
 
@@ -113,12 +112,11 @@ class MovementConfig:
 @dataclass
 class PerspectiveConfig:
     enabled: bool = True
-    #: Rectified working resolution.  A little larger than the output on
-    #: purpose: the black-bar detector benefits from the extra rows and the
-    #: final resize cleans up any aliasing.  This is the main CPU knob --
-    #: every stage after the warp scales with it.
-    width: int = 768
-    height: int = 432
+    #: Rectified working resolution.  Match the output (or a little larger)
+    #: so letterbox detection and colour sampling keep full detail.  Drop to
+    #: 640x360 only on a very slow machine.
+    width: int = 1280
+    height: int = 720
     #: nearest | linear | cubic -- linear is the right latency/quality trade.
     interpolation: str = "linear"
 
@@ -298,9 +296,11 @@ class DdpConfig:
 
 @dataclass
 class OutputConfig:
-    width: int = 640
-    height: int = 360
-    fps: float = 15.0
+    #: Virtual-cam / MJPEG size.  1280x720 keeps cinema letterbox edges sharp
+    #: for HyperHDR; downscale there if the host needs it.
+    width: int = 1280
+    height: int = 720
+    fps: float = 20.0
     v4l2: V4L2Config = field(default_factory=V4L2Config)
     mjpeg: MjpegConfig = field(default_factory=MjpegConfig)
     file: FileSinkConfig = field(default_factory=FileSinkConfig)

@@ -16,8 +16,9 @@ HyperHDR can be removed from the chain later without touching the pipeline.
 **What it actually does:** finds the TV in the camera's view, removes the
 perspective so the screen becomes a true rectangle, trims the bezel, detects
 and removes letterbox bars as the aspect ratio changes mid-film, ignores
-reflections near the edges, and normalises the colour — all at 640x360 and
-15 fps for a couple of milliseconds of CPU per frame.
+reflections near the edges, and normalises the colour — by default at
+1280×720 so cinema letterboxing stays sharp for HyperHDR (downscale there if
+the host needs it).
 
 ---
 
@@ -47,6 +48,10 @@ Run (one line — avoid spaces after `\` if you split lines):
 python -m processor run --source v4l2 --camera-device /dev/video2 --capture-width 1280 --capture-height 720 --web --web-host 0.0.0.0 --mjpeg
 ```
 
+Defaults keep full detail: no `process_width` downscale, 1280×720 working size
+and virtual-cam output. On a slow machine, pass `--width 640 --height 360`
+and/or `--process-width 960`.
+
 Then open:
 
 - Calibration wizard: <http://localhost:7660> (or `http://PC_IP:7660` from another machine)
@@ -55,6 +60,10 @@ Then open:
 In the wizard, use **Camera hardware** first (exposure / gain / white balance on
 the UVC sensor). The **Colour (software)** sliders only post-process frames
 after capture.
+
+For **cinema / letterboxed** content: enable **Black bars**, raise **Darkness
+threshold** to ~50–70 until **Result → output** has no bars, then point
+HyperHDR at that clean frame.
 
 If ports are busy from a previous run:
 
@@ -118,7 +127,8 @@ v4l2-ctl -d /dev/video10 --all
 2. Restart HyperHDR so it rescans devices
 3. Open **Video capturing** (not “add device” — there isn’t one)
 4. Choose **Screen Sight** / `/dev/video10`
-5. Resolution **640×360**, format **YUYV**, ~15 fps
+5. Resolution **1280×720** (match Screen Sight), format **YUYV**, ~20 fps  
+   (use 640×360 only if you started Screen Sight at that size)
 6. Turn off HyperHDR’s own crop / black-bar / signal detection — Screen Sight
    already did that work
 
@@ -403,7 +413,7 @@ space (or the lines were pasted badly). Use the one-line command in
 **HyperHDR cannot open the device** — reload v4l2loopback with
 `exclusive_caps=1`, start Screen Sight **before** enabling capture, and pick
 the device under **Video capturing**. `v4l2-ctl -d /dev/video10 --all` should
-show a 640x360 YUYV format.
+show a 1280x720 YUYV format (or whatever `--width/--height` you set).
 
 **The TV is never detected** — the detector needs moving picture; a paused
 frame or a static menu gives it nothing to work with. Play something, or mark
