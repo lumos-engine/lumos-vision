@@ -12,7 +12,7 @@ pluggable.
 
 ```
 processor/
-  camera/       # RTSP (drop-old, reconnect), file, image, synthetic
+  camera/       # RTSP, V4L2/USB (drop-old), file, image, synthetic
   pipeline/     # Stage ABC, FrameContext, PipelineState, registry
   stages/       # movement → boundary → perspective → crop → blackbars → …
   output/       # V4L2, MJPEG, file, null, DDP
@@ -82,6 +82,9 @@ pip install -e ".[dev]"
 
 # no camera / no v4l2loopback
 python -m processor run --source synthetic --no-v4l2 --mjpeg
+
+# USB webcam (not the loopback output device)
+python -m processor run --source v4l2 --camera-device /dev/video2 --web --mjpeg
 
 # calibration wizard
 python -m processor run --source synthetic --no-v4l2 --web

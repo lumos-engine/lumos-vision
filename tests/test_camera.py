@@ -40,6 +40,18 @@ def test_rtsp_source_requires_a_url():
         create_source(CameraConfig(source="rtsp"))
 
 
+def test_v4l2_source_requires_a_device():
+    with pytest.raises(ValueError, match="device"):
+        create_source(CameraConfig(source="v4l2"))
+
+
+def test_usb_alias_uses_v4l2_source():
+    from processor.camera.v4l2 import V4l2Source
+
+    source = create_source(CameraConfig(source="usb", device="/dev/video2"))
+    assert isinstance(source, V4l2Source)
+
+
 def test_unknown_source_is_rejected():
     with pytest.raises(ValueError, match="unknown camera.source"):
         create_source(CameraConfig(source="carrier pigeon"))

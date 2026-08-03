@@ -42,6 +42,16 @@ python -m processor run \
   --web
 ```
 
+Or a USB webcam plugged into the same machine (`v4l2-ctl --list-devices` to
+find the node — do not use the Screen Sight loopback `/dev/video10`):
+
+```bash
+python -m processor run \
+  --source v4l2 --camera-device /dev/video2 \
+  --capture-width 1280 --capture-height 720 \
+  --web --mjpeg
+```
+
 The RTSP URL is never hardcoded and never logged in full — credentials are
 redacted from logs and from everything the web UI can see.
 

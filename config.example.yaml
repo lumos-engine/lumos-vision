@@ -5,11 +5,17 @@
 # Run `screensight config` to print the full expanded configuration with defaults.
 
 camera:
-  source: rtsp                      # rtsp | file | image | synthetic
+  source: rtsp                      # rtsp | v4l2 | usb | file | image | synthetic
   # Paths are stable; encoder resolution is not.  Verify with ffprobe before
   # assuming channel10 is the high-res stream (it may be 640x360).
   rtsp_url: "rtsp://admin:CHANGEME@192.168.1.93:5543/live/channel10"
   transport: tcp                    # tcp is much more reliable than udp
+  # USB webcam on the same machine (Logitech etc.).  Example:
+  #   source: v4l2
+  #   device: /dev/video2
+  #   capture_width: 1280
+  #   capture_height: 720
+  device: ""
   # Downscale before the pipeline when the camera sends more than you need.
   # Harmless if the stream is already <= this width (e.g. 640x360).
   process_width: 960

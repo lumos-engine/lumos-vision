@@ -17,9 +17,15 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 
 @dataclass
 class CameraConfig:
-    #: rtsp | file | image | synthetic
+    #: rtsp | v4l2 | usb | file | image | synthetic
     source: str = "rtsp"
     rtsp_url: str = ""
+    #: USB webcam device for the ``v4l2`` / ``usb`` source (e.g. /dev/video2).
+    device: str = ""
+    #: Optional capture mode requests for V4L2 (0 = driver default).
+    capture_width: int = 0
+    capture_height: int = 0
+    capture_fps: float = 0.0
     #: Video file or image path used by the ``file`` / ``image`` sources.
     path: str = ""
     #: Replay files in a loop (development convenience).

@@ -8,6 +8,7 @@ from processor.camera.base import FrameSource
 from processor.camera.file_source import IMAGE_SUFFIXES, FileSource, ImageSource
 from processor.camera.rtsp import RtspSource
 from processor.camera.synthetic import SyntheticSource
+from processor.camera.v4l2 import V4l2Source
 from processor.config.schema import CameraConfig
 
 
@@ -16,6 +17,8 @@ def create_source(config: CameraConfig) -> FrameSource:
 
     if source == "rtsp":
         return RtspSource(config)
+    if source in ("v4l2", "usb"):
+        return V4l2Source(config)
     if source == "synthetic":
         return SyntheticSource(config)
     if source == "image":
@@ -29,5 +32,6 @@ def create_source(config: CameraConfig) -> FrameSource:
         return FileSource(config)
 
     raise ValueError(
-        f"unknown camera.source {config.source!r} (expected rtsp, file, image or synthetic)"
+        f"unknown camera.source {config.source!r} "
+        f"(expected rtsp, v4l2, usb, file, image or synthetic)"
     )

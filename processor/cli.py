@@ -24,6 +24,9 @@ examples:
   # same, with the calibration wizard on http://localhost:7660
   screensight run --rtsp-url rtsp://... --web
 
+  # USB webcam (Logitech etc.) on the same machine
+  screensight run --source v4l2 --camera-device /dev/video2 --web
+
   # develop with no camera at all
   screensight run --source synthetic --no-v4l2 --mjpeg --debug
 
@@ -83,7 +86,13 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="RTSP URL of the camera, e.g. rtsp://user:pass@192.168.1.93:5543/live/channel10",
     )
     source.add_argument(
-        "--source", choices=("rtsp", "file", "image", "synthetic"), help="input type"
+        "--source",
+        choices=("rtsp", "v4l2", "usb", "file", "image", "synthetic"),
+        help="input type",
+    )
+    source.add_argument(
+        "--camera-device",
+        help="USB / V4L2 capture device, e.g. /dev/video2 (implies --source v4l2)",
     )
     source.add_argument("--input", help="video file, image, or directory of images")
     source.add_argument("--transport", choices=("tcp", "udp"), help="RTSP transport")
@@ -91,12 +100,14 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "--process-width", type=int, help="downscale the camera feed to this width (0 = native)"
     )
     source.add_argument("--replay-fps", type=float, help="playback rate for file/synthetic input")
+    source.add_argument("--capture-width", type=int, help="request this width from a USB camera")
+    source.add_argument("--capture-height", type=int, help="request this height from a USB camera")
 
     output = parser.add_argument_group("output")
     output.add_argument("--width", type=int, help="output width (default 640)")
     output.add_argument("--height", type=int, help="output height (default 360)")
     output.add_argument("--fps", type=float, help="target output frame rate (default 15)")
-    output.add_argument("--device", help="V4L2 loopback device (default /dev/video10)")
+    output.add_argument("--device", help="V4L2 loopback *output* device (default /dev/video10)")
     output.add_argument("--pixel-format", choices=("YUYV", "RGB24", "BGR24"))
     output.add_argument("--no-v4l2", action="store_true", help="disable the virtual camera output")
     output.add_argument("--mjpeg", action="store_true", help="serve the output as MJPEG over HTTP")
@@ -138,12 +149,17 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
         updates["camera.rtsp_url"] = args.rtsp_url
         updates.setdefault("camera.source", "rtsp")
     put("camera.source", args.source)
+    if getattr(args, "camera_device", None):
+        updates["camera.device"] = args.camera_device
+        updates.setdefault("camera.source", "v4l2")
     if args.input:
         updates["camera.path"] = args.input
         updates.setdefault("camera.source", "file")
     put("camera.transport", args.transport)
     put("camera.process_width", args.process_width)
     put("camera.replay_fps", args.replay_fps)
+    put("camera.capture_width", getattr(args, "capture_width", None))
+    put("camera.capture_height", getattr(args, "capture_height", None))
 
     put("output.width", args.width)
     put("output.height", args.height)
@@ -222,7 +238,12 @@ def command_run(args: argparse.Namespace) -> int:
     if config.camera.source == "rtsp" and not config.camera.rtsp_url:
         raise SystemExit(
             "no camera configured. Pass --rtsp-url, set camera.rtsp_url in the config, "
-            "or try --source synthetic to run without hardware."
+            "or try --source synthetic / --source v4l2 --camera-device /dev/video2."
+        )
+    if config.camera.source in ("v4l2", "usb") and not config.camera.device:
+        raise SystemExit(
+            "USB camera selected but no device given. Pass --camera-device /dev/video2 "
+            "(check with: v4l2-ctl --list-devices)."
         )
 
     # Imported here so `screensight --help` and the offline subcommands stay fast and
