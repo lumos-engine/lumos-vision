@@ -64,21 +64,43 @@ def measure_bars(
 
     if detect_top_bottom and height >= 8:
         sampled = gray[:, ::col_step]
-        bright_counts = np.count_nonzero(sampled > luma_threshold, axis=1)
-        is_bar = bright_counts <= tail * sampled.shape[1]
+        is_bar = _bar_mask(sampled, axis=1, luma_threshold=luma_threshold, tail=tail)
         if not is_bar.all():
             result["top"] = _leading_run(is_bar) / height
             result["bottom"] = _leading_run(is_bar[::-1]) / height
 
     if detect_left_right and width >= 8:
         sampled = gray[::row_step, :]
-        bright_counts = np.count_nonzero(sampled > luma_threshold, axis=0)
-        is_bar = bright_counts <= tail * sampled.shape[0]
+        is_bar = _bar_mask(sampled, axis=0, luma_threshold=luma_threshold, tail=tail)
         if not is_bar.all():
             result["left"] = _leading_run(is_bar) / width
             result["right"] = _leading_run(is_bar[::-1]) / width
 
     return result
+
+
+def _bar_mask(
+    sampled: np.ndarray,
+    axis: int,
+    luma_threshold: float,
+    tail: float,
+) -> np.ndarray:
+    """Rows/cols that look like letterbox on a real camera, not a clean PNG.
+
+    USB cams put noise and a faint glow into "black" bars, so a strict
+    threshold alone misses them.  A row counts as bar when either:
+
+    * almost no pixels exceed the threshold (subtitle-tolerant), or
+    * its mean is dark *and* its brightest pixel is still modest (noisy bar).
+    """
+    bright_counts = np.count_nonzero(sampled > luma_threshold, axis=axis)
+    length = sampled.shape[axis]
+    few_bright = bright_counts <= tail * length
+    means = sampled.mean(axis=axis)
+    peaks = sampled.max(axis=axis)
+    peak_cap = max(float(luma_threshold) * 2.5, 55.0)
+    dark_noisy = (means < luma_threshold) & (peaks < peak_cap)
+    return few_bright | dark_noisy
 
 
 class BlackBarStage(Stage):

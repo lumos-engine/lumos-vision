@@ -145,7 +145,9 @@ class CropConfig:
 class BlackBarsConfig:
     enabled: bool = True
     #: A row/column counts as "bar" when its bright tail is below this luma.
-    luma_threshold: int = 22
+    #: Real USB cams rarely produce true 0-black letterbox; 40 catches the
+    #: usual dark-gray bars without eating dim content.
+    luma_threshold: int = 40
     #: Which percentile of the row is compared against the threshold.  Using
     #: a high percentile instead of the mean means a single bright subtitle
     #: pixel does not disqualify an otherwise black row -- but a real image
@@ -154,15 +156,15 @@ class BlackBarsConfig:
     detect_top_bottom: bool = True
     detect_left_right: bool = True
     #: Never crop away more than this fraction of a dimension per side.
-    max_crop_percent: float = 30.0
+    max_crop_percent: float = 40.0
     #: Force top == bottom and left == right (true for essentially all
     #: broadcast and film content, and it halves the flicker sources).
     symmetric: bool = True
     #: Temporal stabilisation, in frames / percent of the dimension.
     window: int = 15
-    hold_frames: int = 10
+    hold_frames: int = 8
     change_threshold_percent: float = 0.8
-    max_step_percent: float = 0.5
+    max_step_percent: float = 1.0
     #: Ignore bar detection entirely while the whole frame is dark (fade to
     #: black, dark scene) -- otherwise the crop collapses to nothing.
     dark_frame_luma: float = 12.0
