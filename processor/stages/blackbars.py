@@ -38,18 +38,20 @@ def _leading_run(is_bar: np.ndarray) -> int:
     return int(nonbar[0]) if nonbar.size else int(is_bar.size)
 
 
-def _symmetric_pair(a: float, b: float, agree: float = 0.45) -> float:
+def _symmetric_pair(a: float, b: float, min_side: float = 0.03) -> float:
     """Common crop for opposite edges, or 0 if they do not both look like bars.
 
-    ``agree`` is the minimum ratio of the smaller measurement to the larger.
-    Letterbox with a subtitle in the lower bar still agrees (~0.5–1.0);
-    a single dark UI strip on one edge does not.
+    Real letterbox has a bar on *both* sides.  We only require each side to
+    clear a small absolute floor (``min_side``), then take the larger reading
+    so a subtitle that shrinks the lower bar does not under-crop.  A single
+    dark UI strip (Jellyfin cast row) leaves the other side near 0 and is
+    ignored.  A ratio-based "agree" check was tried and rejected: bright
+    content against the bar often makes the two sides unequal enough to
+    disable cinema crops entirely.
     """
     hi = max(float(a), float(b))
     lo = min(float(a), float(b))
-    if hi < 0.015:
-        return 0.0
-    if lo < hi * agree:
+    if hi < 0.015 or lo < min_side:
         return 0.0
     return hi
 
@@ -107,15 +109,17 @@ def _bar_mask(
     threshold alone misses them.  A row counts as bar when either:
 
     * almost no pixels exceed the threshold (subtitle-tolerant), or
-    * its mean is dark *and* its brightest pixel is still modest (noisy bar).
+    * its mean is dark *and* its high percentile is still modest (noisy bar;
+      use a percentile instead of max so single sparkle pixels do not veto).
     """
     bright_counts = np.count_nonzero(sampled > luma_threshold, axis=axis)
     length = sampled.shape[axis]
     few_bright = bright_counts <= tail * length
     means = sampled.mean(axis=axis)
-    peaks = sampled.max(axis=axis)
-    peak_cap = max(float(luma_threshold) * 2.5, 55.0)
-    dark_noisy = (means < luma_threshold) & (peaks < peak_cap)
+    # axis=1 → per-row stats over columns; axis=0 → per-column over rows.
+    peaks = np.percentile(sampled, 92, axis=axis)
+    peak_cap = max(float(luma_threshold) * 3.0, 70.0)
+    dark_noisy = (means < float(luma_threshold) * 1.15) & (peaks < peak_cap)
     return few_bright | dark_noisy
 
 

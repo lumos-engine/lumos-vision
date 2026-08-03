@@ -12,8 +12,10 @@ from processor.testing.scene import render_panel
 
 
 def test_symmetric_pair_ignores_one_sided_dark_strips():
-    # Cinema letterbox: both sides agree → keep the larger reading.
+    # Cinema letterbox: both sides present → keep the larger reading.
     assert _symmetric_pair(0.13, 0.10) == pytest.approx(0.13)
+    # Uneven sides (bright content against one bar) still crop.
+    assert _symmetric_pair(0.14, 0.06) == pytest.approx(0.14)
     # Jellyfin-style dark cast row only at the bottom → do not crop.
     assert _symmetric_pair(0.0, 0.18) == 0.0
     assert _symmetric_pair(0.02, 0.20) == 0.0
