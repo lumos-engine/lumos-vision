@@ -134,6 +134,239 @@ async function pushUpdates() {
 const pendingCameraControls = {};
 let cameraPushTimer = null;
 
+// ------------------------------------------------------------- source panel
+
+const SOURCE_TYPES = [
+  { value: 'v4l2', label: 'USB camera' },
+  { value: 'rtsp', label: 'RTSP' },
+  { value: 'file', label: 'File / image' },
+  { value: 'synthetic', label: 'Synthetic' },
+];
+
+let sourcePanelState = {
+  source: 'v4l2',
+  device: '',
+  rtsp_url: '',
+  rtsp_saved: false,
+  path: '',
+  transport: 'tcp',
+  devices: [],
+};
+
+function normalizeSourceType(value) {
+  const source = String(value || '').toLowerCase();
+  if (source === 'usb') return 'v4l2';
+  if (source === 'image') return 'file';
+  if (SOURCE_TYPES.some((item) => item.value === source)) return source;
+  return 'v4l2';
+}
+
+function syncSourceFieldsVisibility() {
+  const type = $('source-type')?.value || 'v4l2';
+  for (const el of document.querySelectorAll('[data-source-for]')) {
+    const allowed = el.getAttribute('data-source-for').split(/\s+/);
+    el.hidden = !allowed.includes(type);
+  }
+}
+
+async function loadCaptureDevices() {
+  try {
+    const data = await api('/api/camera/devices');
+    sourcePanelState.devices = data.devices || [];
+    if (data.selected) sourcePanelState.device = data.selected;
+    return data;
+  } catch {
+    sourcePanelState.devices = [];
+    return null;
+  }
+}
+
+function fillDeviceSelect(selected) {
+  const select = $('source-device');
+  if (!select) return;
+  const devices = sourcePanelState.devices;
+  select.innerHTML = '';
+  if (!devices.length) {
+    const opt = document.createElement('option');
+    opt.value = selected || '';
+    opt.textContent = selected
+      ? `${selected} (not enumerated)`
+      : 'No USB capture devices found';
+    select.append(opt);
+    return;
+  }
+  for (const device of devices) {
+    const opt = document.createElement('option');
+    opt.value = device.id_path;
+    const bus = device.bus_info ? ` · ${device.bus_info}` : '';
+    opt.textContent = `${device.name}${bus}`;
+    if (
+      device.selected
+      || device.id_path === selected
+      || device.video_path === selected
+    ) {
+      opt.selected = true;
+    }
+    select.append(opt);
+  }
+  if (selected && !devices.some((d) => d.id_path === selected || d.video_path === selected)) {
+    const opt = document.createElement('option');
+    opt.value = selected;
+    opt.textContent = `${selected} (configured)`;
+    opt.selected = true;
+    select.prepend(opt);
+  }
+}
+
+function applySourcePanelFromConfig(config) {
+  if (!config || !config.camera) return;
+  const camera = config.camera;
+  sourcePanelState.source = normalizeSourceType(camera.source);
+  sourcePanelState.device = camera.device || '';
+  sourcePanelState.path = camera.path || '';
+  sourcePanelState.transport = camera.transport || 'tcp';
+  const url = camera.rtsp_url || '';
+  sourcePanelState.rtsp_saved = Boolean(url);
+  // Redacted URLs must not be re-posted; leave the field empty for edits.
+  sourcePanelState.rtsp_url = '';
+
+  const type = $('source-type');
+  if (type) type.value = sourcePanelState.source;
+  const device = $('source-device');
+  if (device && sourcePanelState.device) fillDeviceSelect(sourcePanelState.device);
+  const path = $('source-path');
+  if (path) path.value = sourcePanelState.path;
+  const transport = $('source-transport');
+  if (transport) transport.value = sourcePanelState.transport;
+  const rtsp = $('source-rtsp');
+  if (rtsp) {
+    rtsp.value = '';
+    rtsp.placeholder = sourcePanelState.rtsp_saved
+      ? 'URL saved (enter a new one to change)'
+      : 'rtsp://user:pass@host:554/path';
+  }
+  const meta = $('source-meta');
+  if (meta) {
+    const bits = [`source: ${camera.source || '–'}`];
+    if (camera.device) bits.push(camera.device);
+    if (camera.path) bits.push(camera.path);
+    if (sourcePanelState.rtsp_saved) bits.push('RTSP credentials hidden');
+    meta.textContent = bits.join(' · ');
+  }
+  syncSourceFieldsVisibility();
+}
+
+async function buildSourcePanel() {
+  const root = $('source-panel');
+  if (!root) return;
+  root.innerHTML = '';
+
+  const section = document.createElement('div');
+  section.className = 'control-group';
+  section.innerHTML = `
+    <h3>Source</h3>
+    <p class="hint">Pick the capture input. Apply switches live; Save writes
+    config.yaml so the choice survives reboot. Prefer USB by-id paths.</p>
+    <div class="control">
+      <label for="source-type">Input type</label>
+      <select id="source-type">
+        ${SOURCE_TYPES.map((t) => `<option value="${t.value}">${t.label}</option>`).join('')}
+      </select>
+    </div>
+    <div class="control" data-source-for="v4l2">
+      <label for="source-device">USB camera</label>
+      <select id="source-device"></select>
+    </div>
+    <div class="source-fields" data-source-for="rtsp">
+      <div class="control">
+        <label for="source-rtsp">RTSP URL</label>
+        <input id="source-rtsp" type="url" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="control">
+        <label for="source-transport">Transport</label>
+        <select id="source-transport">
+          <option value="tcp">tcp</option>
+          <option value="udp">udp</option>
+        </select>
+      </div>
+    </div>
+    <div class="control" data-source-for="file">
+      <label for="source-path">File or image path</label>
+      <input id="source-path" type="text" spellcheck="false" placeholder="/path/to/clip.mp4">
+    </div>
+    <p class="source-meta" id="source-meta" data-source-for="v4l2 rtsp file synthetic"></p>
+    <div class="source-actions">
+      <button type="button" class="btn btn-primary" id="btn-source-apply">Apply</button>
+      <button type="button" class="btn" id="btn-source-save">Apply &amp; Save</button>
+      <button type="button" class="btn" id="btn-source-refresh">Refresh USB list</button>
+    </div>`;
+  root.append(section);
+
+  $('source-type').addEventListener('change', syncSourceFieldsVisibility);
+  $('btn-source-refresh').addEventListener('click', async () => {
+    await loadCaptureDevices();
+    fillDeviceSelect(sourcePanelState.device || $('source-device').value);
+    toast('USB device list refreshed');
+  });
+  $('btn-source-apply').addEventListener('click', () => applySource({ save: false }));
+  $('btn-source-save').addEventListener('click', () => applySource({ save: true }));
+
+  await loadCaptureDevices();
+  fillDeviceSelect(sourcePanelState.device);
+  syncSourceFieldsVisibility();
+}
+
+async function applySource({ save }) {
+  const status = $('tune-status');
+  const type = normalizeSourceType($('source-type').value);
+  const body = { source: type, save: Boolean(save) };
+
+  if (type === 'v4l2') {
+    const device = ($('source-device').value || '').trim();
+    if (!device) {
+      toast('Select a USB camera', 'error');
+      return;
+    }
+    body.device = device;
+  } else if (type === 'rtsp') {
+    const url = ($('source-rtsp').value || '').trim();
+    if (url) body.rtsp_url = url;
+    else if (!sourcePanelState.rtsp_saved) {
+      toast('Enter an RTSP URL', 'error');
+      return;
+    }
+    body.transport = $('source-transport').value || 'tcp';
+  } else if (type === 'file') {
+    const path = ($('source-path').value || '').trim();
+    if (!path) {
+      toast('Enter a file or image path', 'error');
+      return;
+    }
+    body.path = path;
+  }
+
+  try {
+    if (status) status.textContent = save ? 'saving source…' : 'switching source…';
+    const result = await api('/api/camera/source', body);
+    if (!result.ok && result.error) throw new Error(result.error);
+    if (result.devices) sourcePanelState.devices = result.devices;
+    applyConfig(result.config, { skipFocused: true });
+    applySourcePanelFromConfig(result.config);
+    fillDeviceSelect(result.config?.camera?.device || '');
+    if (normalizeSourceType(result.config?.camera?.source) === 'v4l2') {
+      await buildCameraControls();
+    } else {
+      const root = $('camera-controls');
+      if (root) root.innerHTML = '';
+    }
+    toast(save && result.saved ? `Source saved to ${result.saved}` : 'Source applied', 'ok');
+    if (status) status.textContent = save ? 'source saved' : 'source applied';
+  } catch (err) {
+    if (status) status.textContent = 'source update failed';
+    toast(err.message, 'error');
+  }
+}
+
 function queueCameraControl(name, value) {
   pendingCameraControls[name] = value;
   clearTimeout(cameraPushTimer);
@@ -685,11 +918,15 @@ function wireButtons() {
 
 async function init() {
   buildControls();
+  await buildSourcePanel();
   await buildCameraControls();
   setupPicker();
   wireButtons();
   try {
-    applyConfig(await api('/api/config'));
+    const config = await api('/api/config');
+    applyConfig(config);
+    applySourcePanelFromConfig(config);
+    fillDeviceSelect(config.camera?.device || '');
   } catch (err) {
     toast(err.message, 'error');
   }

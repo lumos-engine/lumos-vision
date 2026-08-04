@@ -40,6 +40,8 @@ sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=
 
 # Find the Logitech node — do NOT use /dev/video10 (that is the loopback output)
 v4l2-ctl --list-devices
+# Prefer stable IDs (videoN numbers move when USB devices are replugged):
+ls -l /dev/v4l/by-id/
 ```
 
 Run (one line — avoid spaces after `\` if you split lines):
@@ -47,6 +49,9 @@ Run (one line — avoid spaces after `\` if you split lines):
 ```bash
 python -m processor run --source v4l2 --camera-device /dev/video2 --capture-width 1280 --capture-height 720 --web --web-host 0.0.0.0 --mjpeg
 ```
+
+In `config.yaml`, prefer a by-id path, for example
+`device: /dev/v4l/by-id/usb-…-video-index0`.
 
 Defaults keep full detail: no `process_width` downscale, 1280×720 working size
 and virtual-cam output. On a slow machine, pass `--width 640 --height 360`
@@ -57,9 +62,11 @@ Then open:
 - Calibration wizard: <http://localhost:7660> (or `http://PC_IP:7660` from another machine)
 - MJPEG preview: <http://localhost:7661>
 
-In the wizard, use **Camera hardware** first (exposure / gain / white balance on
-the UVC sensor). The **Colour (software)** sliders only post-process frames
-after capture.
+In the wizard, use the **Source** panel to pick USB / RTSP / file / synthetic
+(Apply switches live; Apply & Save writes `config.yaml`). For USB, choose a
+camera from the by-id list. Then use **Camera hardware** (exposure / gain /
+white balance on the UVC sensor). The **Colour (software)** sliders only
+post-process frames after capture.
 
 For **cinema / letterboxed** content: enable **Black bars**, raise **Darkness
 threshold** to ~50–70 until **Result → output** has no bars, then point
@@ -178,7 +185,9 @@ Start with `--web` and open <http://localhost:7660>.
 
 Automatic detection needs a second or two of moving picture to work — it finds
 the TV by noticing that it is the only thing in the room that changes. Have
-something playing.
+something playing. Extreme side-on angles (strong trapezoid) with a dark bezel
+on a dark wall are the hardest case: click the four corners manually if
+Auto-detect misses, then Save.
 
 ### Boundary modes
 

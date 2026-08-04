@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -15,6 +16,7 @@ import numpy as np
 
 from processor.camera.base import Frame, FrameSource
 from processor.camera.controls import preferred_controls, set_controls
+from processor.camera.devices import real_video_node, resolve_device_path
 from processor.config.schema import CameraConfig
 from processor.utils.logging import get_logger
 
@@ -22,7 +24,11 @@ log = get_logger(__name__)
 
 
 def resolve_device(device: str) -> str | int:
-    """Accept ``/dev/video2`` or a bare index ``2``."""
+    """Accept ``/dev/video2``, ``/dev/v4l/by-id/…``, or a bare index ``2``.
+
+    Stable by-id / by-path symlinks are preferred over bare ``/dev/videoN``
+    because USB enumeration order can change after a reboot or replug.
+    """
     text = (device or "").strip()
     if not text:
         raise ValueError("camera.device is required for the v4l2 source")
@@ -31,12 +37,35 @@ def resolve_device(device: str) -> str | int:
     return text
 
 
+def open_device_candidates(device: str | int) -> list[str | int]:
+    """Ordered open attempts for OpenCV (path first, then resolved node / index)."""
+    if isinstance(device, int):
+        return [device, f"/dev/video{device}"]
+
+    path = str(device)
+    candidates: list[str | int] = [path]
+    real = real_video_node(path)
+    if real and real not in candidates:
+        candidates.append(real)
+        try:
+            candidates.append(int(Path(real).name.replace("video", "", 1)))
+        except ValueError:
+            pass
+    elif path.startswith("/dev/video"):
+        try:
+            candidates.append(int(path.rsplit("video", 1)[1]))
+        except ValueError:
+            pass
+    return candidates
+
+
 class V4l2Source(FrameSource):
     name = "v4l2"
 
     def __init__(self, config: CameraConfig):
         self.config = config
         self.device = resolve_device(config.device)
+        self._open_path = resolve_device_path(str(config.device))
 
         self._capture: cv2.VideoCapture | None = None
         self._thread: threading.Thread | None = None
@@ -96,6 +125,7 @@ class V4l2Source(FrameSource):
             ),
             "last_error": self._last_error,
             "device": str(self.device),
+            "video_node": real_video_node(self._device_path()) or self._device_path(),
         }
 
     def _run(self) -> None:
@@ -166,21 +196,33 @@ class V4l2Source(FrameSource):
 
     def _open(self) -> bool:
         self._release()
-        capture = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
-        if not capture.isOpened():
-            # Some builds only accept the index form.
-            if isinstance(self.device, str) and self.device.startswith("/dev/video"):
-                try:
-                    index = int(self.device.rsplit("video", 1)[1])
-                except ValueError:
-                    index = None
-                if index is not None:
-                    capture.release()
-                    capture = cv2.VideoCapture(index, cv2.CAP_V4L2)
-        if not capture.isOpened():
-            capture.release()
+        capture: cv2.VideoCapture | None = None
+        opened_as: str | int | None = None
+        for candidate in open_device_candidates(self.device):
+            trial = cv2.VideoCapture(candidate, cv2.CAP_V4L2)
+            if trial.isOpened():
+                capture = trial
+                opened_as = candidate
+                break
+            trial.release()
+
+        if capture is None or not capture.isOpened():
+            if capture is not None:
+                capture.release()
             log.warning("Failed to open V4L2 device %s", self.device)
             return False
+
+        self._open_path = (
+            resolve_device_path(str(opened_as))
+            if not isinstance(opened_as, int)
+            else f"/dev/video{opened_as}"
+        )
+        real = real_video_node(self._open_path)
+        log.info(
+            "V4L2 opened %s%s",
+            self.device,
+            f" → {real}" if real and real != str(self.device) else "",
+        )
 
         try:
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -213,9 +255,16 @@ class V4l2Source(FrameSource):
         return True
 
     def _device_path(self) -> str:
+        """Path for v4l2-ctl: prefer the configured by-id symlink."""
         if isinstance(self.device, int):
             return f"/dev/video{self.device}"
-        return str(self.device)
+        path = str(self.device)
+        if Path(path).exists():
+            return path
+        if self._open_path and Path(self._open_path).exists():
+            return self._open_path
+        real = real_video_node(path)
+        return real or path
 
     def apply_controls(self, values: dict[str, int]) -> dict:
         """Push hardware controls to the device (exposure, gain, …)."""

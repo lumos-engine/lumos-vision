@@ -23,6 +23,8 @@ log = get_logger(__name__)
 POSES: dict[str, list[list[float]]] = {
     "front": tv_quad(),
     "steep": tv_quad(yaw=-22, pitch=8, distance=2.7, offset=(0.30, -0.10)),
+    #: Shelf-beside-sofa, nearly side-on — left edge much taller than right.
+    "side_on": tv_quad(yaw=-45, pitch=10, distance=2.3, offset=(0.38, -0.06), fov=48),
     "offcentre": tv_quad(yaw=14, pitch=-5, distance=2.7, offset=(-0.26, 0.08)),
     "small": tv_quad(distance=4.2, diagonal=1.0, yaw=5, pitch=-3),
 }
@@ -40,6 +42,14 @@ STILLS: dict[str, dict] = {
     "10-noisy-camera": {"content_aspect": 2.39, "noise_sigma": 9.0},
     "11-off-centre": {"content_aspect": 1.85, "quad": POSES["offcentre"]},
     "12-bright-room": {"content_aspect": 2.39, "exposure": 1.4},
+    "13-side-on": {"content_aspect": 16 / 9, "quad": POSES["side_on"]},
+    "14-side-on-dim": {
+        "content_aspect": 16 / 9,
+        "quad": POSES["side_on"],
+        "bezel_px": 3,
+        "exposure": 0.55,
+        "reflection_strength": 0.08,
+    },
 }
 
 

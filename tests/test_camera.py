@@ -2,10 +2,12 @@ import cv2
 import numpy as np
 import pytest
 
+from processor.app import Processor
 from processor.camera.base import Frame
 from processor.camera.factory import create_source
 from processor.camera.rtsp import _ffmpeg_capture_options, redact_url
-from processor.config.schema import CameraConfig
+from processor.config.loader import apply_updates
+from processor.config.schema import CameraConfig, Config
 
 
 def test_credentials_are_stripped_from_urls():
@@ -141,3 +143,46 @@ def test_process_width_downscales_the_input():
         assert _downscale(np.zeros((180, 320, 3), np.uint8), 960).shape[:2] == (180, 320)
     finally:
         source.stop()
+
+
+def test_recreate_source_swaps_synthetic_without_raising():
+    config = Config.from_dict(
+        {
+            "camera": {"source": "synthetic", "replay_fps": 60},
+            "output": {"width": 320, "height": 180, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+        }
+    )
+    app = Processor(config)
+    app.start()
+    old = app.source
+    try:
+        app.config = apply_updates(app.config, {"camera.replay_fps": 120})
+        result = app.recreate_source()
+        assert result["ok"]
+        assert app.source is not None
+        assert app.source is not old
+        assert app.config.camera.replay_fps == 120
+        frame = app.source.read(timeout=2.0)
+        assert isinstance(frame, Frame)
+    finally:
+        app.shutdown()
+
+
+def test_update_config_recreates_when_source_fields_change():
+    config = Config.from_dict(
+        {
+            "camera": {"source": "synthetic", "replay_fps": 40},
+            "output": {"width": 320, "height": 180, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+        }
+    )
+    app = Processor(config)
+    app.start()
+    old = app.source
+    try:
+        app.update_config({"camera.replay_fps": 80})
+        assert app.source is not old
+        assert app.config.camera.replay_fps == 80
+    finally:
+        app.shutdown()

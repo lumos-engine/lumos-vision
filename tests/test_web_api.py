@@ -119,6 +119,66 @@ def test_camera_credentials_are_never_sent_to_the_browser(server, processor):
     assert "hunter2" not in json.dumps(public_config(processor))
 
 
+def test_camera_devices_endpoint(server, monkeypatch):
+    monkeypatch.setattr(
+        "processor.web.server.list_capture_devices",
+        lambda selected=None: [
+            {
+                "id_path": "/dev/v4l/by-id/usb-cam-video-index0",
+                "video_path": "/dev/video2",
+                "name": "Fake Cam",
+                "bus_info": "usb-1",
+                "driver": "uvcvideo",
+                "stable_kind": "by-id",
+                "selected": False,
+            }
+        ],
+    )
+    status, body, _ = get(server, "/api/camera/devices")
+    data = json.loads(body)
+    assert status == 200 and data["ok"]
+    assert data["devices"][0]["id_path"].endswith("usb-cam-video-index0")
+    assert data["source"] == "synthetic"
+
+
+def test_camera_source_can_be_switched_live(server, processor, tmp_path):
+    old = processor.source
+    status, body = post(
+        server,
+        "/api/camera/source",
+        {"source": "synthetic", "replay_fps": 90, "save": False},
+    )
+    assert status == 200 and body["ok"], body
+    assert processor.config.camera.source == "synthetic"
+    assert processor.config.camera.replay_fps == 90
+    assert processor.source is not None and processor.source is not old
+    assert body["recreated"]["ok"]
+
+
+def test_camera_source_ignores_redacted_rtsp_url(server, processor, monkeypatch):
+    before = processor.config.camera.rtsp_url
+    from processor.camera.synthetic import SyntheticSource
+    from processor.config.schema import CameraConfig
+
+    # Avoid opening a real RTSP session in unit tests.
+    monkeypatch.setattr(
+        "processor.app.create_source",
+        lambda config: SyntheticSource(CameraConfig(source="synthetic", replay_fps=60)),
+    )
+    status, body = post(
+        server,
+        "/api/camera/source",
+        {
+            "source": "rtsp",
+            "rtsp_url": "rtsp://***:***@192.168.1.93/live",
+            "transport": "tcp",
+        },
+    )
+    assert status == 200 and body["ok"], body
+    assert processor.config.camera.source == "rtsp"
+    assert processor.config.camera.rtsp_url == before
+
+
 def test_snapshot_returns_a_jpeg(server):
     status, body, headers = get(server, "/api/snapshot?view=boundary")
     assert status == 200

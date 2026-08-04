@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 
 from processor.app import Processor
+from processor.camera.devices import list_capture_devices
 from processor.camera.rtsp import redact_url
 from processor.config.loader import config_to_dict
 from processor.output.mjpeg import write_mjpeg_stream
@@ -104,6 +105,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(public_config(self.processor))
             if route == "/api/camera/controls":
                 return self._send_json(self.processor.list_camera_controls())
+            if route == "/api/camera/devices":
+                return self._send_json(self._camera_devices())
             if route == "/api/snapshot":
                 return self._serve_snapshot(query.get("view", ["source"])[0])
             self.send_error(404, "not found")
@@ -142,6 +145,8 @@ class _Handler(BaseHTTPRequestHandler):
                         {"ok": False, "error": "controls mapping required"}, status=400
                     )
                 return self._send_json(self.processor.set_camera_controls(controls))
+            if route == "/api/camera/source":
+                return self._apply_camera_source(body)
             self.send_error(404, "not found")
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -162,6 +167,63 @@ class _Handler(BaseHTTPRequestHandler):
         status["stages_available"] = describe_stages()
         status["config"] = public_config(self.processor)
         return status
+
+    def _camera_devices(self) -> dict[str, Any]:
+        selected = self.processor.config.camera.device
+        devices = list_capture_devices(selected=selected)
+        return {
+            "ok": True,
+            "devices": devices,
+            "selected": selected,
+            "source": self.processor.config.camera.source,
+        }
+
+    def _apply_camera_source(self, body: dict[str, Any]) -> None:
+        save = bool(body.get("save"))
+        fields = {
+            key: body[key]
+            for key in (
+                "source",
+                "device",
+                "rtsp_url",
+                "path",
+                "transport",
+                "capture_width",
+                "capture_height",
+                "capture_fps",
+                "ffmpeg_options",
+                "loop",
+                "replay_fps",
+                "process_width",
+            )
+            if key in body
+        }
+        # Never persist a redacted credential placeholder from the browser.
+        url = fields.get("rtsp_url")
+        if isinstance(url, str) and ("***" in url or "…" in url or "..." in url):
+            fields.pop("rtsp_url", None)
+        if not fields:
+            return self._send_json(
+                {"ok": False, "error": "source fields required"}, status=400
+            )
+        try:
+            result = self.processor.apply_camera_source(fields, save=save)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, status=400)
+        config = result.get("config") or {}
+        url = config.get("camera", {}).get("rtsp_url", "")
+        if url:
+            config["camera"]["rtsp_url"] = redact_url(url)
+        devices = list_capture_devices(selected=self.processor.config.camera.device)
+        self._send_json(
+            {
+                "ok": True,
+                "config": config,
+                "saved": result.get("saved"),
+                "recreated": result.get("recreated"),
+                "devices": devices,
+            }
+        )
 
     def _update_config(self, body: dict[str, Any]) -> None:
         updates = body.get("updates")
