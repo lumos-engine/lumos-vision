@@ -122,8 +122,8 @@ logging:
 # power:
 #   tv_host: "192.168.1.244"
 #   hyperhdr_url: "http://127.0.0.1:8090"   # empty = camera idle only, no LED off
-#   check_interval_sec: 15
-#   failed_pings: 2                 # consecutive fails before idle
+#   check_interval_sec: 15         # probe every 15s
+#   failed_pings: 5                # idle after 5 consecutive fails (~75s)
 #   success_pings: 1               # consecutive oks before resume
 #   idle_fps: 2.0
 

@@ -367,9 +367,11 @@ class PowerConfig:
     #: HyperHDR JSON API base, e.g. ``http://127.0.0.1:8090``.  Empty skips
     #: LED hard-off (camera idle only).
     hyperhdr_url: str = "http://127.0.0.1:8090"
+    #: Seconds between presence probes.
     check_interval_sec: float = 15.0
     #: Consecutive failed pings before entering idle (TV treated as off).
-    failed_pings: int = 2
+    #: Default 5 × 15s ≈ 75s before idle.
+    failed_pings: int = 5
     #: Consecutive successful pings before leaving idle (TV treated as on).
     success_pings: int = 1
     ping_timeout_sec: float = 1.0
