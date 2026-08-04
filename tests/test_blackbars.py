@@ -187,11 +187,38 @@ def test_crop_does_not_strobe_when_detection_flaps():
     assert max(history) - min(history) <= 4
 
 
+def test_overcrop_shrinks_back_quickly():
+    """A brief too-large crop (dark scene) must give the picture back fast."""
+    stage = make_stage()
+    cinema = render_panel(3.0, PANEL, 2.39)
+    run(stage, cinema, frames=80)
+    good = stage.status()["pixels"]["top"]
+    assert good > 30
+
+    # Force an over-aggressive letterbox lock (dark-scene false positive).
+    assert stage._vertical is not None
+    stage._vertical.force(0.22)
+    stage._letterbox_locked = True
+    run(stage, cinema, frames=1)
+    assert stage.status()["pixels"]["top"] > good + 10
+
+    run(stage, cinema, frames=20)
+    recovered = stage.status()["pixels"]["top"]
+    assert recovered == pytest.approx(good, abs=4), f"still over-cropped: {recovered} vs {good}"
+
+
 def test_max_crop_percent_is_respected():
-    stage = make_stage(max_crop_percent=5.0)
+    stage = make_stage(max_crop_top_bottom_percent=5.0, max_crop_left_right_percent=5.0)
     panel = render_panel(3.0, PANEL, 2.39)
     run(stage, panel, frames=80)
     assert stage.status()["applied_percent"]["top"] <= 5.0 + 1e-6
+
+
+def test_letterbox_and_pillarbox_have_separate_caps():
+    stage = make_stage(
+        max_crop_top_bottom_percent=16.0, max_crop_left_right_percent=12.5
+    )
+    assert stage._crop_limits() == pytest.approx((0.16, 0.125))
 
 
 def test_letterbox_and_pillarbox_are_not_applied_together():

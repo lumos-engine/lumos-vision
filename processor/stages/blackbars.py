@@ -136,8 +136,9 @@ def _profile_edge_depth(means: np.ndarray, luma_threshold: float) -> int:
     if before >= after * 0.9:
         return 0
     # Outside must look like a bar relative to the picture, not just a soft
-    # gradient inside the scene.
-    if before > max(float(luma_threshold) * 1.25, content * 0.55):
+    # gradient inside the scene.  Blue-black bars (#201C58 → gray ~36) need
+    # a looser absolute cap than true black.
+    if before > max(float(luma_threshold) * 1.35, content * 0.50):
         return 0
     return idx + 1
 
@@ -157,13 +158,15 @@ def _bar_mask(
     * its mean is dark *and* its high percentile is still modest (noisy bar;
       use a percentile instead of max so single sparkle pixels do not veto).
     """
-    bright_counts = np.count_nonzero(sampled > luma_threshold, axis=axis)
+    thr = float(luma_threshold)
+    bright_counts = np.count_nonzero(sampled > thr, axis=axis)
     length = sampled.shape[axis]
     few_bright = bright_counts <= tail * length
     means = sampled.mean(axis=axis)
     peaks = np.percentile(sampled, 92, axis=axis)
-    peak_cap = max(float(luma_threshold) * 3.0, 70.0)
-    dark_noisy = (means < float(luma_threshold) * 1.15) & (peaks < peak_cap)
+    # Blue-tinted bars push the gray peak above a tight cap; allow headroom.
+    peak_cap = max(thr * 2.2, 90.0)
+    dark_noisy = (means < thr * 1.25) & (peaks < peak_cap)
     return few_bright | dark_noisy
 
 
@@ -180,6 +183,8 @@ class BlackBarStage(Stage):
         self._pillarbox_locked = False
         self._vertical_misses = 0
         self._horizontal_misses = 0
+        self._vertical_shrinks = 0
+        self._horizontal_shrinks = 0
         self._raw: dict[str, float] = {edge: 0.0 for edge in EDGES}
         self._pixels: dict[str, int] = {edge: 0 for edge in EDGES}
         self._dark_frames = 0
@@ -232,6 +237,8 @@ class BlackBarStage(Stage):
         self._pillarbox_locked = False
         self._vertical_misses = 0
         self._horizontal_misses = 0
+        self._vertical_shrinks = 0
+        self._horizontal_shrinks = 0
 
     def on_config_changed(self) -> None:
         # Keep the current crop so a slider nudge does not make the picture
@@ -307,7 +314,7 @@ class BlackBarStage(Stage):
             measured = self._postprocess(measured)
             self._raw = measured
 
-        limit = max(0.0, self.config.max_crop_percent) / 100.0
+        v_limit, h_limit = self._crop_limits()
         if self.config.symmetric and self._vertical and self._horizontal:
             if measured is None:
                 v_sample = self._vertical.committed
@@ -318,15 +325,17 @@ class BlackBarStage(Stage):
                     self._vertical,
                     locked=self._letterbox_locked,
                     misses_attr="_vertical_misses",
+                    shrinks_attr="_vertical_shrinks",
                 )
                 h_sample = self._sticky_sample(
                     measured["left"],
                     self._horizontal,
                     locked=self._pillarbox_locked,
                     misses_attr="_horizontal_misses",
+                    shrinks_attr="_horizontal_shrinks",
                 )
-            vertical = float(np.clip(self._vertical.update(v_sample), 0.0, limit))
-            horizontal = float(np.clip(self._horizontal.update(h_sample), 0.0, limit))
+            vertical = float(np.clip(self._vertical.update(v_sample), 0.0, v_limit))
+            horizontal = float(np.clip(self._horizontal.update(h_sample), 0.0, h_limit))
             applied = {
                 "top": vertical,
                 "bottom": vertical,
@@ -343,6 +352,7 @@ class BlackBarStage(Stage):
                 sample = (
                     self._raw[edge] if measured is not None else self._filters[edge].committed
                 )
+                limit = v_limit if edge in ("top", "bottom") else h_limit
                 applied[edge] = float(np.clip(self._filters[edge].update(sample), 0.0, limit))
 
         top = int(round(height * applied["top"]))
@@ -374,27 +384,52 @@ class BlackBarStage(Stage):
         *,
         locked: bool,
         misses_attr: str,
+        shrinks_attr: str,
     ) -> float:
-        """While locked, freeze the crop through noisy / missed detections."""
+        """While locked: hard to grow/release, easy to give picture back.
+
+        Dark scenes briefly over-detect letterbox and eat the movie; that must
+        shrink back within a fraction of a second.  Growing the crop or
+        dropping to zero still needs a sustained signal so the overlay does
+        not strobe.
+        """
         if not locked:
             setattr(self, misses_attr, 0)
+            setattr(self, shrinks_attr, 0)
             return sample
+
         committed = filt.committed
         if sample >= 0.02:
             setattr(self, misses_attr, 0)
-            # Size wobble from noise looks like strobing in the debug view;
-            # hold the committed crop unless the new reading clearly moved.
-            if abs(sample - committed) < 0.04:
-                return committed
-            return sample
+            # Shrink (less crop → more picture): commit quickly.
+            if sample < committed - 0.008:
+                hits = int(getattr(self, shrinks_attr)) + 1
+                setattr(self, shrinks_attr, hits)
+                if hits >= 6:
+                    filt.force(float(sample))
+                    setattr(self, shrinks_attr, 0)
+                return sample
+            setattr(self, shrinks_attr, 0)
+            # Grow (more crop → eat picture): only if clearly larger.
+            if sample > committed + 0.045:
+                return sample
+            return committed
+
+        setattr(self, shrinks_attr, 0)
         misses = int(getattr(self, misses_attr)) + 1
         setattr(self, misses_attr, misses)
         if misses < self._release_frames():
             return committed
         return sample
 
+    def _crop_limits(self) -> tuple[float, float]:
+        """Return (top/bottom limit, left/right limit) as fractions 0..1."""
+        v = max(0.0, float(self.config.max_crop_top_bottom_percent)) / 100.0
+        h = max(0.0, float(self.config.max_crop_left_right_percent)) / 100.0
+        return v, h
+
     def _postprocess(self, measured: dict[str, float]) -> dict[str, float]:
-        limit = max(0.0, self.config.max_crop_percent) / 100.0
+        v_limit, h_limit = self._crop_limits()
 
         if self.config.symmetric:
             # Sticky floors: once locked on letterbox, allow more asymmetry so
@@ -424,7 +459,15 @@ class BlackBarStage(Stage):
             else:
                 measured["top"] = measured["bottom"] = 0.0
 
-        return {edge: float(np.clip(value, 0.0, limit)) for edge, value in measured.items()}
+        limits = {
+            "top": v_limit,
+            "bottom": v_limit,
+            "left": h_limit,
+            "right": h_limit,
+        }
+        return {
+            edge: float(np.clip(value, 0.0, limits[edge])) for edge, value in measured.items()
+        }
 
     # -- debug -------------------------------------------------------------
 

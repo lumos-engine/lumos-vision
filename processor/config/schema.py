@@ -143,9 +143,10 @@ class CropConfig:
 class BlackBarsConfig:
     enabled: bool = True
     #: Absolute luma floor used alongside content-relative detection.
-    #: Real USB cams often show "black" bars as dark red/gray around 45-55;
-    #: relative measurement handles that, and this still catches clean blacks.
-    luma_threshold: int = 48
+    #: Vimicro letterbox is blue-black, not 0: ~#051138 in low light (luma
+    #: ~18) and ~#131437 / #201C58 in room light (luma ~24-36).  Keep this
+    #: above the good-light bar luma with noise headroom.
+    luma_threshold: int = 55
     #: Which percentile of the row is compared against the threshold.  Using
     #: a high percentile instead of the mean means a single bright subtitle
     #: pixel does not disqualify an otherwise black row -- but a real image
@@ -153,8 +154,15 @@ class BlackBarsConfig:
     percentile: float = 96.0
     detect_top_bottom: bool = True
     detect_left_right: bool = True
-    #: Never crop away more than this fraction of a dimension per side.
-    max_crop_percent: float = 40.0
+    #: Never crop away more than this fraction of height per side (letterbox).
+    #: 16% covers 2.76:1 on a 16:9 panel; common 2.39:1 needs ~13%.
+    max_crop_top_bottom_percent: float = 16.0
+    #: Never crop away more than this fraction of width per side (pillarbox).
+    #: 12.5% is exactly 4:3 on 16:9.
+    max_crop_left_right_percent: float = 12.5
+    #: Deprecated alias: if set in older configs, prefer the axis-specific
+    #: fields above.  Kept so unknown-key validation does not reject YAML.
+    max_crop_percent: float = 16.0
     #: Force top == bottom and left == right (true for essentially all
     #: broadcast and film content, and it halves the flicker sources).
     symmetric: bool = True
