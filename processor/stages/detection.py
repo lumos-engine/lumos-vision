@@ -36,11 +36,19 @@ from processor.utils.geometry import (
 
 
 #: A candidate must contain at least this fraction of the moving pixels to be
-#: considered the TV at all.
-MIN_ACTIVITY_RECALL = 0.85
+#: considered the TV at all.  Slightly soft so a foreshortened far edge that
+#: the activity mask under-covers still survives.
+MIN_ACTIVITY_RECALL = 0.80
 
 #: ...and must not be more than this much larger than the moving region.
-MAX_ACTIVITY_BLOAT = 1.75
+MAX_ACTIVITY_BLOAT = 1.85
+
+#: Below this outline edge occupancy, panel borders are effectively invisible
+#: (dark bezel on dark wall).  Gradient refine then snaps onto content lines
+#: instead, so it must be skipped.  Content scanlines often score 0.2–0.45
+#: along a wrong outline, so the bar is deliberately high when activity is
+#: already trustworthy.
+WEAK_EDGE_SCORE = 0.32
 
 
 @dataclass
@@ -65,6 +73,53 @@ def auto_canny(gray: np.ndarray, low: int = 0, high: int = 0) -> np.ndarray:
     return cv2.Canny(gray, lower, upper)
 
 
+def hull_line_quad(contour: np.ndarray) -> np.ndarray | None:
+    """Fit four side lines to a convex hull — better for strong trapezoids.
+
+    ``approxPolyDP`` and ``minAreaRect`` both struggle when one edge is much
+    shorter than its opposite (side-on camera).  Partitioning hull points by
+    angle into four arcs and intersecting robust line fits recovers that
+    foreshortened shape more reliably.
+    """
+    hull = cv2.convexHull(contour)
+    points = hull.reshape(-1, 2).astype(np.float64)
+    if len(points) < 8:
+        return None
+
+    centre = points.mean(axis=0)
+    angles = np.arctan2(points[:, 1] - centre[1], points[:, 0] - centre[0])
+    order = np.argsort(angles)
+    points = points[order]
+    angles = angles[order]
+
+    # Four bins centred on the cardinal directions relative to the centroid,
+    # starting from the top-left-ish (angle near -3π/4 in image coords).
+    # Image y grows downward, so atan2 walks clockwise.
+    bin_centres = np.array([-3 * np.pi / 4, -np.pi / 4, np.pi / 4, 3 * np.pi / 4])
+    lines = []
+    for centre_angle in bin_centres:
+        delta = (angles - centre_angle + np.pi) % (2 * np.pi) - np.pi
+        chosen = points[np.abs(delta) < (np.pi / 4 + 0.05)]
+        if len(chosen) < 3:
+            # Widen once for sparse far-side arcs.
+            chosen = points[np.abs(delta) < (np.pi / 3)]
+        line = _line_from_points(chosen)
+        if line is None:
+            return None
+        lines.append(line)
+
+    corners = []
+    for i in range(4):
+        point = _intersect(lines[i - 1], lines[i])
+        if point is None:
+            return None
+        corners.append(point)
+    try:
+        return order_corners(np.array(corners, dtype=np.float32))
+    except ValueError:
+        return None
+
+
 def quads_from_contour(contour: np.ndarray) -> list[np.ndarray]:
     """Several plausible 4-point fits for one contour.
 
@@ -81,7 +136,7 @@ def quads_from_contour(contour: np.ndarray) -> list[np.ndarray]:
     if perimeter <= 0:
         return candidates
 
-    for eps in (0.008, 0.012, 0.018, 0.025, 0.035, 0.05, 0.07):
+    for eps in (0.008, 0.012, 0.018, 0.025, 0.035, 0.05, 0.07, 0.10):
         approx = cv2.approxPolyDP(hull, eps * perimeter, True)
         if len(approx) == 4:
             candidates.append(approx.reshape(4, 2).astype(np.float32))
@@ -104,6 +159,10 @@ def quads_from_contour(contour: np.ndarray) -> list[np.ndarray]:
         if len(np.unique(extremes, axis=0)) == 4:
             candidates.append(extremes)
 
+    lined = hull_line_quad(contour)
+    if lined is not None:
+        candidates.append(lined)
+
     box = cv2.boxPoints(cv2.minAreaRect(contour)).astype(np.float32)
     candidates.append(box)
     return candidates
@@ -125,10 +184,11 @@ def complete_to_aspect(
     """
     if target_aspect <= 0:
         return None
+    # Growing uses a rectified aspect prior.  Without Zhang–He recovery we
+    # would be expanding from the on-screen ratio, which under strong
+    # foreshortening invents a panel that is the wrong size and shape.
     aspect = rectangle_aspect_ratio(quad, image_size)
-    if aspect is None:
-        aspect = quad_aspect_ratio(quad)
-    if aspect <= 0:
+    if aspect is None or aspect <= 0:
         return None
 
     if aspect > target_aspect:  # letterboxed: grow vertically
@@ -195,8 +255,12 @@ def refine_quad(
         start, end = quad[i], quad[(i + 1) % 4]
         edge = end - start
         length = float(np.linalg.norm(edge))
-        if length < 8:
-            return None
+        if length < 5:
+            # Foreshortened far edges can be tiny at detect scale; keep them
+            # as-is rather than aborting the whole refine.
+            direction = edge / max(length, 1e-6)
+            lines.append((start.copy(), direction))
+            continue
 
         normal = np.array([-edge[1], edge[0]]) / length
         if np.dot(normal, start + 0.5 * edge - centre) < 0:
@@ -424,7 +488,9 @@ class TvQuadDetector:
 
         _, mask = cv2.threshold(activity, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
         covered = float(np.count_nonzero(mask)) / mask.size
-        if covered < 0.005 or covered > 0.75:
+        # Side-on close framing can fill most of the frame with screen; 0.75
+        # used to discard the only usable cue in that pose.
+        if covered < 0.005 or covered > 0.92:
             return None
 
         # Close hard: a letterbox bar, a static logo and a dark scene all leave
@@ -443,6 +509,12 @@ class TvQuadDetector:
     ) -> Detection:
         """Snap the winning candidate onto real edges, keeping it only if it
         scores better than what we started with."""
+        # Invisible bezels: gradient refine latches onto bright content lines
+        # (scanlines, UI, letterbox) and walks off the panel.
+        if float(best.parts.get("edge_score", 0.0)) < WEAK_EDGE_SCORE:
+            if float(best.parts.get("activity_recall", 0.0)) >= MIN_ACTIVITY_RECALL:
+                return best
+
         gradient = cv2.magnitude(
             cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3),
             cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3),
@@ -460,6 +532,11 @@ class TvQuadDetector:
                 break
             scored = self._score(snapped, shape, activity_mask, edges, f"{current.origin}~")
             if scored is None or scored.confidence <= current.confidence:
+                break
+            # Refuse a "better" score that escaped to the frame border.
+            if _border_corner_count(scored.quad, shape) > _border_corner_count(
+                current.quad, shape
+            ):
                 break
             current = scored
             max_shift = max(4.0, max_shift * 0.5)
@@ -521,19 +598,36 @@ class TvQuadDetector:
         if not is_convex(quad):
             return None
 
+        # Escaped fits hug the image border after a bad grow/refine.  One
+        # corner can clip legitimately; two or more usually means failure.
+        border_hits = _border_corner_count(quad, shape)
+        if border_hits >= 2 and area_frac < 0.85:
+            return None
+
         # Judge the shape of the *rectangle*, not of its projection.  A 16:9
         # panel seen from the sofa can measure anywhere from 1.4 to 2.2 on
         # screen, so scoring the on-screen ratio systematically prefers
         # candidates that are wrong in a compensating way.
-        aspect = rectangle_aspect_ratio(quad, (width, height))
-        if aspect is None:
-            aspect = quad_aspect_ratio(quad)
+        recovered = rectangle_aspect_ratio(quad, (width, height))
+        aspect = recovered if recovered is not None else quad_aspect_ratio(quad)
         if aspect <= 0:
             return None
-        aspect_error = abs(aspect - cfg.target_aspect) / cfg.target_aspect
-        if aspect_error > cfg.aspect_tolerance:
+        # Consumer panels are wide; a "recovered" portrait/square ratio is
+        # almost always a bad fit that Zhang–He still solved numerically.
+        if recovered is not None and not (1.15 <= recovered <= 2.85):
             return None
-        aspect_score = 1.0 - (aspect_error / cfg.aspect_tolerance)
+        aspect_error = abs(aspect - cfg.target_aspect) / cfg.target_aspect
+        if recovered is None:
+            # Extreme perspective: Zhang–He often returns None.  On-screen
+            # aspect is then a weak prior — soft-reject only wild outliers
+            # and lean on activity instead.
+            if aspect_error > max(cfg.aspect_tolerance, 0.90):
+                return None
+            aspect_score = float(np.clip(1.0 - aspect_error / 1.0, 0.15, 1.0))
+        else:
+            if aspect_error > cfg.aspect_tolerance:
+                return None
+            aspect_score = 1.0 - (aspect_error / cfg.aspect_tolerance)
 
         mask = quad_mask(quad, width, height)
         inside = mask > 0
@@ -578,14 +672,29 @@ class TvQuadDetector:
         # A TV that fills a third of the frame is the common case; below that
         # we are probably looking at a picture frame or a reflection.
         area_score = float(min(1.0, area_frac / 0.35))
+        border_penalty = 0.12 * border_hits
 
         # Aspect carries the most weight because "a TV is 16:9" is the most
         # reliable thing we know, and because edge support is *biased*: on
         # letterboxed content the bar/picture boundary is a far stronger edge
         # than the panel border, so leaning on edges picks the wrong rectangle.
-        confidence = (
-            0.38 * aspect_score + 0.28 * activity_score + 0.22 * edge_score + 0.12 * area_score
-        )
+        # When perspective recovery fails, trust activity more than aspect.
+        if recovered is None and activity_mask is not None:
+            confidence = (
+                0.18 * aspect_score
+                + 0.42 * activity_score
+                + 0.22 * edge_score
+                + 0.18 * area_score
+                - border_penalty
+            )
+        else:
+            confidence = (
+                0.38 * aspect_score
+                + 0.28 * activity_score
+                + 0.22 * edge_score
+                + 0.12 * area_score
+                - border_penalty
+            )
         return Detection(
             quad=quad,
             confidence=float(np.clip(confidence, 0.0, 1.0)),
@@ -599,3 +708,16 @@ class TvQuadDetector:
                 "area_frac": round(area_frac, 3),
             },
         )
+
+
+def _border_corner_count(quad: np.ndarray, shape: tuple[int, int], margin: float = 2.0) -> int:
+    """How many corners sit on the image border (within ``margin`` pixels)."""
+    height, width = shape
+    q = np.asarray(quad, dtype=np.float64).reshape(4, 2)
+    hits = (
+        (q[:, 0] <= margin)
+        | (q[:, 1] <= margin)
+        | (q[:, 0] >= width - 1 - margin)
+        | (q[:, 1] >= height - 1 - margin)
+    )
+    return int(np.count_nonzero(hits))

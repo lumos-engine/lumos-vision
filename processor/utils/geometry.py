@@ -95,14 +95,16 @@ def rectangle_aspect_ratio(quad, image_size: tuple[int, int]) -> float | None:
     n2 = k2 * m2 - m1
     n3 = k3 * m3 - m1
 
-    if abs(n2[2]) < 1e-9 or abs(n3[2]) < 1e-9:
+    if abs(n2[2]) < 1e-6 or abs(n3[2]) < 1e-6:
         # Both vanishing points at infinity: the view is affine, so the
         # on-screen ratio is already correct.
         return quad_aspect_ratio(q)
 
     f_squared = -(n2[0] * n3[0] + n2[1] * n3[1]) / (n2[2] * n3[2])
     if f_squared <= 1e-6:
-        return None
+        # Numerical near-affine views used to return None and break scoring;
+        # fall back to the on-screen ratio like the vanishing-point case.
+        return quad_aspect_ratio(q)
     f_squared = float(f_squared)
 
     # w/h = sqrt( n2^T W n2 / n3^T W n3 ) with W = (A A^T)^-1, A = diag(f, f, 1)

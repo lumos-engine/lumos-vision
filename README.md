@@ -185,7 +185,9 @@ Start with `--web` and open <http://localhost:7660>.
 
 Automatic detection needs a second or two of moving picture to work — it finds
 the TV by noticing that it is the only thing in the room that changes. Have
-something playing.
+something playing. Extreme side-on angles (strong trapezoid) with a dark bezel
+on a dark wall are the hardest case: click the four corners manually if
+Auto-detect misses, then Save.
 
 ### Boundary modes
 
