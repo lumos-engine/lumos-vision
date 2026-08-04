@@ -34,6 +34,31 @@ from processor.utils.timing import FpsMeter
 
 log = get_logger(__name__)
 
+#: Dotted paths that require tearing down and recreating the capture source.
+_SOURCE_RECREATE_KEYS = frozenset(
+    {
+        "camera.source",
+        "camera.device",
+        "camera.rtsp_url",
+        "camera.path",
+        "camera.transport",
+        "camera.capture_width",
+        "camera.capture_height",
+        "camera.capture_fps",
+        "camera.ffmpeg_options",
+        "camera.loop",
+        "camera.replay_fps",
+        "camera.process_width",
+        "camera.read_timeout",
+        "camera.reconnect_delay",
+        "camera.max_reconnect_delay",
+    }
+)
+
+
+def _updates_require_source_recreate(updates: dict[str, Any]) -> bool:
+    return any(key in _SOURCE_RECREATE_KEYS for key in updates)
+
 
 class Processor:
     def __init__(self, config: Config, config_path: str | Path | None = None):
@@ -266,12 +291,88 @@ class Processor:
             new_config = apply_updates(self.config, updates)
             self.config = new_config
             apply_pipeline_config(self.pipeline, new_config)
-            # Hardware UVC knobs (exposure etc.) live on the camera, not in
-            # the colour stage -- push them when the controls map changes.
-            if any(key == "camera.controls" or key.startswith("camera.controls.") for key in updates):
+            if _updates_require_source_recreate(updates):
+                self._recreate_source_unlocked()
+            elif any(
+                key == "camera.controls" or key.startswith("camera.controls.") for key in updates
+            ):
+                # Hardware UVC knobs live on the camera, not in the colour stage.
                 self._apply_camera_controls(dict(new_config.camera.controls))
             log.info("Config updated: %s", ", ".join(sorted(updates)))
             return config_to_dict(new_config)
+
+        return self.call(apply)
+
+    def recreate_source(self) -> dict[str, Any]:
+        """Stop the current capture source and open a new one from config."""
+        return self.call(self._recreate_source_unlocked)
+
+    def _recreate_source_unlocked(self) -> dict[str, Any]:
+        old = self.source
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:
+                log.exception("Failed to stop previous capture source")
+        self.source = None
+        self._last_source = None
+        self._last_ctx = None
+        self.source = create_source(self.config.camera).start()
+        log.info(
+            "Capture source recreated: %s (%s)",
+            self.config.camera.source,
+            self.source.name,
+        )
+        return {
+            "ok": True,
+            "source": self.config.camera.source,
+            "stats": dict(self.source.stats),
+        }
+
+    def apply_camera_source(
+        self, fields: dict[str, Any], *, save: bool = False
+    ) -> dict[str, Any]:
+        """Update camera source fields, recreate capture, optionally save YAML."""
+        allowed = {
+            "source",
+            "device",
+            "rtsp_url",
+            "path",
+            "transport",
+            "capture_width",
+            "capture_height",
+            "capture_fps",
+            "ffmpeg_options",
+            "loop",
+            "replay_fps",
+            "process_width",
+        }
+        updates: dict[str, Any] = {}
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            if key == "source" and isinstance(value, str):
+                value = value.strip().lower()
+                if value == "usb":
+                    value = "v4l2"
+            updates[f"camera.{key}"] = value
+        if not updates:
+            raise ValueError("no recognised camera source fields given")
+
+        def apply() -> dict[str, Any]:
+            self.config = apply_updates(self.config, updates)
+            apply_pipeline_config(self.pipeline, self.config)
+            recreated = self._recreate_source_unlocked()
+            saved_path = None
+            if save:
+                saved_path = self.save()
+            log.info("Camera source applied: %s", ", ".join(sorted(updates)))
+            return {
+                "ok": True,
+                "config": config_to_dict(self.config),
+                "recreated": recreated,
+                "saved": saved_path,
+            }
 
         return self.call(apply)
 

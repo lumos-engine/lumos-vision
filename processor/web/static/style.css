@@ -221,6 +221,33 @@ select.compact { width: auto; padding: 5px 8px; font-size: 12px; }
 }
 .control > input[type=range] { grid-column: 1 / -1; }
 .control > select { grid-column: 1 / -1; margin-top: 3px; }
+.control > input[type=text],
+.control > input[type=url] {
+  grid-column: 1 / -1;
+  margin-top: 3px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.source-fields { grid-column: 1 / -1; display: grid; gap: 4px; }
+.source-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.source-meta {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 2px 0 0;
+}
 
 input[type=range] {
   -webkit-appearance: none; appearance: none;

@@ -20,7 +20,8 @@ class CameraConfig:
     #: rtsp | v4l2 | usb | file | image | synthetic
     source: str = "rtsp"
     rtsp_url: str = ""
-    #: USB webcam device for the ``v4l2`` / ``usb`` source (e.g. /dev/video2).
+    #: USB webcam for ``v4l2`` / ``usb``. Prefer ``/dev/v4l/by-id/…`` (stable);
+    #: bare ``/dev/videoN`` works but can renumber after replug.
     device: str = ""
     #: Optional capture mode requests for V4L2 (0 = driver default).
     capture_width: int = 0

@@ -9,11 +9,13 @@
 
 camera:
   source: v4l2                      # rtsp | v4l2 | usb | file | image | synthetic
-  # Current: Vimicro Altair (max 640x480).  For Logitech C-series use:
-  #   device: /dev/video2
-  #   capture_width: 1280
-  #   capture_height: 720
-  # and set output/perspective to 1280x720 below.
+  # Prefer stable by-id paths — /dev/videoN numbers shift when USB devices
+  # are plugged in a different order.  List them with:
+  #   ls -l /dev/v4l/by-id/
+  # device: /dev/v4l/by-id/usb-Vimicro_Corp._Altair-video-index0
+  # Bare /dev/videoN still works.  Current lab setup (Vimicro Altair @ 640x480):
+  #   device: /dev/video4
+  # For Logitech C-series use capture 1280x720 and match output/perspective.
   device: /dev/video4
   capture_width: 640
   capture_height: 480
