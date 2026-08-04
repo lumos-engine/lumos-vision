@@ -53,6 +53,14 @@ class PresenceMonitor:
     _fails: int = 0
     _oks: int = 0
 
+    @property
+    def fail_streak(self) -> int:
+        return self._fails
+
+    @property
+    def ok_streak(self) -> int:
+        return self._oks
+
     def reset(self, online: bool = True) -> None:
         self.online = online
         self._fails = 0
@@ -76,6 +84,8 @@ class PresenceMonitor:
         self._oks = 0
         if self.online and self._fails >= offline_need:
             self.online = False
-            self._fails = 0
+            # Keep fail_streak at the threshold for logging; do not zero it
+            # until a successful ping clears the streak.
+            self._fails = offline_need
             return "offline"
         return None

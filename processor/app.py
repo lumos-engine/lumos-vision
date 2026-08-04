@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import Future
+from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Callable
@@ -99,6 +100,7 @@ class Processor:
         self._leds_off = False
         self._last_power_check = 0.0
         self._black_frame: np.ndarray | None = None
+        self._logged_reconnect_ping = False
         self._presence = PresenceMonitor(
             offline_checks=config.power.failed_pings,
             online_checks=config.power.success_pings,
@@ -283,10 +285,27 @@ class Processor:
             return
         self._last_power_check = now
 
-        reachable = ping_host(
-            self.config.power.tv_host, self.config.power.ping_timeout_sec
-        )
+        host = (self.config.power.tv_host or "").strip()
+        need = max(1, int(self.config.power.failed_pings))
+        was_idle = self._idle
+        reachable = ping_host(host, self.config.power.ping_timeout_sec)
         transition = self._presence.update(reachable)
+        clock = datetime.now().strftime("%H:%M:%S")
+
+        if not reachable:
+            # Log every miss until idle shuts the camera down; stay quiet after.
+            if not was_idle:
+                log.info(
+                    "TV ping failed at %s (%s) %d/%d",
+                    clock,
+                    host,
+                    self._presence.fail_streak,
+                    need,
+                )
+        elif was_idle and not self._logged_reconnect_ping:
+            log.info("TV ping ok at %s (%s) — first reconnect", clock, host)
+            self._logged_reconnect_ping = True
+
         if transition == "offline" and not self._idle:
             self._enter_idle_unlocked()
         elif transition == "online" and self._idle:
@@ -302,10 +321,19 @@ class Processor:
         self._last_source = None
         self._last_ctx = None
         self._idle = True
+        self._logged_reconnect_ping = False
         self._set_leds_unlocked(False)
+        clock = datetime.now().strftime("%H:%M:%S")
         if not initial:
             log.info(
-                "Entered idle: TV %s offline — camera released, black frames, LEDs off",
+                "Entered idle at %s: TV %s offline — camera released, black frames, LEDs off",
+                clock,
+                self.config.power.tv_host,
+            )
+        else:
+            log.info(
+                "Idle at start %s: TV %s offline — camera not opened, black frames, LEDs off",
+                clock,
                 self.config.power.tv_host,
             )
 
@@ -319,8 +347,10 @@ class Processor:
             self._idle = True
             self._set_leds_unlocked(False)
             return
+        clock = datetime.now().strftime("%H:%M:%S")
         log.info(
-            "Left idle: TV %s online — camera and LEDs resumed",
+            "Left idle at %s: TV %s online — camera and LEDs resumed",
+            clock,
             self.config.power.tv_host or "(power disabled)",
         )
 

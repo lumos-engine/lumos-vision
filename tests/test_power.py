@@ -23,11 +23,14 @@ def test_presence_monitor_debounces_offline_and_online():
     monitor = PresenceMonitor(offline_checks=2, online_checks=2, online=True)
     assert monitor.update(False) is None
     assert monitor.online is True
+    assert monitor.fail_streak == 1
     assert monitor.update(False) == "offline"
     assert monitor.online is False
+    assert monitor.fail_streak == 2
 
     assert monitor.update(True) is None
     assert monitor.online is False
+    assert monitor.ok_streak == 1
     assert monitor.update(True) == "online"
     assert monitor.online is True
 
