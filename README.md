@@ -79,6 +79,15 @@ pkill -f 'python -m processor'
 ss -tlnp | grep -E '7660|7661' || echo "ports free"
 ```
 
+### Idle when the TV is off (optional)
+
+Set `power.tv_host` (e.g. `192.168.1.244`) in `config.yaml`. While that host
+fails ping, Screen Sight releases the USB camera, skips the pipeline, keeps
+writing black frames to `/dev/video10` (so HyperHDR does not need a restart),
+and disables HyperHDR’s `LEDDEVICE` via `power.hyperhdr_url` for true LED
+power-off. Leave `tv_host` empty to disable. Leave `hyperhdr_url` empty for
+camera-only idle without touching LEDs.
+
 ### No camera (dev / CI)
 
 ```bash

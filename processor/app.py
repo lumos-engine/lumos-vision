@@ -29,8 +29,10 @@ from processor.pipeline.pipeline import Pipeline
 from processor.pipeline.registry import apply_config as apply_pipeline_config
 from processor.pipeline.registry import build_pipeline
 from processor.stages.boundary import BoundaryStage
+from processor.utils.hyperhdr_leds import set_led_device
 from processor.utils.logging import get_logger
 from processor.utils.timing import FpsMeter
+from processor.utils.tv_presence import PresenceMonitor, ping_host
 
 log = get_logger(__name__)
 
@@ -93,12 +95,20 @@ class Processor:
         #: Set by the debug viewer so intermediate images get collected.
         self.want_debug_views = False
 
+        self._idle = False
+        self._leds_off = False
+        self._last_power_check = 0.0
+        self._black_frame: np.ndarray | None = None
+        self._presence = PresenceMonitor(
+            offline_checks=config.power.offline_checks,
+            online_checks=config.power.online_checks,
+        )
+
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
 
     def start(self) -> "Processor":
-        self.source = create_source(self.config.camera).start()
         self.sinks = SinkGroup(create_sinks(self.config.output))
         self.sinks.open(self.config.output.width, self.config.output.height)
         self._started_at = time.monotonic()
@@ -106,13 +116,31 @@ class Processor:
         # instead of the cold-start numbers.
         self._last_stats_log = self._started_at
         self._running = True
-        log.info(
-            "Pipeline: %s -> %dx%d @ %.0f fps",
-            " -> ".join(self.pipeline.stage_names) or "(empty)",
-            self.config.output.width,
-            self.config.output.height,
-            self.config.output.fps,
-        )
+        self._sync_presence_config()
+
+        if self._power_enabled() and not ping_host(
+            self.config.power.tv_host, self.config.power.ping_timeout_sec
+        ):
+            self._presence.reset(online=False)
+            self._enter_idle_unlocked(initial=True)
+            log.info(
+                "Pipeline idle at start (TV %s offline) -> %dx%d black @ %.1f fps",
+                self.config.power.tv_host,
+                self.config.output.width,
+                self.config.output.height,
+                self.config.power.idle_fps,
+            )
+        else:
+            self._presence.reset(online=True)
+            self.source = create_source(self.config.camera).start()
+            self._set_leds_unlocked(True)
+            log.info(
+                "Pipeline: %s -> %dx%d @ %.0f fps",
+                " -> ".join(self.pipeline.stage_names) or "(empty)",
+                self.config.output.width,
+                self.config.output.height,
+                self.config.output.fps,
+            )
         return self
 
     def run_in_background(self) -> threading.Thread:
@@ -145,9 +173,9 @@ class Processor:
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        if self.source is None or self.sinks is None:
+        if self.sinks is None:
             self.start()
-        assert self.source is not None and self.sinks is not None
+        assert self.sinks is not None
 
         min_interval = 1.0 / self.config.output.fps if self.config.output.fps > 0 else 0.0
         last_processed = 0.0
@@ -156,6 +184,19 @@ class Processor:
         try:
             while not self._stop.is_set():
                 self._drain_commands()
+                self._tick_power()
+
+                if self._idle:
+                    self._write_idle_frame()
+                    idle_fps = max(0.2, float(self.config.power.idle_fps or 2.0))
+                    self._stop.wait(timeout=1.0 / idle_fps)
+                    self._maybe_log_stats(time.monotonic())
+                    continue
+
+                if self.source is None:
+                    self._on_no_frame()
+                    self._stop.wait(timeout=0.25)
+                    continue
 
                 frame = self.source.read(timeout=1.0)
                 if frame is None:
@@ -219,6 +260,96 @@ class Processor:
         source = self.source
         if source is not None and not source.is_connected:
             log.debug("Waiting for the camera to reconnect...")
+
+    # -- TV presence / idle ------------------------------------------------
+
+    def _power_enabled(self) -> bool:
+        return bool((self.config.power.tv_host or "").strip())
+
+    def _sync_presence_config(self) -> None:
+        power = self.config.power
+        self._presence.offline_checks = power.offline_checks
+        self._presence.online_checks = power.online_checks
+
+    def _tick_power(self) -> None:
+        if not self._power_enabled():
+            if self._idle:
+                self._leave_idle_unlocked()
+            return
+
+        now = time.monotonic()
+        interval = max(1.0, float(self.config.power.check_interval_sec or 15.0))
+        if self._last_power_check and (now - self._last_power_check) < interval:
+            return
+        self._last_power_check = now
+
+        reachable = ping_host(
+            self.config.power.tv_host, self.config.power.ping_timeout_sec
+        )
+        transition = self._presence.update(reachable)
+        if transition == "offline" and not self._idle:
+            self._enter_idle_unlocked()
+        elif transition == "online" and self._idle:
+            self._leave_idle_unlocked()
+
+    def _enter_idle_unlocked(self, *, initial: bool = False) -> None:
+        if self.source is not None:
+            try:
+                self.source.stop()
+            except Exception:
+                log.exception("Failed to stop capture source for idle")
+            self.source = None
+        self._last_source = None
+        self._last_ctx = None
+        self._idle = True
+        self._set_leds_unlocked(False)
+        if not initial:
+            log.info(
+                "Entered idle: TV %s offline — camera released, black frames, LEDs off",
+                self.config.power.tv_host,
+            )
+
+    def _leave_idle_unlocked(self) -> None:
+        self._set_leds_unlocked(True)
+        self._idle = False
+        try:
+            self._recreate_source_unlocked()
+        except Exception:
+            log.exception("Failed to reopen capture source after idle")
+            self._idle = True
+            self._set_leds_unlocked(False)
+            return
+        log.info(
+            "Left idle: TV %s online — camera and LEDs resumed",
+            self.config.power.tv_host or "(power disabled)",
+        )
+
+    def _set_leds_unlocked(self, enabled: bool) -> None:
+        url = (self.config.power.hyperhdr_url or "").strip()
+        if not url:
+            self._leds_off = not enabled
+            return
+        result = set_led_device(url, enabled)
+        # Track requested state even if HyperHDR is briefly unreachable.
+        self._leds_off = not enabled
+        if not result.get("ok") and not result.get("skipped"):
+            log.warning("LEDDEVICE toggle incomplete: %s", result.get("error"))
+
+    def _write_idle_frame(self) -> None:
+        sinks = self.sinks
+        if sinks is None:
+            return
+        width = int(self.config.output.width)
+        height = int(self.config.output.height)
+        if (
+            self._black_frame is None
+            or self._black_frame.shape[1] != width
+            or self._black_frame.shape[0] != height
+        ):
+            self._black_frame = np.zeros((height, width, 3), dtype=np.uint8)
+        sinks.write(self._black_frame)
+        self._frames_out += 1
+        self.output_fps.tick()
 
     def _maybe_log_stats(self, now: float) -> None:
         interval = self.config.logging.stats_interval
@@ -291,8 +422,16 @@ class Processor:
             new_config = apply_updates(self.config, updates)
             self.config = new_config
             apply_pipeline_config(self.pipeline, new_config)
+            if any(key == "power" or key.startswith("power.") for key in updates):
+                self._sync_presence_config()
+                self._last_power_check = 0.0
+                if not self._power_enabled() and self._idle:
+                    self._leave_idle_unlocked()
             if _updates_require_source_recreate(updates):
-                self._recreate_source_unlocked()
+                if self._idle:
+                    log.info("Skipping source recreate while idle")
+                else:
+                    self._recreate_source_unlocked()
             elif any(
                 key == "camera.controls" or key.startswith("camera.controls.") for key in updates
             ):
@@ -308,6 +447,8 @@ class Processor:
         return self.call(self._recreate_source_unlocked)
 
     def _recreate_source_unlocked(self) -> dict[str, Any]:
+        if self._idle:
+            return {"ok": False, "error": "capture source is idle (TV offline)"}
         old = self.source
         if old is not None:
             try:
@@ -518,6 +659,7 @@ class Processor:
     def status(self) -> dict[str, Any]:
         uptime = time.monotonic() - self._started_at if self._started_at else 0.0
         ctx = self._last_ctx
+        power = self.config.power
         return {
             "running": self.running,
             "uptime_s": round(uptime, 1),
@@ -533,6 +675,14 @@ class Processor:
             "output_size": [self.config.output.width, self.config.output.height],
             "meta": {} if ctx is None else _jsonable(ctx.meta),
             "views": self.available_views(),
+            "power": {
+                "enabled": self._power_enabled(),
+                "tv_host": (power.tv_host or "").strip(),
+                "hyperhdr_url": (power.hyperhdr_url or "").strip(),
+                "online": self._presence.online if self._power_enabled() else True,
+                "idle": self._idle,
+                "leds_off": self._leds_off,
+            },
         }
 
     def available_views(self) -> list[str]:

@@ -353,6 +353,31 @@ class LoggingConfig:
 
 
 @dataclass
+class PowerConfig:
+    """Idle the camera/pipeline when the TV is offline (optional).
+
+    Empty ``tv_host`` disables the feature entirely.  When enabled, an offline
+    TV releases the capture device, feeds black frames to the virtual webcam
+    so HyperHDR's grabber stays alive, and disables HyperHDR's LEDDEVICE for
+    true LED power-off.
+    """
+
+    #: TV IPv4/hostname to ping, e.g. ``192.168.1.244``.  Empty = never idle.
+    tv_host: str = ""
+    #: HyperHDR JSON API base, e.g. ``http://127.0.0.1:8090``.  Empty skips
+    #: LED hard-off (camera idle only).
+    hyperhdr_url: str = "http://127.0.0.1:8090"
+    check_interval_sec: float = 15.0
+    #: Consecutive failed pings before entering idle.
+    offline_checks: int = 2
+    #: Consecutive successful pings before leaving idle.
+    online_checks: int = 1
+    ping_timeout_sec: float = 1.0
+    #: Black-frame rate written to sinks while idle (keeps /dev/videoN alive).
+    idle_fps: float = 2.0
+
+
+@dataclass
 class Config:
     camera: CameraConfig = field(default_factory=CameraConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
@@ -368,6 +393,7 @@ class Config:
     debug: DebugConfig = field(default_factory=DebugConfig)
     web: WebConfig = field(default_factory=WebConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    power: PowerConfig = field(default_factory=PowerConfig)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "Config":

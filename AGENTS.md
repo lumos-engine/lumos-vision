@@ -130,6 +130,8 @@ synthetic/file sources; do not assume ioctl paths were exercised end-to-end.
 - Tests: use `SyntheticScene` / fixtures in `tests/conftest.py`. Avoid network
   and `/dev/video*` unless gated and clearly optional.
 - Do not expand scope into HyperHDR integration, ESP32 firmware, or unrelated
+  features beyond the minimal `power.hyperhdr_url` LEDDEVICE on/off used for
+  TV-presence idle (see `processor/utils/hyperhdr_leds.py`).
   refactors.
 
 ## When changing detection or movement

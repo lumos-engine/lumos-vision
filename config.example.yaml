@@ -116,6 +116,17 @@ logging:
   level: INFO
   stats_interval: 30                # seconds between throughput log lines
 
+# When the TV is offline, release the USB camera, pause the pipeline, keep
+# writing black frames to /dev/video10 (HyperHDR grabber stays up), and
+# disable HyperHDR's LEDDEVICE for true LED power-off.  Empty tv_host disables.
+# power:
+#   tv_host: "192.168.1.244"
+#   hyperhdr_url: "http://127.0.0.1:8090"   # empty = camera idle only, no LED off
+#   check_interval_sec: 15
+#   offline_checks: 2
+#   online_checks: 1
+#   idle_fps: 2.0
+
 # Send LED colours straight to WLED and skip HyperHDR entirely.
 # ddp:
 #   enabled: true
