@@ -288,6 +288,7 @@ class Processor:
         host = (self.config.power.tv_host or "").strip()
         need = max(1, int(self.config.power.failed_pings))
         was_idle = self._idle
+        fails_before = self._presence.fail_streak
         reachable = ping_host(host, self.config.power.ping_timeout_sec)
         transition = self._presence.update(reachable)
         clock = datetime.now().strftime("%H:%M:%S")
@@ -302,8 +303,15 @@ class Processor:
                     self._presence.fail_streak,
                     need,
                 )
-        elif was_idle and not self._logged_reconnect_ping:
-            log.info("TV ping ok at %s (%s) — first reconnect", clock, host)
+            # Next success (before or after idle) should log once as reconnect.
+            self._logged_reconnect_ping = False
+        elif not self._logged_reconnect_ping and (was_idle or fails_before > 0):
+            log.info(
+                "TV ping ok at %s (%s) — first reconnect after %d failed ping(s)",
+                clock,
+                host,
+                fails_before,
+            )
             self._logged_reconnect_ping = True
 
         if transition == "offline" and not self._idle:

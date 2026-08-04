@@ -194,3 +194,38 @@ def test_failed_pings_from_config_drives_presence_monitor():
     app = _processor(tv_host="192.168.1.244", failed_pings=4, success_pings=3)
     assert app._presence.offline_checks == 4
     assert app._presence.online_checks == 3
+
+
+def test_logs_first_reconnect_before_idle(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr("processor.app.set_led_device", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: True)
+    app = _processor(
+        tv_host="192.168.1.244",
+        hyperhdr_url="http://127.0.0.1:8090",
+        failed_pings=5,
+        success_pings=1,
+        check_interval_sec=1.0,
+    )
+    app.start()
+    try:
+        monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: False)
+        app._last_power_check = 0.0
+        with caplog.at_level(logging.INFO):
+            app._tick_power()
+            app._last_power_check = 0.0
+            app._tick_power()
+            assert app._idle is False
+            assert app._presence.fail_streak == 2
+
+            monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: True)
+            app._last_power_check = 0.0
+            app._tick_power()
+
+        text = "\n".join(r.message for r in caplog.records)
+        assert "TV ping failed" in text
+        assert "first reconnect after 2 failed ping(s)" in text
+        assert app._idle is False
+    finally:
+        app.shutdown()
