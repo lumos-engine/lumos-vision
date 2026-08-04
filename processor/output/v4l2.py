@@ -162,58 +162,68 @@ class V4L2Sink(Sink):
                 f'card_label="Screen Sight" exclusive_caps=1'
             )
 
+        # A previous keep_format=1 (or HyperHDR) can pin RGB3/YUYV so S_FMT
+        # appears to work but G_FMT still reports the old fourcc -- then we
+        # used to abort and leave no producer, so every viewer fails to open.
+        self._set_keep_format(0)
+
         fd = os.open(self.device, os.O_WRONLY)
         try:
             request = pack_format(width, height, self.pixel_format, self.full_range)
             fcntl.ioctl(fd, VIDIOC_S_FMT, request)
-            # v4l2loopback may accept S_FMT then keep a stale capture format from
-            # HyperHDR; read back what the device actually has.
             got = bytearray(request)
             fcntl.ioctl(fd, VIDIOC_G_FMT, got)
             got_w, got_h, got_code, _, got_bpl, got_size = struct.unpack_from("<6I", got, 8)
         except OSError as exc:
             os.close(fd)
             raise OSError(
-                f"failed to set {self.pixel_format} {width}x{height} on {self.device}: {exc}"
+                f"failed to set {self.pixel_format} {width}x{height} on {self.device}: {exc}. "
+                f"Try: sudo modprobe -r v4l2loopback && "
+                f"sudo modprobe v4l2loopback video_nr={self._device_number()} "
+                f'card_label="Screen Sight" exclusive_caps=1'
             ) from exc
 
-        expect_code, bpp = PIXEL_FORMATS[self.pixel_format]
+        expect_code, _bpp = PIXEL_FORMATS[self.pixel_format]
         if (got_w, got_h, got_code) != (width, height, expect_code):
-            os.close(fd)
-            raise OSError(
-                f"{self.device} negotiated {got_w}x{got_h} fourcc=0x{got_code:08x} "
-                f"instead of {width}x{height} {self.pixel_format}. "
-                f"Reload the loopback (modprobe -r v4l2loopback) and start Screen "
-                f"Sight *before* HyperHDR; set keep_format=1 on the module."
+            log.warning(
+                "%s reports %dx%d fourcc=0x%08x after S_FMT %s %dx%d -- "
+                "reloading the loopback module is the reliable fix",
+                self.device,
+                got_w,
+                got_h,
+                got_code,
+                self.pixel_format,
+                width,
+                height,
             )
 
         self._fd = fd
-        self._size = (got_w, got_h)
-        self._lock_loopback_format()
+        self._size = (width, height)
+        self._set_keep_format(1)
         log.info(
-            "V4L2 output ready: %s %s %dx%d (bpl=%d size=%d)",
+            "V4L2 output ready: %s %s %dx%d (device bpl=%d size=%d)",
             self.device,
             self.pixel_format,
-            got_w,
-            got_h,
+            width,
+            height,
             got_bpl,
             got_size,
         )
 
-    def _lock_loopback_format(self) -> None:
-        """Stop HyperHDR from renegotiating a different size/fourcc on open."""
+    def _set_keep_format(self, value: int) -> None:
+        """v4l2loopback control: 1 locks format, 0 allows renegotiation."""
         try:
             import subprocess
 
             subprocess.run(
-                ["v4l2-ctl", "-d", self.device, "-c", "keep_format=1"],
+                ["v4l2-ctl", "-d", self.device, "-c", f"keep_format={int(value)}"],
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=2.0,
             )
         except Exception as exc:
-            log.debug("could not set keep_format on %s: %s", self.device, exc)
+            log.debug("keep_format=%s on %s failed: %s", value, self.device, exc)
 
     def _device_number(self) -> str:
         digits = "".join(ch for ch in self.device if ch.isdigit())
@@ -252,6 +262,18 @@ class V4L2Sink(Sink):
         height, width = image.shape[:2]
         if (width, height) != self._size:
             image = cv2.resize(image, self._size, interpolation=cv2.INTER_AREA)
+
+        flip_h = bool(getattr(self.config, "flip_horizontal", False))
+        flip_v = bool(getattr(self.config, "flip_vertical", False))
+        flip_code = None
+        if flip_h and flip_v:
+            flip_code = -1
+        elif flip_v:
+            flip_code = 0
+        elif flip_h:
+            flip_code = 1
+        if flip_code is not None:
+            image = cv2.flip(image, flip_code)
 
         payload = np.ascontiguousarray(self._convert(image))
         try:

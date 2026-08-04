@@ -9,17 +9,20 @@
 
 camera:
   source: v4l2                      # rtsp | v4l2 | usb | file | image | synthetic
-  device: /dev/video2               # check with: v4l2-ctl --list-devices
-  capture_width: 1280
-  capture_height: 720
+  # Current: Vimicro Altair (max 640x480).  For Logitech C-series use:
+  #   device: /dev/video2
+  #   capture_width: 1280
+  #   capture_height: 720
+  # and set output/perspective to 1280x720 below.
+  device: /dev/video4
+  capture_width: 640
+  capture_height: 480
   # controls:                       # hardware (v4l2-ctl); names vary by camera
-  #   exposure_auto: 1              # 1 = manual on many Logitech cams
+  #   exposure_auto: 1
   #   exposure_absolute: 300
   #   brightness: 128
   #   gain: 0
   controls: {}
-  # 0 = keep native camera resolution (preferred).  Set e.g. 960 only if the
-  # host is too slow for full-res processing.
   process_width: 0
   read_timeout: 8.0
   reconnect_delay: 2.0
@@ -32,13 +35,15 @@ camera:
   transport: tcp
 
 output:
-  width: 1280
-  height: 720
+  width: 640                        # match HyperHDR; 1280 if using Logitech
+  height: 360
   fps: 20
   v4l2:
     enabled: true
     device: /dev/video10
-    pixel_format: YUYV              # must match HyperHDR; YUYV | RGB24 | BGR24
+    pixel_format: YUYV              # must match HyperHDR exactly
+    flip_horizontal: false
+    flip_vertical: false            # true if HyperHDR preview is upside-down
 
   mjpeg:
     enabled: true
@@ -68,9 +73,8 @@ movement:
 
 perspective:
   # Rectified working size.  Match output for best letterbox detection.
-  # Drop to 640x360 on a very slow machine.
-  width: 1280
-  height: 720
+  width: 640
+  height: 360
 
 crop:
   inset_percent: 2.0                # trims bezel and the glowing panel rim

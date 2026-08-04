@@ -258,6 +258,10 @@ class V4L2Config:
     #: YUYV | RGB24 | BGR24 -- YUYV is what most grabbers, HyperHDR included,
     #: are happiest with.
     pixel_format: str = "YUYV"
+    #: HyperHDR has no reliable UI flip for v4l2loopback; use these when its
+    #: preview is mirrored/upside-down while other viewers look correct.
+    flip_horizontal: bool = False
+    flip_vertical: bool = False
 
 
 @dataclass
