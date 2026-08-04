@@ -336,6 +336,7 @@ class BlackBarStage(Stage):
                 )
             vertical = float(np.clip(self._vertical.update(v_sample), 0.0, v_limit))
             horizontal = float(np.clip(self._horizontal.update(h_sample), 0.0, h_limit))
+            vertical, horizontal = self._exclusive_axis(vertical, horizontal)
             applied = {
                 "top": vertical,
                 "bottom": vertical,
@@ -354,6 +355,14 @@ class BlackBarStage(Stage):
                 )
                 limit = v_limit if edge in ("top", "bottom") else h_limit
                 applied[edge] = float(np.clip(self._filters[edge].update(sample), 0.0, limit))
+            # Same either/or rule when per-edge filters are used.
+            v = max(applied["top"], applied["bottom"])
+            h = max(applied["left"], applied["right"])
+            if v >= 0.02 and h >= 0.02:
+                if v >= h:
+                    applied["left"] = applied["right"] = 0.0
+                else:
+                    applied["top"] = applied["bottom"] = 0.0
 
         top = int(round(height * applied["top"]))
         bottom = int(round(height * applied["bottom"]))
@@ -451,8 +460,9 @@ class BlackBarStage(Stage):
                 "right": horizontal,
             }
 
-        # Letterbox and pillarbox at the same time means the measurement is
-        # confused (a dark scene, usually), so trust the larger pair only.
+        # Real content is letterboxed *or* pillarboxed, never a windowbox.
+        # Prefer the larger pair so dark-scene false positives on the other
+        # axis cannot shrink the picture from all four sides.
         if measured["top"] > 0.01 and measured["left"] > 0.01:
             if measured["top"] >= measured["left"]:
                 measured["left"] = measured["right"] = 0.0
@@ -468,6 +478,24 @@ class BlackBarStage(Stage):
         return {
             edge: float(np.clip(value, 0.0, limits[edge])) for edge, value in measured.items()
         }
+
+    def _exclusive_axis(self, vertical: float, horizontal: float) -> tuple[float, float]:
+        """Keep only one axis of crop; clear the sticky filter on the loser."""
+        if vertical < 0.02 or horizontal < 0.02:
+            return vertical, horizontal
+        if vertical >= horizontal:
+            if self._horizontal is not None and self._horizontal.committed > 0.0:
+                self._horizontal.force(0.0)
+            self._pillarbox_locked = False
+            self._horizontal_misses = 0
+            self._horizontal_shrinks = 0
+            return vertical, 0.0
+        if self._vertical is not None and self._vertical.committed > 0.0:
+            self._vertical.force(0.0)
+        self._letterbox_locked = False
+        self._vertical_misses = 0
+        self._vertical_shrinks = 0
+        return 0.0, horizontal
 
     # -- debug -------------------------------------------------------------
 

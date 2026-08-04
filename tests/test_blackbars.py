@@ -232,6 +232,23 @@ def test_letterbox_and_pillarbox_are_not_applied_together():
     assert not (pixels["top"] > 0 and pixels["left"] > 0)
 
 
+def test_sticky_filters_cannot_keep_both_axes_cropping():
+    """Even if both axis filters were locked, applied crop is either/or."""
+    stage = make_stage()
+    stage._vertical.force(0.12)
+    stage._horizontal.force(0.08)
+    stage._letterbox_locked = True
+    stage._pillarbox_locked = True
+    # Full-frame content: measurement wants no bars, but sticky would hold.
+    panel = np.full((432, 768, 3), 180, dtype=np.uint8)
+    stage.process(FrameContext(source=panel, image=panel.copy()))
+    pixels = stage.status()["pixels"]
+    assert not (pixels["top"] > 0 and pixels["left"] > 0)
+    # Dominant letterbox lock wins over the smaller pillarbox hold.
+    assert pixels["top"] > 0
+    assert pixels["left"] == 0
+
+
 def test_reset_clears_the_crop():
     stage = make_stage()
     run(stage, render_panel(3.0, PANEL, 2.39), frames=60)
