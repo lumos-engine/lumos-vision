@@ -100,8 +100,8 @@ class Processor:
         self._last_power_check = 0.0
         self._black_frame: np.ndarray | None = None
         self._presence = PresenceMonitor(
-            offline_checks=config.power.offline_checks,
-            online_checks=config.power.online_checks,
+            offline_checks=config.power.failed_pings,
+            online_checks=config.power.success_pings,
         )
 
     # ------------------------------------------------------------------
@@ -268,8 +268,8 @@ class Processor:
 
     def _sync_presence_config(self) -> None:
         power = self.config.power
-        self._presence.offline_checks = power.offline_checks
-        self._presence.online_checks = power.online_checks
+        self._presence.offline_checks = power.failed_pings
+        self._presence.online_checks = power.success_pings
 
     def _tick_power(self) -> None:
         if not self._power_enabled():

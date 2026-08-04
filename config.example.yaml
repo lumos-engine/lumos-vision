@@ -123,8 +123,8 @@ logging:
 #   tv_host: "192.168.1.244"
 #   hyperhdr_url: "http://127.0.0.1:8090"   # empty = camera idle only, no LED off
 #   check_interval_sec: 15
-#   offline_checks: 2
-#   online_checks: 1
+#   failed_pings: 2                 # consecutive fails before idle
+#   success_pings: 1               # consecutive oks before resume
 #   idle_fps: 2.0
 
 # Send LED colours straight to WLED and skip HyperHDR entirely.

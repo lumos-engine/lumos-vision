@@ -114,8 +114,8 @@ def test_enter_and_leave_idle_releases_camera_and_toggles_leds(monkeypatch):
     app = _processor(
         tv_host="192.168.1.244",
         hyperhdr_url="http://127.0.0.1:8090",
-        offline_checks=1,
-        online_checks=1,
+        failed_pings=1,
+        success_pings=1,
         check_interval_sec=1.0,
     )
     app.start()
@@ -170,7 +170,24 @@ def test_starts_idle_when_tv_already_offline(monkeypatch):
 
 
 def test_config_round_trip_includes_power():
-    config = Config.from_dict({"power": {"tv_host": "192.168.1.244", "idle_fps": 3.0}})
+    config = Config.from_dict(
+        {
+            "power": {
+                "tv_host": "192.168.1.244",
+                "idle_fps": 3.0,
+                "failed_pings": 5,
+                "success_pings": 2,
+            }
+        }
+    )
     assert config.power.tv_host == "192.168.1.244"
     assert config.power.idle_fps == 3.0
     assert config.power.hyperhdr_url == "http://127.0.0.1:8090"
+    assert config.power.failed_pings == 5
+    assert config.power.success_pings == 2
+
+
+def test_failed_pings_from_config_drives_presence_monitor():
+    app = _processor(tv_host="192.168.1.244", failed_pings=4, success_pings=3)
+    assert app._presence.offline_checks == 4
+    assert app._presence.online_checks == 3

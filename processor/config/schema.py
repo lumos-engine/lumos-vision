@@ -368,10 +368,10 @@ class PowerConfig:
     #: LED hard-off (camera idle only).
     hyperhdr_url: str = "http://127.0.0.1:8090"
     check_interval_sec: float = 15.0
-    #: Consecutive failed pings before entering idle.
-    offline_checks: int = 2
-    #: Consecutive successful pings before leaving idle.
-    online_checks: int = 1
+    #: Consecutive failed pings before entering idle (TV treated as off).
+    failed_pings: int = 2
+    #: Consecutive successful pings before leaving idle (TV treated as on).
+    success_pings: int = 1
     ping_timeout_sec: float = 1.0
     #: Black-frame rate written to sinks while idle (keeps /dev/videoN alive).
     idle_fps: float = 2.0
