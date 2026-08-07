@@ -1,0 +1,55 @@
+LumosOS
+Copyright (C) 2026 Shivansh Tyagi
+
+================================================================================
+License grant for the entire repository history
+================================================================================
+
+The copyright holder hereby licenses LumosOS — including every commit in this
+repository’s history, past and present — under the GNU General Public License
+version 3 (see the file LICENSE), together with the Additional Terms below.
+
+================================================================================
+Additional Terms under GPL-3.0 §7
+================================================================================
+
+These terms are Additional Terms under section 7 of the GNU General Public
+License, version 3. They apply to LumosOS and to every modified or combined
+work based on it.
+
+1. Copyleft reminder (GPL-3.0)
+
+   Anyone who conveys a copy of this software, or a work based on it, must
+   also convey the corresponding source code under GPL-3.0 (or a compatible
+   license as permitted by GPL-3.0). Proprietary redistribution of this
+   software, or of derivative works that incorporate it, is not permitted.
+
+2. Front-page attribution (GPL-3.0 §7(b))
+
+   If you convey, distribute, or make available a product, firmware image,
+   application, website, or other user-facing work that is based on LumosOS
+   or incorporates LumosOS (in whole or in substantial part), you must display
+   clear, prominent credit on the primary user-facing screen or landing page
+   (the “front page”) stating that LumosOS was used to build that software.
+
+   The notice must be reasonably readable without digging into secondary
+   menus, about dialogs alone, or source headers, and must include at least:
+
+     Built with LumosOS
+     Copyright (C) 2026 Shivansh Tyagi
+     https://github.com/lumos-engine/lumos-os
+
+   (or an equivalent statement with the same meaning, the copyright line, and
+   a working link to the upstream project). You may add your own branding
+   alongside this credit; you may not remove, obscure, or demote it below
+   ordinary front-page visibility.
+
+3. Preservation of notices (GPL-3.0 §7(b)–(c))
+
+   You must preserve this NOTICE file, the LICENSE file, and all copyright
+   and attribution notices in the source. You must not misrepresent the origin
+   of LumosOS or claim that modified versions were written by the original
+   author.
+
+If any Additional Term above is held invalid for a particular conveyance, the
+remaining GPL-3.0 terms continue to apply to that conveyance.

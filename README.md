@@ -183,9 +183,9 @@ a config at `/etc/screen-sight/config.yaml`.
 
 Start with `--web` and open <http://localhost:7660>.
 
-1. **Mark the TV corners.** Press *Auto-detect* first; it is usually right. If
+1. **Mark the TV corners.** Press _Auto-detect_ first; it is usually right. If
    not, click the four corners of the screen clockwise from the top-left and
-   drag to fine-tune — a magnifying loupe follows the cursor. Press *Apply*.
+   drag to fine-tune — a magnifying loupe follows the cursor. Press _Apply_.
 2. **Watch the result.** The right-hand panel shows exactly what the virtual
    camera is emitting, plus any single pipeline stage you want to inspect.
 3. **Tune.** Every slider applies live: crop inset, black-bar sensitivity and
@@ -202,11 +202,11 @@ Auto-detect misses, then Save.
 
 ### Boundary modes
 
-| Mode | Behaviour |
-| --- | --- |
-| `auto` | Detect continuously; ignore any saved corners. |
+| Mode     | Behaviour                                                                           |
+| -------- | ----------------------------------------------------------------------------------- |
+| `auto`   | Detect continuously; ignore any saved corners.                                      |
 | `hybrid` | Use saved corners, but fall back to detection if the camera is bumped. **Default.** |
-| `manual` | Always use saved corners, whatever happens. |
+| `manual` | Always use saved corners, whatever happens.                                         |
 
 ---
 
@@ -219,7 +219,7 @@ useful config can be four lines:
 
 ```yaml
 camera:
-  rtsp_url: "rtsp://admin:PASSWORD@192.168.1.93:5543/live/channel10"
+  rtsp_url: 'rtsp://admin:PASSWORD@192.168.1.93:5543/live/channel10'
 output:
   fps: 15
 ```
@@ -235,16 +235,16 @@ Every stage is independent and individually optional. Remove a name from
 `pipeline.stages` and it is gone; set `<stage>.enabled: false` and it stays
 constructed but passive, so the debug UI can switch it back on at runtime.
 
-| Stage | What it does |
-| --- | --- |
-| `movement` | Notices that the camera itself was moved, and asks for a recalibration. |
-| `boundary` | Locates the TV and publishes its four corners. |
-| `perspective` | Warps that quadrilateral into a true rectangle. |
-| `crop` | Trims a fixed inset — bezel, and the glowing rim of the panel. |
-| `blackbars` | Finds and removes letterbox/pillarbox bars, with heavy anti-flicker. |
-| `reflection` | Ignores a margin at each edge; optionally blanks static logos. |
-| `color` | White balance, exposure, gamma, contrast, brightness, saturation. |
-| `resize` | Scales to the output resolution. |
+| Stage         | What it does                                                            |
+| ------------- | ----------------------------------------------------------------------- |
+| `movement`    | Notices that the camera itself was moved, and asks for a recalibration. |
+| `boundary`    | Locates the TV and publishes its four corners.                          |
+| `perspective` | Warps that quadrilateral into a true rectangle.                         |
+| `crop`        | Trims a fixed inset — bezel, and the glowing rim of the panel.          |
+| `blackbars`   | Finds and removes letterbox/pillarbox bars, with heavy anti-flicker.    |
+| `reflection`  | Ignores a margin at each edge; optionally blanks static logos.          |
+| `color`       | White balance, exposure, gamma, contrast, brightness, saturation.       |
+| `resize`      | Scales to the output resolution.                                        |
 
 Adding a stage means writing the class and calling `register_stage`; nothing
 else changes, and the new name becomes usable in `pipeline.stages`
@@ -258,21 +258,21 @@ Three cues, combined, because none is reliable alone in a living room:
 - **Activity.** A TV is the only thing in the room that moves. Accumulating
   peak frame difference over a couple of seconds paints a mask over exactly
   the screen and nothing else — measured at ~100 % of the picture area with
-  under 3 % spill onto the room. This is the only cue that is *specific* to a
+  under 3 % spill onto the room. This is the only cue that is _specific_ to a
   television, so it chooses the answer; the others only refine it.
 - **Edges.** The panel border, found by contour fitting.
 - **Brightness.** A lit screen against a darker wall.
 
 Two details do most of the work:
 
-*A letterboxed film only moves in the middle of the screen*, so the activity
+_A letterboxed film only moves in the middle of the screen_, so the activity
 mask describes the picture, not the panel. Each candidate therefore also gets
 offered as the 16:9 panel it would imply, grown outwards. Without this the
 detector locks onto the 2.39:1 picture and is then wrong for the next
 programme.
 
-*The on-screen aspect ratio of a quad is not the aspect ratio of the rectangle
-it depicts.* Seen from the sofa, a 16:9 TV measures anywhere from 1.4 to 2.2.
+_The on-screen aspect ratio of a quad is not the aspect ratio of the rectangle
+it depicts._ Seen from the sofa, a 16:9 TV measures anywhere from 1.4 to 2.2.
 Scoring candidates on their on-screen shape systematically rewards the wrong
 ones, so the true ratio is recovered from the projection first (Zhang & He's
 closed form, which also solves for the unknown focal length).
@@ -303,8 +303,8 @@ that difference is a tenth of the entire CPU budget.
 ### Recalibration
 
 The camera is bolted to a shelf, so instead of re-detecting the TV every
-frame, a much cheaper question gets asked twice a second: *is the calibration
-still valid?* The TV is masked out and the remaining scenery — wall, picture
+frame, a much cheaper question gets asked twice a second: _is the calibration
+still valid?_ The TV is masked out and the remaining scenery — wall, picture
 frame, doorway — is compared with a reference by normalised cross-correlation.
 
 Correlation rather than a brightness difference, because the two events that
@@ -350,18 +350,18 @@ each still, so detection accuracy can be measured rather than eyeballed.
 
 `--debug` opens a window with per-stage views and live statistics.
 
-| Key | |
-| --- | --- |
-| `0`–`9` | select a view |
-| `[` `]` | previous / next view |
-| `g` | grid of every view at once |
-| `o` / `h` | toggle the overlay / this help |
-| `space` | pause the redraw |
-| `r` | force a TV recalibration |
-| `s` / `w` | save a snapshot / write the config |
+| Key       |                                                 |
+| --------- | ----------------------------------------------- |
+| `0`–`9`   | select a view                                   |
+| `[` `]`   | previous / next view                            |
+| `g`       | grid of every view at once                      |
+| `o` / `h` | toggle the overlay / this help                  |
+| `space`   | pause the redraw                                |
+| `r`       | force a TV recalibration                        |
+| `s` / `w` | save a snapshot / write the config              |
 | `m b p c` | toggle movement / boundary / perspective / crop |
-| `k f l z` | toggle blackbars / reflection / color / resize |
-| `q` | quit |
+| `k f l z` | toggle blackbars / reflection / color / resize  |
+| `q`       | quit                                            |
 
 ### Tests
 
@@ -377,16 +377,16 @@ python tools/bench_detection.py     # detection accuracy against ground truth
 
 Measured on the bundled scenes at 640x360 output; per-frame pipeline cost:
 
-| Stage | ms |
-| --- | --- |
-| movement | 0.05 |
-| boundary | 0.60 |
-| perspective | 0.40 |
-| blackbars | 0.75 |
-| color | 0.24 |
-| resize | 0.19 |
-| crop + reflection | 0.02 |
-| **total** | **~2.3** |
+| Stage             | ms       |
+| ----------------- | -------- |
+| movement          | 0.05     |
+| boundary          | 0.60     |
+| perspective       | 0.40     |
+| blackbars         | 0.75     |
+| color             | 0.24     |
+| resize            | 0.19     |
+| crop + reflection | 0.02     |
+| **total**         | **~2.3** |
 
 TV detection itself costs ~12 ms, but it runs only while searching for the
 screen and stops entirely once locked; the per-frame cost after that is the
@@ -409,12 +409,12 @@ plus whatever the camera and network contribute.
 
 ## Output sinks
 
-| Sink | Notes |
-| --- | --- |
-| `v4l2` | The virtual webcam. Linux only; skipped with a warning elsewhere. |
-| `mjpeg` | HTTP stream, for checking the result from another machine. |
-| `file` | Records the processed output to a video file. |
-| `ddp` | Samples LED colours and sends them straight to WLED over UDP. |
+| Sink    | Notes                                                             |
+| ------- | ----------------------------------------------------------------- |
+| `v4l2`  | The virtual webcam. Linux only; skipped with a warning elsewhere. |
+| `mjpeg` | HTTP stream, for checking the result from another machine.        |
+| `file`  | Records the processed output to a video file.                     |
+| `ddp`   | Samples LED colours and sends them straight to WLED over UDP.     |
 
 The DDP sink is the path that eventually removes HyperHDR from the chain. It
 is off by default and needs the LED counts for each edge:
@@ -467,6 +467,17 @@ raise `camera.read_timeout` if the camera has long keyframe intervals.
 
 ---
 
-## Licence
+## License
 
-MIT.
+LumosOS — including **all past and present commits** in this repository — is
+licensed under the [GNU General Public License v3.0](LICENSE), with
+[Additional Terms](NOTICE) under GPL §7.
+
+In short:
+
+- Derivative works and redistributed copies must remain open source under GPL-3.0.
+- Products built with LumosOS must give clear front-page credit that LumosOS was used to build them (see `NOTICE`).
+
+```
+Copyright (C) 2026 Shivansh Tyagi
+```
