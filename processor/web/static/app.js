@@ -605,6 +605,16 @@ const PATCH_TARGET_RGB = {
   red: [255, 0, 0],
   green: [0, 255, 0],
   blue: [0, 0, 255],
+  cyan: [0, 255, 255],
+  magenta: [255, 0, 255],
+  yellow: [255, 255, 0],
+  red_mid: [128, 0, 0],
+  green_mid: [0, 128, 0],
+  blue_mid: [0, 0, 128],
+  yellow_mid: [128, 128, 0],
+  skin_light: [225, 185, 155],
+  skin_medium: [190, 140, 105],
+  skin_deep: [145, 95, 65],
 };
 
 function bgrToCss(bgr) {
@@ -652,10 +662,13 @@ function renderColorCal(status) {
 
   const sol = $('color-cal-solution');
   if (sol) {
-    if (cal.solution?.gains) {
-      const g = cal.solution.gains;
+    if (cal.solution?.matrix || cal.solution?.gains) {
+      const g = cal.solution.gains || {};
       const notes = (cal.solution.notes || []).join('; ');
-      sol.textContent = `Proposed gains R${g.r} G${g.g} B${g.b} · gamma ${cal.solution.gamma}`
+      const matrixBits = cal.solution.matrix
+        ? `3×3 matrix + gamma ${cal.solution.gamma}`
+        : `gains R${g.r} G${g.g} B${g.b} · gamma ${cal.solution.gamma}`;
+      sol.textContent = `Proposed ${matrixBits}`
         + (notes ? ` · ${notes}` : '');
     } else {
       sol.textContent = '';
@@ -672,11 +685,11 @@ async function buildColorCalPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Colour calibrate</h3>
-    <p class="hint">Occasional manual run: open the patch page fullscreen on the
-    HDMI TV, keep this wizard on your other display, then Start. Cycles black /
-    white / three greys / R/G/B, measures the panel centre, and writes manual
-    RGB gains + gamma. Use <strong>Apply &amp; Save</strong> to keep them in
-    config.yaml.</p>
+    <p class="hint">Occasional manual run (~1–1.5&nbsp;min): open the patch page
+    fullscreen on the HDMI TV, keep this wizard on your other display, then
+    Start. Cycles ~20 patches (greys, primaries/secondaries, mid hues, skin
+    tones), fits a 3×3 colour matrix + gamma, and writes them to config.
+    Use <strong>Apply &amp; Save</strong> to keep them in config.yaml.</p>
     <div class="source-actions">
       <a class="btn" id="btn-color-cal-display" href="/calibrate/display" target="_blank" rel="noopener">Open patch page on TV (HDMI)</a>
       <button type="button" class="btn btn-primary" id="btn-color-cal-start">Start</button>

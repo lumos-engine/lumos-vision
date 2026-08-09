@@ -129,6 +129,29 @@ def test_auto_exposure_holds_its_gain_on_a_black_frame():
     assert stage.status()["exposure_gain"] == pytest.approx(gain, abs=0.01)
 
 
+def test_color_stage_applies_matrix_before_lut():
+    # Swap B and R: corrected = measured @ [[0,0,1],[0,1,0],[1,0,0]].
+    config = ColorConfig(
+        matrix_enabled=True,
+        matrix=[0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0],
+    )
+    stage = ColorStage(config, PipelineState())
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    image[:] = (10, 40, 200)  # mostly red in BGR
+    out = run(stage, image).image
+    assert int(out[0, 0, 0]) == pytest.approx(200, abs=1)
+    assert int(out[0, 0, 1]) == pytest.approx(40, abs=1)
+    assert int(out[0, 0, 2]) == pytest.approx(10, abs=1)
+    assert stage.status()["matrix_enabled"] is True
+
+
+def test_identity_matrix_is_noop():
+    config = ColorConfig(matrix_enabled=True)
+    stage = ColorStage(config, PipelineState())
+    image = grey_image(90)
+    assert np.array_equal(run(stage, image).image, image)
+
+
 # ----------------------------------------------------------- crop / reflect
 
 

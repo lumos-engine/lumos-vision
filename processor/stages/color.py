@@ -4,11 +4,11 @@ Cameras lie: cheap sensors have a colour cast, auto-exposure drifts, and the
 result is LEDs that are noticeably warmer or duller than the picture they are
 supposed to be echoing.
 
-Everything that can be expressed per channel -- white balance gains, exposure
+An optional 3×3 BGR matrix (from the solid-patch wizard) runs first.  Then
+everything that can be expressed per channel -- white balance gains, exposure
 gain, contrast, brightness and gamma -- is folded into one 256-entry lookup
 table per channel and applied in a single ``cv2.LUT`` call.  Saturation needs
-cross-channel information, so it gets one extra pass.  Two OpenCV calls total,
-regardless of how many corrections are switched on.
+cross-channel information, so it gets one extra pass.
 """
 
 from __future__ import annotations
@@ -21,10 +21,16 @@ import numpy as np
 from processor.config.schema import ColorConfig
 from processor.pipeline.context import FrameContext, PipelineState
 from processor.pipeline.stage import Stage
+from processor.utils.color_calibrate import (
+    apply_matrix_bgr,
+    is_identity_matrix,
+    matrix_from_flat,
+)
 from processor.utils.smoothing import EMA
 
 #: BGR order, matching OpenCV's channel layout.
 _LUMA_WEIGHTS = np.array([0.114, 0.587, 0.299], dtype=np.float32)
+_IDENTITY_FLAT = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 
 
 def build_lut(
@@ -69,6 +75,8 @@ class ColorStage(Stage):
         self._exposure = EMA(alpha=max(config.exposure.smoothing, 1e-3), initial=1.0)
         self._lut: np.ndarray | None = None
         self._lut_key: tuple | None = None
+        self._matrix: np.ndarray | None = None
+        self._matrix_key: tuple | None = None
         self._measured = {"gains": [1.0, 1.0, 1.0], "exposure": 1.0, "luma": 0.0}
 
     # -- lifecycle ---------------------------------------------------------
@@ -78,17 +86,22 @@ class ColorStage(Stage):
         self._exposure.reset(1.0)
         self._lut = None
         self._lut_key = None
+        self._matrix = None
+        self._matrix_key = None
 
     def on_config_changed(self) -> None:
         self._wb.alpha = max(self.config.wb_smoothing, 1e-3)
         self._exposure.alpha = max(self.config.exposure.smoothing, 1e-3)
         self._lut = None
         self._lut_key = None
+        self._matrix = None
+        self._matrix_key = None
 
     def status(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "white_balance": self.config.white_balance,
+            "matrix_enabled": bool(self.config.matrix_enabled),
             "gains": [round(g, 3) for g in self._measured["gains"]],
             "exposure_gain": round(float(self._measured["exposure"]), 3),
             "mean_luma": round(float(self._measured["luma"]), 1),
@@ -101,6 +114,10 @@ class ColorStage(Stage):
         if image.ndim != 3 or image.shape[2] != 3:
             ctx.skipped[self.name] = "not a colour image"
             return
+
+        matrix = self._resolve_matrix()
+        if matrix is not None:
+            image = apply_matrix_bgr(image, matrix)
 
         gains = self._resolve_gains(image)
         exposure = self._resolve_exposure(image)
@@ -141,6 +158,7 @@ class ColorStage(Stage):
             exposure=round(exposure, 3),
             saturation=saturation,
             gamma=self.config.gamma,
+            matrix=bool(matrix is not None),
         )
 
     # -- measurement -------------------------------------------------------
@@ -148,6 +166,19 @@ class ColorStage(Stage):
     def _sample(self, image: np.ndarray) -> np.ndarray:
         """Every 4th pixel; plenty for a global statistic and 16x cheaper."""
         return image[::4, ::4].reshape(-1, 3).astype(np.float32)
+
+    def _resolve_matrix(self) -> np.ndarray | None:
+        if not self.config.matrix_enabled:
+            return None
+        values = list(self.config.matrix or _IDENTITY_FLAT)
+        if len(values) != 9:
+            return None
+        key = (True, *tuple(round(float(v), 5) for v in values))
+        if key != self._matrix_key or self._matrix is None:
+            mat = matrix_from_flat(values)
+            self._matrix = None if is_identity_matrix(mat) else mat.astype(np.float32)
+            self._matrix_key = key
+        return self._matrix
 
     def _resolve_gains(self, image: np.ndarray) -> tuple[float, float, float]:
         mode = (self.config.white_balance or "off").lower()

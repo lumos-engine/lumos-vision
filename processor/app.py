@@ -850,14 +850,18 @@ class Processor:
                     "ok": False,
                     "error": "mark TV corners first so the sample ROI is on-panel",
                 }
-            # Measuring must see the uncorrected panel.
-            if self.config.color.white_balance != "off" or abs(
-                self.config.color.gamma - 1.0
-            ) > 1e-3:
+            # Measuring must see the uncorrected panel (no WB / matrix / gamma).
+            needs_bypass = (
+                self.config.color.white_balance != "off"
+                or self.config.color.matrix_enabled
+                or abs(self.config.color.gamma - 1.0) > 1e-3
+            )
+            if needs_bypass:
                 self.config = apply_updates(
                     self.config,
                     {
                         "color.white_balance": "off",
+                        "color.matrix_enabled": False,
                         "color.gamma": 1.0,
                         "color.exposure.enabled": False,
                     },
@@ -886,22 +890,26 @@ class Processor:
                     "error": "no calibration solution yet — run Colour calibrate first",
                 }
             r, g, b = solution.gains_rgb()
+            matrix = solution.matrix_flat()
             updates = {
                 "color.white_balance": "manual",
                 "color.gains.r": r,
                 "color.gains.g": g,
                 "color.gains.b": b,
+                "color.matrix_enabled": True,
+                "color.matrix": matrix,
                 "color.gamma": solution.gamma,
                 "color.exposure.enabled": False,
                 "color.calibration.calibrated_at": iso_now(),
                 "color.calibration.patch_means_bgr": solution.patch_means_bgr,
+                "color.calibration.matrix": matrix,
                 "color.calibration.notes": list(solution.notes),
             }
             self.config = apply_updates(self.config, updates)
             apply_pipeline_config(self.pipeline, self.config)
             saved_path = str(self.save()) if save else None
             log.info(
-                "Colour calibration applied (gains R%.3f G%.3f B%.3f gamma %.3f)%s",
+                "Colour calibration applied (3×3 matrix, gains R%.3f G%.3f B%.3f gamma %.3f)%s",
                 r,
                 g,
                 b,

@@ -216,6 +216,10 @@ class ColorCalibrationInfo:
     calibrated_at: str = ""
     #: Measured mean BGR per patch name, e.g. ``{"white": [b, g, r]}``.
     patch_means_bgr: dict[str, list[float]] = field(default_factory=dict)
+    #: Fitted 3×3 BGR matrix (row-major, 9 floats) from the last apply.
+    matrix: list[float] = field(
+        default_factory=lambda: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    )
     notes: list[str] = field(default_factory=list)
 
 
@@ -228,6 +232,12 @@ class ColorConfig:
     wb_strength: float = 0.6
     wb_smoothing: float = 0.05
     gains: GainsConfig = field(default_factory=GainsConfig)
+    #: When true, apply ``matrix`` (3×3 BGR) before the per-channel LUT.
+    matrix_enabled: bool = False
+    #: Row-major 3×3 BGR: ``corrected = measured @ matrix``. Identity = no-op.
+    matrix: list[float] = field(
+        default_factory=lambda: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    )
     exposure: ExposureConfig = field(default_factory=ExposureConfig)
     gamma: float = 1.0
     brightness: float = 1.0
