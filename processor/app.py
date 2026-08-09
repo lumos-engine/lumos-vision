@@ -97,8 +97,7 @@ class Processor:
         self.want_debug_views = False
 
         self._idle = False
-        #: ``None`` until the first HyperHDR LEDDEVICE request (unknown).
-        self._leds_off: bool | None = None
+        self._leds_off = False
         self._last_power_check = 0.0
         self._black_frame: np.ndarray | None = None
         self._logged_reconnect_ping = False
@@ -180,7 +179,9 @@ class Processor:
             self.start()
         assert self.sinks is not None
 
-        min_interval = 1.0 / self.config.output.fps if self.config.output.fps > 0 else 0.0
+        min_interval = (
+            1.0 / self.config.output.fps if self.config.output.fps > 0 else 0.0
+        )
         last_processed = 0.0
         self._loop_active = True
 
@@ -364,19 +365,13 @@ class Processor:
         )
 
     def _set_leds_unlocked(self, enabled: bool) -> None:
-        # HyperHDR's web UI reloads from the last *saved* config whenever
-        # LEDDEVICE is toggled over JSON-RPC. Skip no-op calls so idle/ping
-        # chatter does not wipe unsaved brightness / LED-plugin edits.
-        want_off = not enabled
-        if self._leds_off is not None and want_off == self._leds_off:
-            return
         url = (self.config.power.hyperhdr_url or "").strip()
         if not url:
-            self._leds_off = want_off
+            self._leds_off = not enabled
             return
         result = set_led_device(url, enabled)
         # Track requested state even if HyperHDR is briefly unreachable.
-        self._leds_off = want_off
+        self._leds_off = not enabled
         if not result.get("ok") and not result.get("skipped"):
             log.warning("LEDDEVICE toggle incomplete: %s", result.get("error"))
 
@@ -478,7 +473,8 @@ class Processor:
                 else:
                     self._recreate_source_unlocked()
             elif any(
-                key == "camera.controls" or key.startswith("camera.controls.") for key in updates
+                key == "camera.controls" or key.startswith("camera.controls.")
+                for key in updates
             ):
                 # Hardware UVC knobs live on the camera, not in the colour stage.
                 self._apply_camera_controls(dict(new_config.camera.controls))
@@ -603,7 +599,10 @@ class Processor:
                 try:
                     cleaned[name] = int(value)
                 except (TypeError, ValueError):
-                    return {"ok": False, "error": f"control {name!r} must be an integer"}
+                    return {
+                        "ok": False,
+                        "error": f"control {name!r} must be an integer",
+                    }
 
             result = self._apply_camera_controls(cleaned)
             if result.get("applied"):
@@ -663,7 +662,10 @@ class Processor:
             if frame is None:
                 return {"ok": False, "error": "no frame available yet"}
             if not isinstance(stage, BoundaryStage):
-                return {"ok": False, "error": "the boundary stage is not in the pipeline"}
+                return {
+                    "ok": False,
+                    "error": "the boundary stage is not in the pipeline",
+                }
 
             quad, confidence = stage.detect_now(frame)
             if quad is None:
@@ -750,7 +752,9 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def create_processor(config: Config, config_path: str | Path | None = None) -> Processor:
+def create_processor(
+    config: Config, config_path: str | Path | None = None
+) -> Processor:
     return Processor(config, config_path)
 
 

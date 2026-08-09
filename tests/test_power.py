@@ -91,21 +91,6 @@ def _processor(**power) -> Processor:
     return app
 
 
-def test_led_toggle_skips_redundant_hyperhdr_calls(monkeypatch):
-    calls: list[bool] = []
-    monkeypatch.setattr(
-        "processor.app.set_led_device",
-        lambda url, enabled, **kw: calls.append(bool(enabled)) or {"ok": True},
-    )
-    app = _processor(tv_host="", hyperhdr_url="http://127.0.0.1:8090")
-    app._set_leds_unlocked(True)
-    app._set_leds_unlocked(True)
-    app._set_leds_unlocked(False)
-    app._set_leds_unlocked(False)
-    app._set_leds_unlocked(True)
-    assert calls == [True, False, True]
-
-
 def test_power_disabled_never_idles(monkeypatch):
     monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: False)
     app = _processor(tv_host="")
