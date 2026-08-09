@@ -24,6 +24,10 @@ log = get_logger(__name__)
 
 #: Matches scrcpy's CameraCapture.ZOOM_FACTOR (1 + 1/16).
 ZOOM_STEP = 1.0 + 1.0 / 16.0
+#: Pan step for wizard ←/→/↑/↓ (normalised -1..1).
+PAN_STEP = 0.12
+#: Minimum ``view_zoom`` so a pan step has crop room to move into.
+MIN_VIEW_ZOOM_FOR_PAN = 1.25
 
 _DEFAULT_BINARIES = (
     "scrcpy",
@@ -39,6 +43,10 @@ class ScrcpyStatus:
     running: bool
     pid: int | None
     zoom: float
+    view_zoom: float
+    pan_x: float
+    pan_y: float
+    crop: str
     camera_id: str
     camera_size: str
     camera_fps: int
@@ -53,6 +61,10 @@ class ScrcpyStatus:
             "running": self.running,
             "pid": self.pid,
             "zoom": self.zoom,
+            "view_zoom": self.view_zoom,
+            "pan_x": self.pan_x,
+            "pan_y": self.pan_y,
+            "crop": self.crop,
             "camera_id": self.camera_id,
             "camera_size": self.camera_size,
             "camera_fps": self.camera_fps,
@@ -95,6 +107,76 @@ def step_zoom(current: float, *, inward: bool, cfg: ScrcpyConfig) -> float:
     return clamp_zoom(ZOOM_STEP**index, cfg)
 
 
+def clamp_pan(value: float) -> float:
+    return max(-1.0, min(1.0, float(value)))
+
+
+def clamp_view_zoom(value: float) -> float:
+    return max(1.0, min(8.0, float(value)))
+
+
+def parse_camera_size(size: str) -> tuple[int, int]:
+    text = (size or "").strip().lower().replace("*", "x")
+    if "x" not in text:
+        raise ValueError(f"camera_size must look like 1920x1080, got {size!r}")
+    left, right = text.split("x", 1)
+    width, height = int(left), int(right)
+    if width < 16 or height < 16:
+        raise ValueError(f"camera_size too small: {size!r}")
+    return width, height
+
+
+def build_crop_arg(cfg: ScrcpyConfig) -> str:
+    """Return scrcpy ``--crop=W:H:X:Y`` or ``\"\"`` when framing is full-frame."""
+    width, height = parse_camera_size(cfg.camera_size)
+    view_zoom = clamp_view_zoom(cfg.view_zoom)
+    pan_x = clamp_pan(cfg.pan_x)
+    pan_y = clamp_pan(cfg.pan_y)
+    if view_zoom <= 1.001 and abs(pan_x) < 1e-3 and abs(pan_y) < 1e-3:
+        return ""
+
+    crop_w = max(16, int(width / view_zoom) // 2 * 2)
+    crop_h = max(16, int(height / view_zoom) // 2 * 2)
+    crop_w = min(crop_w, width)
+    crop_h = min(crop_h, height)
+    max_x = max(0, width - crop_w)
+    max_y = max(0, height - crop_h)
+    origin_x = int(round((pan_x + 1.0) / 2.0 * max_x))
+    origin_y = int(round((pan_y + 1.0) / 2.0 * max_y))
+    origin_x = max(0, min(max_x, origin_x))
+    origin_y = max(0, min(max_y, origin_y))
+    return f"{crop_w}:{crop_h}:{origin_x}:{origin_y}"
+
+
+def step_pan(
+    cfg: ScrcpyConfig, *, direction: str
+) -> tuple[float, float, float]:
+    """Return ``(pan_x, pan_y, view_zoom)`` after one pan step.
+
+    Ensures ``view_zoom`` is high enough that the crop window can actually move.
+    """
+    pan_x = clamp_pan(cfg.pan_x)
+    pan_y = clamp_pan(cfg.pan_y)
+    view_zoom = clamp_view_zoom(cfg.view_zoom)
+    key = (direction or "").strip().lower()
+    if key in {"left", "west", "l"}:
+        pan_x = clamp_pan(pan_x - PAN_STEP)
+    elif key in {"right", "east", "r"}:
+        pan_x = clamp_pan(pan_x + PAN_STEP)
+    elif key in {"up", "north", "u"}:
+        pan_y = clamp_pan(pan_y - PAN_STEP)
+    elif key in {"down", "south", "d"}:
+        pan_y = clamp_pan(pan_y + PAN_STEP)
+    elif key in {"center", "centre", "reset"}:
+        pan_x, pan_y = 0.0, 0.0
+    else:
+        raise ValueError(f"unknown pan direction: {direction!r}")
+
+    if key != "center" and (abs(pan_x) > 1e-3 or abs(pan_y) > 1e-3):
+        view_zoom = max(view_zoom, MIN_VIEW_ZOOM_FOR_PAN)
+    return pan_x, pan_y, view_zoom
+
+
 def build_scrcpy_command(cfg: ScrcpyConfig, *, binary: str | None = None) -> list[str]:
     exe = binary or resolve_scrcpy_binary(cfg.binary)
     cmd = [
@@ -106,6 +188,9 @@ def build_scrcpy_command(cfg: ScrcpyConfig, *, binary: str | None = None) -> lis
         f"--camera-zoom={clamp_zoom(cfg.camera_zoom, cfg):g}",
         f"--v4l2-sink={cfg.v4l2_sink}",
     ]
+    crop = build_crop_arg(cfg)
+    if crop:
+        cmd.append(f"--crop={crop}")
     if cfg.no_audio:
         cmd.append("--no-audio")
     if cfg.no_playback:
@@ -150,6 +235,10 @@ class ScrcpyManager:
             running=alive,
             pid=pid,
             zoom=float(cfg.camera_zoom),
+            view_zoom=float(cfg.view_zoom),
+            pan_x=float(cfg.pan_x),
+            pan_y=float(cfg.pan_y),
+            crop=build_crop_arg(cfg),
             camera_id=str(cfg.camera_id),
             camera_size=str(cfg.camera_size),
             camera_fps=int(cfg.camera_fps),
@@ -324,11 +413,18 @@ def _sink_has_capture(device: str) -> bool:
 
 
 __all__ = [
+    "MIN_VIEW_ZOOM_FOR_PAN",
+    "PAN_STEP",
     "ZOOM_STEP",
     "ScrcpyManager",
     "ScrcpyStatus",
+    "build_crop_arg",
     "build_scrcpy_command",
+    "clamp_pan",
+    "clamp_view_zoom",
     "clamp_zoom",
+    "parse_camera_size",
     "resolve_scrcpy_binary",
+    "step_pan",
     "step_zoom",
 ]

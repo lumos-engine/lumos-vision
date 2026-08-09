@@ -401,6 +401,13 @@ class ScrcpyConfig:
     camera_zoom: float = 1.0
     zoom_min: float = 1.0
     zoom_max: float = 10.0
+    #: Extra digital framing zoom via scrcpy ``--crop`` (needed to pan).
+    #: 1.0 = full frame (no pan room).  ~1.2–2.0 leaves room to shift.
+    view_zoom: float = 1.0
+    #: Horizontal pan in the crop window: -1 = leftmost, +1 = rightmost.
+    pan_x: float = 0.0
+    #: Vertical pan: -1 = top, +1 = bottom.
+    pan_y: float = 0.0
     #: Loopback node scrcpy writes; Screen Sight should capture this device.
     v4l2_sink: str = "/dev/video11"
     no_playback: bool = True

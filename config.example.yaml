@@ -132,6 +132,9 @@ logging:
 #   camera_zoom: 1.0                # phone Camera2 zoom (1..zoom_max)
 #   zoom_min: 1.0
 #   zoom_max: 10.0
+#   view_zoom: 1.25                 # scrcpy --crop zoom (pan needs >1)
+#   pan_x: 0.0                      # -1 left .. +1 right
+#   pan_y: 0.0                      # -1 up .. +1 down
 #   v4l2_sink: /dev/video11
 #   bind_camera: true               # also set camera.device to the sink
 #   no_playback: true

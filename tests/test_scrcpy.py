@@ -5,10 +5,13 @@ from __future__ import annotations
 from processor.config.loader import apply_updates, config_to_dict
 from processor.config.schema import Config, ScrcpyConfig
 from processor.utils.scrcpy import (
+    MIN_VIEW_ZOOM_FOR_PAN,
     ZOOM_STEP,
     ScrcpyManager,
+    build_crop_arg,
     build_scrcpy_command,
     clamp_zoom,
+    step_pan,
     step_zoom,
 )
 
@@ -44,6 +47,27 @@ def test_step_zoom_matches_scrcpy_factor():
     assert abs(z - ZOOM_STEP) < 1e-6
     assert abs(step_zoom(z, inward=False, cfg=cfg) - 1.0) < 1e-6
     assert clamp_zoom(99.0, cfg) == 10.0
+
+
+def test_crop_arg_pans_within_camera_size():
+    cfg = ScrcpyConfig(
+        camera_size="1920x1080",
+        view_zoom=2.0,
+        pan_x=-1.0,
+        pan_y=0.0,
+    )
+    assert build_crop_arg(cfg) == "960:540:0:270"
+    cfg.pan_x = 1.0
+    assert build_crop_arg(cfg) == "960:540:960:270"
+    assert build_crop_arg(ScrcpyConfig(camera_size="1920x1080")) == ""
+
+
+def test_step_pan_left_raises_view_zoom():
+    cfg = ScrcpyConfig(view_zoom=1.0, pan_x=0.0, pan_y=0.0)
+    pan_x, pan_y, view_zoom = step_pan(cfg, direction="left")
+    assert pan_x < 0
+    assert pan_y == 0.0
+    assert view_zoom >= MIN_VIEW_ZOOM_FOR_PAN
 
 
 def test_config_round_trip_includes_scrcpy(tmp_path):
@@ -133,6 +157,10 @@ def test_apply_scrcpy_zoom_restarts(monkeypatch):
                 running=self._running,
                 pid=1 if self._running else None,
                 zoom=cfg.camera_zoom,
+                view_zoom=cfg.view_zoom,
+                pan_x=cfg.pan_x,
+                pan_y=cfg.pan_y,
+                crop="",
                 camera_id=cfg.camera_id,
                 camera_size=cfg.camera_size,
                 camera_fps=cfg.camera_fps,
@@ -183,3 +211,64 @@ def test_apply_updates_can_set_scrcpy_zoom():
     updated = apply_updates(config, {"scrcpy.enabled": True, "scrcpy.camera_zoom": 2.5})
     assert updated.scrcpy.enabled is True
     assert updated.scrcpy.camera_zoom == 2.5
+
+
+def test_apply_scrcpy_pan_left(monkeypatch):
+    from processor.app import Processor
+
+    class FakeMgr:
+        def __init__(self):
+            self._running = False
+
+        def status(self, cfg):
+            from processor.utils.scrcpy import ScrcpyStatus
+
+            return ScrcpyStatus(
+                enabled=cfg.enabled,
+                running=self._running,
+                pid=1 if self._running else None,
+                zoom=cfg.camera_zoom,
+                view_zoom=cfg.view_zoom,
+                pan_x=cfg.pan_x,
+                pan_y=cfg.pan_y,
+                crop="",
+                camera_id=cfg.camera_id,
+                camera_size=cfg.camera_size,
+                camera_fps=cfg.camera_fps,
+                v4l2_sink=cfg.v4l2_sink,
+                binary=cfg.binary,
+                last_error="",
+                command=[],
+            )
+
+        def stop(self):
+            self._running = False
+            return {"ok": True, "running": False}
+
+        def ensure_running(self, cfg):
+            self._running = True
+            return {"ok": True, "running": True, "pid": 1}
+
+        def restart(self, cfg):
+            self._running = True
+            return {"ok": True, "running": True, "pid": 1, "pan_x": cfg.pan_x}
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "synthetic", "replay_fps": 60},
+            "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+            "scrcpy": {"enabled": True, "bind_camera": False},
+        }
+    )
+    app = Processor(config)
+    app._scrcpy = FakeMgr()
+    monkeypatch.setattr(app, "_recreate_source_unlocked", lambda: {"ok": True})
+    app.start()
+    try:
+        result = app.apply_scrcpy(action="pan_left")
+        assert result["ok"] is True
+        assert app.config.scrcpy.pan_x < 0
+        assert app.config.scrcpy.view_zoom >= MIN_VIEW_ZOOM_FOR_PAN
+    finally:
+        app.shutdown()

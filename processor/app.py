@@ -32,7 +32,14 @@ from processor.pipeline.registry import build_pipeline
 from processor.stages.boundary import BoundaryStage
 from processor.utils.hyperhdr_leds import set_led_device
 from processor.utils.logging import get_logger
-from processor.utils.scrcpy import ScrcpyManager, clamp_zoom, step_zoom
+from processor.utils.scrcpy import (
+    ScrcpyManager,
+    clamp_pan,
+    clamp_view_zoom,
+    clamp_zoom,
+    step_pan,
+    step_zoom,
+)
 from processor.utils.timing import FpsMeter
 from processor.utils.tv_presence import PresenceMonitor, ping_host
 
@@ -71,6 +78,9 @@ _SCRCPY_RESTART_KEYS = frozenset(
         "scrcpy.camera_zoom",
         "scrcpy.zoom_min",
         "scrcpy.zoom_max",
+        "scrcpy.view_zoom",
+        "scrcpy.pan_x",
+        "scrcpy.pan_y",
         "scrcpy.v4l2_sink",
         "scrcpy.no_playback",
         "scrcpy.no_audio",
@@ -714,6 +724,9 @@ class Processor:
                     "camera_zoom",
                     "zoom_min",
                     "zoom_max",
+                    "view_zoom",
+                    "pan_x",
+                    "pan_y",
                     "v4l2_sink",
                     "no_playback",
                     "no_audio",
@@ -722,6 +735,15 @@ class Processor:
                     "extra_args",
                 }:
                     updates[f"scrcpy.{key}"] = value
+
+            if "scrcpy.pan_x" in updates:
+                updates["scrcpy.pan_x"] = clamp_pan(float(updates["scrcpy.pan_x"]))
+            if "scrcpy.pan_y" in updates:
+                updates["scrcpy.pan_y"] = clamp_pan(float(updates["scrcpy.pan_y"]))
+            if "scrcpy.view_zoom" in updates:
+                updates["scrcpy.view_zoom"] = clamp_view_zoom(
+                    float(updates["scrcpy.view_zoom"])
+                )
 
             if action_name == "zoom_in":
                 updates["scrcpy.camera_zoom"] = step_zoom(
@@ -739,6 +761,15 @@ class Processor:
                 updates["scrcpy.camera_zoom"] = clamp_zoom(
                     float(updates["scrcpy.camera_zoom"]), self.config.scrcpy
                 )
+                updates.setdefault("scrcpy.enabled", True)
+            elif action_name.startswith("pan_"):
+                direction = action_name[len("pan_") :]
+                pan_x, pan_y, view_zoom = step_pan(
+                    self.config.scrcpy, direction=direction
+                )
+                updates["scrcpy.pan_x"] = pan_x
+                updates["scrcpy.pan_y"] = pan_y
+                updates["scrcpy.view_zoom"] = view_zoom
                 updates.setdefault("scrcpy.enabled", True)
             elif action_name == "start":
                 updates["scrcpy.enabled"] = True

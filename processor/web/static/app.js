@@ -265,11 +265,15 @@ let scrcpyPanelState = {
   camera_size: '1920x1080',
   camera_fps: 30,
   camera_zoom: 1,
+  view_zoom: 1,
+  pan_x: 0,
+  pan_y: 0,
   zoom_min: 1,
   zoom_max: 10,
   v4l2_sink: '/dev/video11',
   running: false,
   last_error: '',
+  crop: '',
 };
 
 function applyScrcpyPanelFromConfig(config) {
@@ -283,6 +287,9 @@ function applyScrcpyPanelFromConfig(config) {
     camera_size: sc.camera_size || '1920x1080',
     camera_fps: Number(sc.camera_fps || 30),
     camera_zoom: Number(sc.camera_zoom || 1),
+    view_zoom: Number(sc.view_zoom || 1),
+    pan_x: Number(sc.pan_x || 0),
+    pan_y: Number(sc.pan_y || 0),
     zoom_min: Number(sc.zoom_min || 1),
     zoom_max: Number(sc.zoom_max || 10),
     v4l2_sink: sc.v4l2_sink || '/dev/video11',
@@ -304,16 +311,22 @@ function syncScrcpyForm() {
   set('scrcpy-camera-size', scrcpyPanelState.camera_size);
   set('scrcpy-camera-fps', scrcpyPanelState.camera_fps);
   set('scrcpy-zoom', scrcpyPanelState.camera_zoom);
+  set('scrcpy-view-zoom', scrcpyPanelState.view_zoom);
   set('scrcpy-sink', scrcpyPanelState.v4l2_sink);
   const zoomLabel = $('scrcpy-zoom-label');
   if (zoomLabel) zoomLabel.textContent = Number(scrcpyPanelState.camera_zoom).toFixed(2);
+  const viewLabel = $('scrcpy-view-zoom-label');
+  if (viewLabel) viewLabel.textContent = Number(scrcpyPanelState.view_zoom).toFixed(2);
   const meta = $('scrcpy-meta');
   if (meta) {
     const bits = [
       scrcpyPanelState.running ? 'running' : 'stopped',
-      `zoom ${Number(scrcpyPanelState.camera_zoom).toFixed(2)}`,
+      `phone ${Number(scrcpyPanelState.camera_zoom).toFixed(2)}×`,
+      `frame ${Number(scrcpyPanelState.view_zoom).toFixed(2)}×`,
+      `pan ${Number(scrcpyPanelState.pan_x).toFixed(2)},${Number(scrcpyPanelState.pan_y).toFixed(2)}`,
       scrcpyPanelState.v4l2_sink,
     ];
+    if (scrcpyPanelState.crop) bits.push(`crop ${scrcpyPanelState.crop}`);
     if (scrcpyPanelState.last_error) bits.push(scrcpyPanelState.last_error);
     meta.textContent = bits.join(' · ');
   }
@@ -328,6 +341,9 @@ function readScrcpyFields() {
     camera_size: ($('scrcpy-camera-size')?.value || '1920x1080').trim(),
     camera_fps: Number($('scrcpy-camera-fps')?.value || 30),
     camera_zoom: Number($('scrcpy-zoom')?.value || 1),
+    view_zoom: Number($('scrcpy-view-zoom')?.value || 1),
+    pan_x: Number(scrcpyPanelState.pan_x || 0),
+    pan_y: Number(scrcpyPanelState.pan_y || 0),
     v4l2_sink: ($('scrcpy-sink')?.value || '/dev/video11').trim(),
     bind_camera: true,
     no_audio: true,
@@ -344,6 +360,10 @@ async function postScrcpy(action, fields, { save = false } = {}) {
     scrcpyPanelState.running = Boolean(result.scrcpy.running);
     scrcpyPanelState.last_error = result.scrcpy.last_error || '';
     scrcpyPanelState.camera_zoom = Number(result.scrcpy.zoom || scrcpyPanelState.camera_zoom);
+    scrcpyPanelState.view_zoom = Number(result.scrcpy.view_zoom ?? scrcpyPanelState.view_zoom);
+    scrcpyPanelState.pan_x = Number(result.scrcpy.pan_x ?? scrcpyPanelState.pan_x);
+    scrcpyPanelState.pan_y = Number(result.scrcpy.pan_y ?? scrcpyPanelState.pan_y);
+    scrcpyPanelState.crop = result.scrcpy.crop || '';
   }
   if (result.config) {
     applyConfig(result.config);
@@ -367,9 +387,10 @@ async function buildScrcpyPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Android cam (scrcpy)</h3>
-    <p class="hint">Screen Sight starts scrcpy and writes the phone camera to a
-    v4l2 loopback. Zoom uses the phone’s Camera2 zoom (better colour than
-    software crop). Absolute zoom needs a brief scrcpy reconnect — handled here.</p>
+    <p class="hint">Screen Sight starts scrcpy → loopback. <strong>Phone zoom</strong>
+    is Camera2 (better colour). <strong>Frame zoom + pan</strong> uses scrcpy
+    <code>--crop</code> so you can shift left/right/up/down. Changes briefly
+    reconnect scrcpy.</p>
     <div class="control">
       <label class="check"><input type="checkbox" id="scrcpy-enabled"> Manage scrcpy</label>
     </div>
@@ -401,19 +422,41 @@ async function buildScrcpyPanel() {
       <label for="scrcpy-zoom">Phone zoom (<span id="scrcpy-zoom-label">1.00</span>×)</label>
       <input id="scrcpy-zoom" type="range" min="1" max="10" step="0.0625" value="1">
     </div>
+    <div class="control">
+      <label for="scrcpy-view-zoom">Frame zoom / pan room (<span id="scrcpy-view-zoom-label">1.00</span>×)</label>
+      <input id="scrcpy-view-zoom" type="range" min="1" max="4" step="0.05" value="1">
+    </div>
     <p class="source-meta" id="scrcpy-meta"></p>
     <div class="source-actions">
       <button type="button" class="btn" id="btn-scrcpy-zoom-out">Zoom −</button>
       <button type="button" class="btn" id="btn-scrcpy-zoom-in">Zoom +</button>
+      <button type="button" class="btn" id="btn-scrcpy-pan-left" title="Pan left">←</button>
+      <button type="button" class="btn" id="btn-scrcpy-pan-right" title="Pan right">→</button>
+      <button type="button" class="btn" id="btn-scrcpy-pan-up" title="Pan up">↑</button>
+      <button type="button" class="btn" id="btn-scrcpy-pan-down" title="Pan down">↓</button>
+      <button type="button" class="btn" id="btn-scrcpy-pan-center">Center</button>
       <button type="button" class="btn btn-primary" id="btn-scrcpy-apply">Apply</button>
       <button type="button" class="btn" id="btn-scrcpy-save">Apply &amp; Save</button>
     </div>`;
   root.append(section);
 
-  $('scrcpy-zoom')?.addEventListener('input', () => {
-    const zoomLabel = $('scrcpy-zoom-label');
-    if (zoomLabel) zoomLabel.textContent = Number($('scrcpy-zoom').value).toFixed(2);
-  });
+  const bindZoomLabel = (inputId, labelId) => {
+    $(inputId)?.addEventListener('input', () => {
+      const label = $(labelId);
+      if (label) label.textContent = Number($(inputId).value).toFixed(2);
+    });
+  };
+  bindZoomLabel('scrcpy-zoom', 'scrcpy-zoom-label');
+  bindZoomLabel('scrcpy-view-zoom', 'scrcpy-view-zoom-label');
+
+  const panToast = () => {
+    toast(
+      `Pan ${Number(scrcpyPanelState.pan_x).toFixed(2)}, `
+      + `${Number(scrcpyPanelState.pan_y).toFixed(2)} · frame `
+      + `${Number(scrcpyPanelState.view_zoom).toFixed(2)}×`
+    );
+  };
+
   $('btn-scrcpy-zoom-in')?.addEventListener('click', async () => {
     try {
       await postScrcpy('zoom_in', {});
@@ -432,6 +475,22 @@ async function buildScrcpyPanel() {
       toast(err.message, 'error');
     }
   });
+  for (const [id, action] of [
+    ['btn-scrcpy-pan-left', 'pan_left'],
+    ['btn-scrcpy-pan-right', 'pan_right'],
+    ['btn-scrcpy-pan-up', 'pan_up'],
+    ['btn-scrcpy-pan-down', 'pan_down'],
+    ['btn-scrcpy-pan-center', 'pan_center'],
+  ]) {
+    $(id)?.addEventListener('click', async () => {
+      try {
+        await postScrcpy(action, {});
+        panToast();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  }
   $('btn-scrcpy-apply')?.addEventListener('click', async () => {
     try {
       await postScrcpy('apply', readScrcpyFields(), { save: false });
@@ -1058,9 +1117,15 @@ async function refresh() {
   if (status.scrcpy) {
     scrcpyPanelState.running = Boolean(status.scrcpy.running);
     scrcpyPanelState.last_error = status.scrcpy.last_error || '';
+    scrcpyPanelState.crop = status.scrcpy.crop || '';
     if (status.scrcpy.zoom != null && document.activeElement !== $('scrcpy-zoom')) {
       scrcpyPanelState.camera_zoom = Number(status.scrcpy.zoom);
     }
+    if (status.scrcpy.view_zoom != null && document.activeElement !== $('scrcpy-view-zoom')) {
+      scrcpyPanelState.view_zoom = Number(status.scrcpy.view_zoom);
+    }
+    if (status.scrcpy.pan_x != null) scrcpyPanelState.pan_x = Number(status.scrcpy.pan_x);
+    if (status.scrcpy.pan_y != null) scrcpyPanelState.pan_y = Number(status.scrcpy.pan_y);
     syncScrcpyForm();
   }
 

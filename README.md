@@ -70,11 +70,11 @@ post-process frames after capture.
 
 For an **Android phone camera over USB**, enable the **Android cam (scrcpy)**
 panel (or `scrcpy.enabled` in YAML). Screen Sight starts scrcpy →
-`/dev/video11`, binds the capture source, and exposes phone zoom (+/− / slider).
-Scrcpy only accepts absolute zoom at process start, so zoom changes briefly
-restart the scrcpy child while the pipeline reconnects — you do not manage
-scrcpy on the CLI. Needs scrcpy ≥ 4.0 and a second v4l2loopback node (see
-`config.example.yaml`).
+`/dev/video11`, binds the capture source, and exposes phone zoom (+/−) plus
+frame pan (← → ↑ ↓) via scrcpy `--crop`. Scrcpy applies zoom/crop at process
+start, so those changes briefly restart the child while the pipeline
+reconnects — you do not manage scrcpy on the CLI. Needs scrcpy ≥ 4.0 and a
+second v4l2loopback node (see `config.example.yaml`).
 
 For **cinema / letterboxed** content: enable **Black bars**, raise **Darkness
 threshold** to ~50–70 until **Result → output** has no bars, then point
