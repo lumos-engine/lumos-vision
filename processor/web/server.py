@@ -107,6 +107,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.processor.list_camera_controls())
             if route == "/api/camera/devices":
                 return self._send_json(self._camera_devices())
+            if route == "/api/scrcpy":
+                return self._send_json(
+                    {"ok": True, "scrcpy": self.processor.scrcpy_status()}
+                )
             if route == "/api/snapshot":
                 return self._serve_snapshot(query.get("view", ["source"])[0])
             self.send_error(404, "not found")
@@ -147,6 +151,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(self.processor.set_camera_controls(controls))
             if route == "/api/camera/source":
                 return self._apply_camera_source(body)
+            if route == "/api/scrcpy":
+                return self._apply_scrcpy(body)
             self.send_error(404, "not found")
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -177,6 +183,43 @@ class _Handler(BaseHTTPRequestHandler):
             "selected": selected,
             "source": self.processor.config.camera.source,
         }
+
+    def _apply_scrcpy(self, body: dict[str, Any]) -> None:
+        action = str(body.get("action") or "apply")
+        save = bool(body.get("save"))
+        fields = body.get("fields")
+        if fields is None:
+            fields = {
+                key: body[key]
+                for key in (
+                    "enabled",
+                    "binary",
+                    "serial",
+                    "camera_id",
+                    "camera_size",
+                    "camera_fps",
+                    "camera_zoom",
+                    "zoom_min",
+                    "zoom_max",
+                    "v4l2_sink",
+                    "no_playback",
+                    "no_audio",
+                    "bind_camera",
+                    "startup_timeout_sec",
+                    "extra_args",
+                )
+                if key in body
+            }
+        if not isinstance(fields, dict):
+            return self._send_json(
+                {"ok": False, "error": "fields must be an object"}, status=400
+            )
+        try:
+            result = self.processor.apply_scrcpy(fields, action=action, save=save)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, status=400)
+        status = 200 if result.get("ok") else 400
+        self._send_json(result, status=status)
 
     def _apply_camera_source(self, body: dict[str, Any]) -> None:
         save = bool(body.get("save"))

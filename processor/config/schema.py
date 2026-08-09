@@ -380,6 +380,40 @@ class PowerConfig:
 
 
 @dataclass
+class ScrcpyConfig:
+    """Optional Android phone camera via scrcpy → v4l2loopback.
+
+    When ``enabled``, Screen Sight starts/stops scrcpy itself.  Absolute phone
+    zoom is applied with ``--camera-zoom`` (scrcpy has no external live zoom
+    API), so zoom/size changes briefly restart the child while the pipeline
+    reconnects.
+    """
+
+    enabled: bool = False
+    #: ``scrcpy`` on PATH, or an absolute path (e.g. ``/opt/scrcpy/scrcpy``).
+    binary: str = "scrcpy"
+    #: Optional ``adb`` serial (``scrcpy -s …``).
+    serial: str = ""
+    camera_id: str = "0"
+    camera_size: str = "1920x1080"
+    camera_fps: int = 30
+    #: Phone Camera2 zoom ratio (optical/hybrid until the device goes digital).
+    camera_zoom: float = 1.0
+    zoom_min: float = 1.0
+    zoom_max: float = 10.0
+    #: Loopback node scrcpy writes; Screen Sight should capture this device.
+    v4l2_sink: str = "/dev/video11"
+    no_playback: bool = True
+    no_audio: bool = True
+    #: When starting, set ``camera.source``/``device`` to this sink.
+    bind_camera: bool = True
+    #: How long to wait for the sink to advertise capture after spawn.
+    startup_timeout_sec: float = 12.0
+    #: Extra CLI tokens appended verbatim.
+    extra_args: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     camera: CameraConfig = field(default_factory=CameraConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
@@ -396,6 +430,7 @@ class Config:
     web: WebConfig = field(default_factory=WebConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     power: PowerConfig = field(default_factory=PowerConfig)
+    scrcpy: ScrcpyConfig = field(default_factory=ScrcpyConfig)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "Config":

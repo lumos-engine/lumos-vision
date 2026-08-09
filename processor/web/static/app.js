@@ -256,6 +256,205 @@ function applySourcePanelFromConfig(config) {
   syncSourceFieldsVisibility();
 }
 
+// ------------------------------------------------------------- scrcpy panel
+let scrcpyPanelState = {
+  enabled: false,
+  binary: 'scrcpy',
+  serial: '',
+  camera_id: '0',
+  camera_size: '1920x1080',
+  camera_fps: 30,
+  camera_zoom: 1,
+  zoom_min: 1,
+  zoom_max: 10,
+  v4l2_sink: '/dev/video11',
+  running: false,
+  last_error: '',
+};
+
+function applyScrcpyPanelFromConfig(config) {
+  const sc = config?.scrcpy || {};
+  scrcpyPanelState = {
+    ...scrcpyPanelState,
+    enabled: Boolean(sc.enabled),
+    binary: sc.binary || 'scrcpy',
+    serial: sc.serial || '',
+    camera_id: String(sc.camera_id ?? '0'),
+    camera_size: sc.camera_size || '1920x1080',
+    camera_fps: Number(sc.camera_fps || 30),
+    camera_zoom: Number(sc.camera_zoom || 1),
+    zoom_min: Number(sc.zoom_min || 1),
+    zoom_max: Number(sc.zoom_max || 10),
+    v4l2_sink: sc.v4l2_sink || '/dev/video11',
+  };
+  syncScrcpyForm();
+}
+
+function syncScrcpyForm() {
+  const set = (id, value) => {
+    const el = $(id);
+    if (!el) return;
+    if (el.type === 'checkbox') el.checked = Boolean(value);
+    else el.value = value;
+  };
+  set('scrcpy-enabled', scrcpyPanelState.enabled);
+  set('scrcpy-binary', scrcpyPanelState.binary);
+  set('scrcpy-serial', scrcpyPanelState.serial);
+  set('scrcpy-camera-id', scrcpyPanelState.camera_id);
+  set('scrcpy-camera-size', scrcpyPanelState.camera_size);
+  set('scrcpy-camera-fps', scrcpyPanelState.camera_fps);
+  set('scrcpy-zoom', scrcpyPanelState.camera_zoom);
+  set('scrcpy-sink', scrcpyPanelState.v4l2_sink);
+  const zoomLabel = $('scrcpy-zoom-label');
+  if (zoomLabel) zoomLabel.textContent = Number(scrcpyPanelState.camera_zoom).toFixed(2);
+  const meta = $('scrcpy-meta');
+  if (meta) {
+    const bits = [
+      scrcpyPanelState.running ? 'running' : 'stopped',
+      `zoom ${Number(scrcpyPanelState.camera_zoom).toFixed(2)}`,
+      scrcpyPanelState.v4l2_sink,
+    ];
+    if (scrcpyPanelState.last_error) bits.push(scrcpyPanelState.last_error);
+    meta.textContent = bits.join(' · ');
+  }
+}
+
+function readScrcpyFields() {
+  return {
+    enabled: Boolean($('scrcpy-enabled')?.checked),
+    binary: ($('scrcpy-binary')?.value || 'scrcpy').trim(),
+    serial: ($('scrcpy-serial')?.value || '').trim(),
+    camera_id: ($('scrcpy-camera-id')?.value || '0').trim(),
+    camera_size: ($('scrcpy-camera-size')?.value || '1920x1080').trim(),
+    camera_fps: Number($('scrcpy-camera-fps')?.value || 30),
+    camera_zoom: Number($('scrcpy-zoom')?.value || 1),
+    v4l2_sink: ($('scrcpy-sink')?.value || '/dev/video11').trim(),
+    bind_camera: true,
+    no_audio: true,
+    no_playback: true,
+  };
+}
+
+async function postScrcpy(action, fields, { save = false } = {}) {
+  const status = $('tune-status');
+  if (status) status.textContent = `scrcpy ${action}…`;
+  const body = { action, save, ...(fields || {}) };
+  const result = await api('/api/scrcpy', body);
+  if (result.scrcpy) {
+    scrcpyPanelState.running = Boolean(result.scrcpy.running);
+    scrcpyPanelState.last_error = result.scrcpy.last_error || '';
+    scrcpyPanelState.camera_zoom = Number(result.scrcpy.zoom || scrcpyPanelState.camera_zoom);
+  }
+  if (result.config) {
+    applyConfig(result.config);
+    applyScrcpyPanelFromConfig(result.config);
+    applySourcePanelFromConfig(result.config);
+    fillDeviceSelect(result.config.camera?.device || '');
+  } else {
+    syncScrcpyForm();
+  }
+  if (status) status.textContent = 'changes apply live';
+  if (!result.ok) throw new Error(result.error || 'scrcpy action failed');
+  return result;
+}
+
+async function buildScrcpyPanel() {
+  const root = $('scrcpy-panel');
+  if (!root) return;
+  root.innerHTML = '';
+
+  const section = document.createElement('div');
+  section.className = 'control-group';
+  section.innerHTML = `
+    <h3>Android cam (scrcpy)</h3>
+    <p class="hint">Screen Sight starts scrcpy and writes the phone camera to a
+    v4l2 loopback. Zoom uses the phone’s Camera2 zoom (better colour than
+    software crop). Absolute zoom needs a brief scrcpy reconnect — handled here.</p>
+    <div class="control">
+      <label class="check"><input type="checkbox" id="scrcpy-enabled"> Manage scrcpy</label>
+    </div>
+    <div class="control">
+      <label for="scrcpy-binary">Binary</label>
+      <input id="scrcpy-binary" type="text" spellcheck="false" placeholder="/opt/scrcpy/scrcpy">
+    </div>
+    <div class="control">
+      <label for="scrcpy-serial">ADB serial (optional)</label>
+      <input id="scrcpy-serial" type="text" spellcheck="false" placeholder="452ee42b0506">
+    </div>
+    <div class="control">
+      <label for="scrcpy-camera-id">Camera id</label>
+      <input id="scrcpy-camera-id" type="text" spellcheck="false" value="0">
+    </div>
+    <div class="control">
+      <label for="scrcpy-camera-size">Size</label>
+      <input id="scrcpy-camera-size" type="text" spellcheck="false" placeholder="1920x1080">
+    </div>
+    <div class="control">
+      <label for="scrcpy-camera-fps">FPS</label>
+      <input id="scrcpy-camera-fps" type="number" min="1" max="120" step="1" value="30">
+    </div>
+    <div class="control">
+      <label for="scrcpy-sink">V4L2 sink</label>
+      <input id="scrcpy-sink" type="text" spellcheck="false" value="/dev/video11">
+    </div>
+    <div class="control">
+      <label for="scrcpy-zoom">Phone zoom (<span id="scrcpy-zoom-label">1.00</span>×)</label>
+      <input id="scrcpy-zoom" type="range" min="1" max="10" step="0.0625" value="1">
+    </div>
+    <p class="source-meta" id="scrcpy-meta"></p>
+    <div class="source-actions">
+      <button type="button" class="btn" id="btn-scrcpy-zoom-out">Zoom −</button>
+      <button type="button" class="btn" id="btn-scrcpy-zoom-in">Zoom +</button>
+      <button type="button" class="btn btn-primary" id="btn-scrcpy-apply">Apply</button>
+      <button type="button" class="btn" id="btn-scrcpy-save">Apply &amp; Save</button>
+    </div>`;
+  root.append(section);
+
+  $('scrcpy-zoom')?.addEventListener('input', () => {
+    const zoomLabel = $('scrcpy-zoom-label');
+    if (zoomLabel) zoomLabel.textContent = Number($('scrcpy-zoom').value).toFixed(2);
+  });
+  $('btn-scrcpy-zoom-in')?.addEventListener('click', async () => {
+    try {
+      await postScrcpy('zoom_in', {});
+      toast(`Phone zoom ${Number(scrcpyPanelState.camera_zoom).toFixed(2)}×`);
+      await loadCaptureDevices();
+      fillDeviceSelect(sourcePanelState.device || scrcpyPanelState.v4l2_sink);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-scrcpy-zoom-out')?.addEventListener('click', async () => {
+    try {
+      await postScrcpy('zoom_out', {});
+      toast(`Phone zoom ${Number(scrcpyPanelState.camera_zoom).toFixed(2)}×`);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-scrcpy-apply')?.addEventListener('click', async () => {
+    try {
+      await postScrcpy('apply', readScrcpyFields(), { save: false });
+      toast(scrcpyPanelState.enabled ? 'scrcpy applied' : 'scrcpy disabled');
+      await loadCaptureDevices();
+      fillDeviceSelect(sourcePanelState.device || scrcpyPanelState.v4l2_sink);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-scrcpy-save')?.addEventListener('click', async () => {
+    try {
+      await postScrcpy('apply', readScrcpyFields(), { save: true });
+      toast('scrcpy saved to config.yaml');
+      await loadCaptureDevices();
+      fillDeviceSelect(sourcePanelState.device || scrcpyPanelState.v4l2_sink);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  syncScrcpyForm();
+}
+
 async function buildSourcePanel() {
   const root = $('source-panel');
   if (!root) return;
@@ -856,6 +1055,14 @@ async function refresh() {
   if (!suppressEcho && !Object.keys(pendingUpdates).length && pushTimer == null) {
     applyConfig(status.config, { skipFocused: true });
   }
+  if (status.scrcpy) {
+    scrcpyPanelState.running = Boolean(status.scrcpy.running);
+    scrcpyPanelState.last_error = status.scrcpy.last_error || '';
+    if (status.scrcpy.zoom != null && document.activeElement !== $('scrcpy-zoom')) {
+      scrcpyPanelState.camera_zoom = Number(status.scrcpy.zoom);
+    }
+    syncScrcpyForm();
+  }
 
   // Adopt the pipeline's corners only while the user is not editing them.
   if (!picker.dirty && picker.dragging < 0 && state.corners && state.frame_size) {
@@ -919,6 +1126,7 @@ function wireButtons() {
 async function init() {
   buildControls();
   await buildSourcePanel();
+  await buildScrcpyPanel();
   await buildCameraControls();
   setupPicker();
   wireButtons();
@@ -926,6 +1134,7 @@ async function init() {
     const config = await api('/api/config');
     applyConfig(config);
     applySourcePanelFromConfig(config);
+    applyScrcpyPanelFromConfig(config);
     fillDeviceSelect(config.camera?.device || '');
   } catch (err) {
     toast(err.message, 'error');

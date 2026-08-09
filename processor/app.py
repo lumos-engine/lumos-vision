@@ -32,6 +32,7 @@ from processor.pipeline.registry import build_pipeline
 from processor.stages.boundary import BoundaryStage
 from processor.utils.hyperhdr_leds import set_led_device
 from processor.utils.logging import get_logger
+from processor.utils.scrcpy import ScrcpyManager, clamp_zoom, step_zoom
 from processor.utils.timing import FpsMeter
 from processor.utils.tv_presence import PresenceMonitor, ping_host
 
@@ -55,6 +56,26 @@ _SOURCE_RECREATE_KEYS = frozenset(
         "camera.read_timeout",
         "camera.reconnect_delay",
         "camera.max_reconnect_delay",
+    }
+)
+
+#: Scrcpy CLI options that need a child restart (absolute zoom is start-only).
+_SCRCPY_RESTART_KEYS = frozenset(
+    {
+        "scrcpy.enabled",
+        "scrcpy.binary",
+        "scrcpy.serial",
+        "scrcpy.camera_id",
+        "scrcpy.camera_size",
+        "scrcpy.camera_fps",
+        "scrcpy.camera_zoom",
+        "scrcpy.zoom_min",
+        "scrcpy.zoom_max",
+        "scrcpy.v4l2_sink",
+        "scrcpy.no_playback",
+        "scrcpy.no_audio",
+        "scrcpy.extra_args",
+        "scrcpy.startup_timeout_sec",
     }
 )
 
@@ -105,6 +126,7 @@ class Processor:
             offline_checks=config.power.failed_pings,
             online_checks=config.power.success_pings,
         )
+        self._scrcpy = ScrcpyManager()
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -134,6 +156,7 @@ class Processor:
             )
         else:
             self._presence.reset(online=True)
+            self._start_scrcpy_unlocked()
             self.source = create_source(self.config.camera).start()
             self._set_leds_unlocked(True)
             log.info(
@@ -162,6 +185,7 @@ class Processor:
         if self.source is not None:
             self.source.stop()
             self.source = None
+        self._scrcpy.stop()
         if self.sinks is not None:
             self.sinks.close()
             self.sinks = None
@@ -328,6 +352,10 @@ class Processor:
             except Exception:
                 log.exception("Failed to stop capture source for idle")
             self.source = None
+        try:
+            self._scrcpy.stop()
+        except Exception:
+            log.exception("Failed to stop scrcpy for idle")
         self._last_source = None
         self._last_ctx = None
         self._idle = True
@@ -351,10 +379,12 @@ class Processor:
         self._set_leds_unlocked(True)
         self._idle = False
         try:
+            self._start_scrcpy_unlocked()
             self._recreate_source_unlocked()
         except Exception:
             log.exception("Failed to reopen capture source after idle")
             self._idle = True
+            self._scrcpy.stop()
             self._set_leds_unlocked(False)
             return
         clock = datetime.now().strftime("%H:%M:%S")
@@ -363,6 +393,29 @@ class Processor:
             clock,
             self.config.power.tv_host or "(power disabled)",
         )
+
+    def _start_scrcpy_unlocked(self, *, restart: bool = False) -> dict[str, Any]:
+        cfg = self.config.scrcpy
+        if not cfg.enabled:
+            self._scrcpy.stop()
+            return {"ok": True, "running": False, "skipped": True}
+        if cfg.bind_camera:
+            sink = (cfg.v4l2_sink or "").strip()
+            if sink:
+                updates: dict[str, Any] = {}
+                if self.config.camera.source not in {"v4l2", "usb"}:
+                    updates["camera.source"] = "v4l2"
+                if self.config.camera.device != sink:
+                    updates["camera.device"] = sink
+                if updates:
+                    self.config = apply_updates(self.config, updates)
+        if restart:
+            result = self._scrcpy.restart(cfg)
+        else:
+            result = self._scrcpy.ensure_running(cfg)
+        if not result.get("ok"):
+            log.warning("scrcpy start incomplete: %s", result.get("error"))
+        return result
 
     def _set_leds_unlocked(self, enabled: bool) -> None:
         url = (self.config.power.hyperhdr_url or "").strip()
@@ -467,7 +520,16 @@ class Processor:
                 self._last_power_check = 0.0
                 if not self._power_enabled() and self._idle:
                     self._leave_idle_unlocked()
-            if _updates_require_source_recreate(updates):
+            scrcpy_touched = any(
+                key in _SCRCPY_RESTART_KEYS or key.startswith("scrcpy.")
+                for key in updates
+            )
+            if scrcpy_touched:
+                if self._idle:
+                    log.info("Skipping scrcpy restart while idle")
+                else:
+                    self._start_scrcpy_unlocked(restart=True)
+            if _updates_require_source_recreate(updates) or scrcpy_touched:
                 if self._idle:
                     log.info("Skipping source recreate while idle")
                 else:
@@ -626,6 +688,114 @@ class Processor:
         log.info("Configuration saved to %s", saved)
         return str(saved)
 
+    def scrcpy_status(self) -> dict[str, Any]:
+        return self._scrcpy.status(self.config.scrcpy).as_dict()
+
+    def apply_scrcpy(
+        self,
+        fields: dict[str, Any] | None = None,
+        *,
+        action: str = "apply",
+        save: bool = False,
+    ) -> dict[str, Any]:
+        """Start/stop/restart scrcpy or apply zoom/size fields from the wizard."""
+
+        def run() -> dict[str, Any]:
+            action_name = (action or "apply").strip().lower()
+            updates: dict[str, Any] = {}
+            for key, value in (fields or {}).items():
+                if key in {
+                    "enabled",
+                    "binary",
+                    "serial",
+                    "camera_id",
+                    "camera_size",
+                    "camera_fps",
+                    "camera_zoom",
+                    "zoom_min",
+                    "zoom_max",
+                    "v4l2_sink",
+                    "no_playback",
+                    "no_audio",
+                    "bind_camera",
+                    "startup_timeout_sec",
+                    "extra_args",
+                }:
+                    updates[f"scrcpy.{key}"] = value
+
+            if action_name == "zoom_in":
+                updates["scrcpy.camera_zoom"] = step_zoom(
+                    self.config.scrcpy.camera_zoom, inward=True, cfg=self.config.scrcpy
+                )
+                updates.setdefault("scrcpy.enabled", True)
+            elif action_name == "zoom_out":
+                updates["scrcpy.camera_zoom"] = step_zoom(
+                    self.config.scrcpy.camera_zoom, inward=False, cfg=self.config.scrcpy
+                )
+                updates.setdefault("scrcpy.enabled", True)
+            elif action_name == "set_zoom":
+                if "scrcpy.camera_zoom" not in updates:
+                    raise ValueError("camera_zoom required for set_zoom")
+                updates["scrcpy.camera_zoom"] = clamp_zoom(
+                    float(updates["scrcpy.camera_zoom"]), self.config.scrcpy
+                )
+                updates.setdefault("scrcpy.enabled", True)
+            elif action_name == "start":
+                updates["scrcpy.enabled"] = True
+            elif action_name == "stop":
+                updates["scrcpy.enabled"] = False
+            elif action_name in {"apply", "restart"}:
+                pass
+            else:
+                raise ValueError(f"unknown scrcpy action: {action_name}")
+
+            if updates:
+                self.config = apply_updates(self.config, updates)
+
+            scrcpy_result: dict[str, Any]
+            if self._idle and action_name != "stop":
+                scrcpy_result = {
+                    "ok": True,
+                    "skipped": True,
+                    "error": "TV idle — scrcpy will start on resume",
+                }
+            elif action_name == "stop" or not self.config.scrcpy.enabled:
+                scrcpy_result = self._scrcpy.stop()
+            elif action_name == "restart" or updates:
+                scrcpy_result = self._scrcpy.restart(self.config.scrcpy)
+            else:
+                scrcpy_result = self._start_scrcpy_unlocked()
+
+            source_result: dict[str, Any] | None = None
+            if (
+                not self._idle
+                and self.config.scrcpy.enabled
+                and self.config.scrcpy.bind_camera
+                and action_name != "stop"
+            ):
+                # Reopen capture after the loopback producer respawns.
+                try:
+                    source_result = self._recreate_source_unlocked()
+                except Exception as exc:
+                    source_result = {"ok": False, "error": str(exc)}
+
+            saved_path = None
+            if save:
+                saved_path = str(self.save())
+
+            return {
+                "ok": bool(scrcpy_result.get("ok", True)),
+                "action": action_name,
+                "scrcpy": self._scrcpy.status(self.config.scrcpy).as_dict(),
+                "result": scrcpy_result,
+                "source": source_result,
+                "config": config_to_dict(self.config),
+                "saved": saved_path,
+                "error": scrcpy_result.get("error"),
+            }
+
+        return self.call(run)
+
     def force_recalibration(self) -> bool:
         def run() -> bool:
             stage = self.pipeline.get("boundary")
@@ -730,6 +900,7 @@ class Processor:
                 "idle": self._idle,
                 "leds_off": self._leds_off,
             },
+            "scrcpy": self._scrcpy.status(self.config.scrcpy).as_dict(),
         }
 
     def available_views(self) -> list[str]:

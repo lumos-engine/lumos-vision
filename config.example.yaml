@@ -116,6 +116,27 @@ logging:
   level: INFO
   stats_interval: 30                # seconds between throughput log lines
 
+# Optional: Screen Sight starts scrcpy and writes the phone camera to a
+# v4l2loopback node (Android Cam).  Wizard → "Android cam (scrcpy)" controls
+# zoom/size; absolute phone zoom briefly restarts scrcpy (no manual CLI).
+# Requires: scrcpy ≥ 4.0, /dev/video11 from:
+#   sudo modprobe v4l2loopback devices=2 video_nr=10,11 \
+#     card_label="Screen Sight","Android Cam" exclusive_caps=1
+# scrcpy:
+#   enabled: true
+#   binary: /opt/scrcpy/scrcpy
+#   serial: ""                      # adb serial, or empty for the only device
+#   camera_id: "0"
+#   camera_size: "1920x1080"
+#   camera_fps: 30
+#   camera_zoom: 1.0                # phone Camera2 zoom (1..zoom_max)
+#   zoom_min: 1.0
+#   zoom_max: 10.0
+#   v4l2_sink: /dev/video11
+#   bind_camera: true               # also set camera.device to the sink
+#   no_playback: true
+#   no_audio: true
+
 # When the TV is offline, release the USB camera, pause the pipeline, keep
 # writing black frames to /dev/video10 (HyperHDR grabber stays up), and
 # disable HyperHDR's LEDDEVICE for true LED power-off.  Empty tv_host disables.
