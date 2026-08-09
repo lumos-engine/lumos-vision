@@ -23,9 +23,8 @@ def test_sample_center_roi_means_solid_patch():
 
 
 def test_solve_gains_recovers_channel_cast():
-    # Camera sees white with a green cast and grey similarly scaled.
+    # Camera sees white with a green cast; greys scale with the same cast.
     white = np.array([180.0, 220.0, 160.0])  # B, G, R
-    grey = white * (128 / 255)
     red = np.array([30.0, 40.0, 200.0])
     green = np.array([40.0, 210.0, 35.0])
     blue = np.array([200.0, 45.0, 30.0])
@@ -35,7 +34,9 @@ def test_solve_gains_recovers_channel_cast():
         {
             "black": black,
             "white": white,
-            "grey": grey,
+            "grey_dark": white * (64 / 255),
+            "grey": white * (128 / 255),
+            "grey_light": white * (192 / 255),
             "red": red,
             "green": green,
             "blue": blue,
@@ -60,16 +61,19 @@ def test_session_runs_to_ready_with_synthetic_frames():
     assert session.state == "running"
 
     # Feed a distinct solid for each patch name in order.
+    white = np.array([170.0, 210.0, 150.0])
     solids = {
         "black": (5, 5, 5),
-        "white": (170, 210, 150),
-        "grey": (85, 105, 75),
+        "white": tuple(int(v) for v in white),
+        "grey_dark": tuple(int(v) for v in white * (64 / 255)),
+        "grey": tuple(int(v) for v in white * (128 / 255)),
+        "grey_light": tuple(int(v) for v in white * (192 / 255)),
         "red": (30, 40, 200),
         "green": (40, 200, 35),
         "blue": (200, 45, 30),
     }
     # Many ticks: settle is 0 so each tick can sample.
-    for _ in range(80):
+    for _ in range(120):
         if session.state != "running":
             break
         name = session.display_name()
@@ -81,6 +85,8 @@ def test_session_runs_to_ready_with_synthetic_frames():
     assert session.state == "ready"
     assert session.solution is not None
     assert "white" in session.measurements
+    assert "grey_dark" in session.measurements
+    assert "grey_light" in session.measurements
 
 
 def test_processor_apply_color_calibration(monkeypatch, tmp_path):
@@ -110,15 +116,18 @@ def test_processor_apply_color_calibration(monkeypatch, tmp_path):
         session = app._color_cal
         session.settle_sec = 0.0
         session.sample_frames = 2
+        white = np.array([170.0, 210.0, 150.0])
         solids = {
             "black": (5, 5, 5),
-            "white": (170, 210, 150),
-            "grey": (85, 105, 75),
+            "white": tuple(int(v) for v in white),
+            "grey_dark": tuple(int(v) for v in white * (64 / 255)),
+            "grey": tuple(int(v) for v in white * (128 / 255)),
+            "grey_light": tuple(int(v) for v in white * (192 / 255)),
             "red": (30, 40, 200),
             "green": (40, 200, 35),
             "blue": (200, 45, 30),
         }
-        for _ in range(80):
+        for _ in range(120):
             if session.state != "running":
                 break
             name = session.display_name()
@@ -137,6 +146,7 @@ def test_processor_apply_color_calibration(monkeypatch, tmp_path):
         assert result["ok"] is True
         assert app.config.color.white_balance == "manual"
         assert app.config.color.calibration.calibrated_at
+        assert "grey_light" in app.config.color.calibration.patch_means_bgr
         assert (tmp_path / "config.yaml").exists()
     finally:
         app.shutdown()

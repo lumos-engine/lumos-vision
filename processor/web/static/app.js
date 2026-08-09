@@ -599,7 +599,9 @@ async function buildScrcpyPanel() {
 const PATCH_TARGET_RGB = {
   black: [0, 0, 0],
   white: [255, 255, 255],
+  grey_dark: [64, 64, 64],
   grey: [128, 128, 128],
+  grey_light: [192, 192, 192],
   red: [255, 0, 0],
   green: [0, 255, 0],
   blue: [0, 0, 255],
@@ -670,9 +672,11 @@ async function buildColorCalPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Colour calibrate</h3>
-    <p class="hint">Automated solid patches on the HDMI TV. Open the patch page
-    fullscreen on the TV, keep this wizard on your other display, then Start.
-    Measures the centre of the rectified panel and sets manual RGB gains.</p>
+    <p class="hint">Occasional manual run: open the patch page fullscreen on the
+    HDMI TV, keep this wizard on your other display, then Start. Cycles black /
+    white / three greys / R/G/B, measures the panel centre, and writes manual
+    RGB gains + gamma. Use <strong>Apply &amp; Save</strong> to keep them in
+    config.yaml.</p>
     <div class="source-actions">
       <a class="btn" id="btn-color-cal-display" href="/calibrate/display" target="_blank" rel="noopener">Open patch page on TV (HDMI)</a>
       <button type="button" class="btn btn-primary" id="btn-color-cal-start">Start</button>

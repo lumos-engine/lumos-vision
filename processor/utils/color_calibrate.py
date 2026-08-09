@@ -14,15 +14,25 @@ from typing import Any
 
 import numpy as np
 
-#: Patches shown on the TV during an automated run (sRGB 0–255).
+#: Patches shown on the TV during an occasional manual run (sRGB 0–255).
+#: Extra greys improve midtone / gamma fit; skip a full hue chart (needs 3×3).
 DEFAULT_PATCHES: tuple[tuple[str, tuple[int, int, int]], ...] = (
     ("black", (0, 0, 0)),
     ("white", (255, 255, 255)),
+    ("grey_dark", (64, 64, 64)),
     ("grey", (128, 128, 128)),
+    ("grey_light", (192, 192, 192)),
     ("red", (255, 0, 0)),
     ("green", (0, 255, 0)),
     ("blue", (0, 0, 255)),
 )
+
+#: Neutral patches used for gain blend / gamma (name → nominal sRGB level).
+_GREY_LEVELS: dict[str, float] = {
+    "grey_dark": 64.0,
+    "grey": 128.0,
+    "grey_light": 192.0,
+}
 
 _LUMA_BGR = np.array([0.114, 0.587, 0.299], dtype=np.float64)
 
@@ -82,6 +92,12 @@ def sample_center_roi(
     return roi.reshape(-1, 3).astype(np.float64).mean(axis=0)
 
 
+def _neutral_gains(mean_bgr: np.ndarray) -> np.ndarray:
+    safe = np.maximum(mean_bgr, 1.0)
+    gains = float(safe.mean()) / safe
+    return gains / float(np.mean(gains))
+
+
 def solve_gains(
     means_bgr: dict[str, np.ndarray | list[float]],
     *,
@@ -90,9 +106,8 @@ def solve_gains(
 ) -> CalibrationSolution:
     """Solve manual channel gains (+ gamma) from measured patch means.
 
-    Primary signal is the white (and grey) patch: scale channels so the
-    measured white becomes neutral at the same luma.  Primaries are used only
-    as a sanity note when a channel looks crushed.
+    White anchors balance; dark/mid/light greys refine midtone neutrality and
+    gamma. Primaries are sanity checks only (crushed / leaky channels).
     """
     notes: list[str] = []
     cleaned: dict[str, np.ndarray] = {
@@ -101,7 +116,6 @@ def solve_gains(
     }
 
     white = cleaned.get("white")
-    grey = cleaned.get("grey")
     if white is None:
         raise ValueError("white patch measurement is required")
 
@@ -111,38 +125,58 @@ def solve_gains(
             f"white patch too dark (luma {white_luma:.1f}) — is the TV patch page fullscreen on HDMI?"
         )
 
-    # Grey-world on white: push channels toward equal at constant luma.
-    safe = np.maximum(white, 1.0)
-    target = float(safe.mean())
-    gains = target / safe
+    # Weighted blend: white strongest, then lighter greys, then dark grey.
+    weighted: list[tuple[float, np.ndarray]] = [(1.0, _neutral_gains(white))]
+    grey_weights = {
+        "grey_light": 0.35,
+        "grey": 0.45,
+        "grey_dark": 0.25,
+    }
+    for name, weight in grey_weights.items():
+        sample = cleaned.get(name)
+        if sample is None:
+            # Backward compatible: accept legacy single "grey" only.
+            continue
+        if float(sample.mean()) < 4.0:
+            notes.append(f"{name} too dark to use for balance")
+            continue
+        weighted.append((weight, _neutral_gains(sample)))
+
+    # Legacy alias: older runs may only have "grey".
+    if "grey" not in cleaned and "grey_mid" in cleaned:
+        weighted.append((0.45, _neutral_gains(cleaned["grey_mid"])))
+
+    total_w = sum(w for w, _ in weighted)
+    gains = sum(w * g for w, g in weighted) / total_w
     gains = gains / float(np.mean(gains))
-
-    if grey is not None:
-        grey_safe = np.maximum(grey, 1.0)
-        grey_target = float(grey_safe.mean())
-        grey_gains = grey_target / grey_safe
-        grey_gains = grey_gains / float(np.mean(grey_gains))
-        # Blend: white is more reliable when the panel is bright.
-        gains = 0.7 * gains + 0.3 * grey_gains
-        gains = gains / float(np.mean(gains))
-
     gains = np.clip(gains, gain_min, gain_max)
 
-    # Gamma from grey vs white after the linear gains (encoded sRGB-ish).
+    # Gamma: average estimates from each grey vs white after linear gains.
+    corr_white = white * gains
+    w_luma = float(np.dot(corr_white, _LUMA_BGR))
+    gamma_votes: list[float] = []
+    for name, level in _GREY_LEVELS.items():
+        sample = cleaned.get(name)
+        if sample is None or w_luma <= 8.0:
+            continue
+        g_luma = float(np.dot(sample * gains, _LUMA_BGR))
+        if g_luma <= 1.0:
+            continue
+        ratio = float(np.clip(g_luma / w_luma, 1e-3, 0.999))
+        expected = float(np.clip(level / 255.0, 1e-3, 0.999))
+        # ratio ** gamma ≈ expected
+        est = float(np.log(expected) / np.log(ratio))
+        if 0.5 <= est <= 2.0:
+            gamma_votes.append(est)
+
     gamma = 1.0
-    if grey is not None:
-        corr_white = white * gains
-        corr_grey = grey * gains
-        w_luma = float(np.dot(corr_white, _LUMA_BGR))
-        g_luma = float(np.dot(corr_grey, _LUMA_BGR))
-        if w_luma > 8.0 and g_luma > 1.0:
-            ratio = float(np.clip(g_luma / w_luma, 1e-3, 0.999))
-            expected = 128.0 / 255.0
-            # ratio ** gamma ≈ expected  →  gamma = log(expected) / log(ratio)
-            gamma = float(np.log(expected) / np.log(ratio))
-            gamma = float(np.clip(gamma, 0.6, 1.8))
-            if abs(gamma - 1.0) < 0.05:
-                gamma = 1.0
+    if gamma_votes:
+        gamma = float(np.median(gamma_votes))
+        gamma = float(np.clip(gamma, 0.6, 1.8))
+        if abs(gamma - 1.0) < 0.05:
+            gamma = 1.0
+        if len(gamma_votes) >= 2:
+            notes.append(f"gamma from {len(gamma_votes)} grey levels")
 
     for name, channel in (("red", 2), ("green", 1), ("blue", 0)):
         patch = cleaned.get(name)
