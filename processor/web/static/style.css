@@ -276,6 +276,19 @@ select.compact { width: auto; padding: 5px 8px; font-size: 12px; }
   text-align: center;
   font-size: 10px;
   color: var(--muted);
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+.cal-swatch.current {
+  outline: 2px solid var(--accent);
+  color: var(--text);
+}
+.cal-swatch.measured .pair {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .cal-swatch .pair {
   display: flex;

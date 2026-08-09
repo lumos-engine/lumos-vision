@@ -88,19 +88,19 @@ def _synthetic_solids(channel_cast: np.ndarray | None = None) -> dict[str, tuple
 
 def test_session_settle_sec_is_clamped_on_start():
     session = ColorCalibrationSession()
-    status = session.start(settle_sec=8.0)
+    status = session.start(settle_sec=8.0, mode="auto")
     assert status["settle_sec"] == 8.0
     session.abort()
-    status = session.start(settle_sec=0.1)
+    status = session.start(settle_sec=0.1, mode="auto")
     assert status["settle_sec"] == pytest.approx(0.5)
     session.abort()
-    status = session.start(settle_sec=99.0)
+    status = session.start(settle_sec=99.0, mode="auto")
     assert status["settle_sec"] == pytest.approx(30.0)
 
 
-def test_session_runs_to_ready_with_synthetic_frames():
+def test_session_auto_runs_to_ready_with_synthetic_frames():
     session = ColorCalibrationSession(settle_sec=0.0, sample_frames=2)
-    session.start(settle_sec=0.5)
+    session.start(settle_sec=0.5, mode="auto")
     session.settle_sec = 0.0  # tests run as fast as possible after start
     assert session.state == "running"
     assert session.status()["total"] == len(DEFAULT_PATCHES)
@@ -120,6 +120,63 @@ def test_session_runs_to_ready_with_synthetic_frames():
     assert "skin_medium" in session.measurements
     assert "yellow" in session.measurements
     assert session.solution.as_dict()["matrix_enabled"] is True
+
+
+def _manual_capture(session: ColorCalibrationSession, bgr: tuple[int, int, int]) -> None:
+    session.request_capture()
+    frame = np.zeros((120, 160, 3), dtype=np.uint8)
+    frame[:] = bgr
+    for _ in range(session.sample_frames + 2):
+        if session.phase != "sampling":
+            break
+        session.tick(frame)
+
+
+def test_manual_capture_replaces_in_place_without_advance():
+    session = ColorCalibrationSession(sample_frames=2)
+    session.start(mode="manual", advance_after_capture=False)
+    assert session.phase == "waiting"
+    assert session.display_name() == "black"
+
+    _manual_capture(session, (5, 5, 5))
+    assert session.measurements["black"].tolist() == pytest.approx([5, 5, 5])
+    assert session.display_name() == "black"  # stayed put
+
+    _manual_capture(session, (12, 12, 12))
+    assert session.measurements["black"].tolist() == pytest.approx([12, 12, 12])
+    assert session.index == 0
+
+
+def test_manual_advance_after_capture_and_goto():
+    session = ColorCalibrationSession(sample_frames=2)
+    session.start(mode="manual", advance_after_capture=True)
+    _manual_capture(session, (5, 5, 5))
+    assert session.display_name() == "white"
+
+    session.set_advance_after_capture(False)
+    session.goto(patch="skin_medium")
+    assert session.display_name() == "skin_medium"
+    _manual_capture(session, (80, 110, 160))
+    assert "skin_medium" in session.measurements
+    assert session.display_name() == "skin_medium"
+
+
+def test_manual_solve_after_partial_captures():
+    session = ColorCalibrationSession(sample_frames=2)
+    session.start(mode="manual", advance_after_capture=False)
+    solids = _synthetic_solids()
+    for name, bgr in solids.items():
+        session.goto(patch=name)
+        _manual_capture(session, bgr)
+    status = session.solve_now()
+    assert status["state"] == "ready"
+    assert session.solution is not None
+
+    # Re-capture one patch — with all patches already measured, session re-solves.
+    session.goto(patch="yellow")
+    _manual_capture(session, solids["yellow"])
+    assert session.state == "ready"
+    assert session.solution is not None
 
 
 def test_processor_apply_color_calibration_persists_matrix(tmp_path):
@@ -142,26 +199,31 @@ def test_processor_apply_color_calibration_persists_matrix(tmp_path):
         )
         app.state.set_corners(corners, 1.0, "manual")
 
-        started = app.start_color_calibration()
+        started = app.start_color_calibration(mode="manual", advance_after_capture=True)
         assert started["ok"] is True
 
         session = app._color_cal
-        session.settle_sec = 0.0
         session.sample_frames = 2
         solids = _synthetic_solids()
-        for _ in range(400):
-            if session.state != "running":
-                break
-            name = session.display_name()
+        for name, bgr in solids.items():
+            app.navigate_color_calibration(patch=name)
+            captured = app.capture_color_calibration()
+            assert captured["ok"] is True
             frame = np.zeros((180, 320, 3), dtype=np.uint8)
-            frame[:] = solids.get(name, (0, 0, 0))
-            app._last_ctx = type(
-                "C",
-                (),
-                {"debug_images": {"perspective": frame}, "skipped": {}},
-            )()
-            app._tick_color_calibration()
+            frame[:] = bgr
+            for _ in range(8):
+                if session.phase != "sampling":
+                    break
+                app._last_ctx = type(
+                    "C",
+                    (),
+                    {"debug_images": {"perspective": frame}, "skipped": {}},
+                )()
+                app._tick_color_calibration()
 
+        if session.state != "ready":
+            solved = app.solve_color_calibration()
+            assert solved["ok"] is True
         assert session.state == "ready"
         result = app.apply_color_calibration(save=True)
         assert result["ok"] is True

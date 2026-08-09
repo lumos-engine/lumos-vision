@@ -312,9 +312,14 @@ def solve_gains(
 
 @dataclass
 class ColorCalibrationSession:
-    """Automated patch sequence driven from the pipeline thread."""
+    """Patch colour calibration driven from the pipeline thread.
 
-    #: Wait after each patch colour change before sampling (autofocus / AE).
+    * ``manual`` (default) — user presses Capture when focus looks good; each
+      capture replaces the current patch in place. Optional auto-advance.
+    * ``auto`` — timed settle → sample → next patch for every colour.
+    """
+
+    #: Wait after each patch colour change before sampling (auto mode / AF).
     settle_sec: float = 3.5
     sample_frames: int = 8
     roi_fraction: float = 0.25
@@ -327,8 +332,11 @@ class ColorCalibrationSession:
     )
 
     state: str = "idle"  # idle | running | ready | error | aborted
+    mode: str = "manual"  # manual | auto
+    #: After a manual capture, step to the next patch when True.
+    advance_after_capture: bool = False
     index: int = 0
-    phase: str = "idle"  # settle | sampling | done
+    phase: str = "idle"  # waiting | settle | sampling | done
     error: str = ""
     patch_started_at: float = 0.0
     samples: list[np.ndarray] = field(default_factory=list)
@@ -339,9 +347,6 @@ class ColorCalibrationSession:
     display_seq: int = 0
 
     def display_rgb(self) -> tuple[int, int, int]:
-        if self.state == "ready" and self.preview_mode and self.solution is not None:
-            patch = self.patches[min(self.index, len(self.patches) - 1)]
-            return patch.rgb
         if self.state not in {"running", "ready"} or not self.patches:
             return (0, 0, 0)
         return self.patches[min(self.index, len(self.patches) - 1)].rgb
@@ -365,11 +370,27 @@ class ColorCalibrationSession:
         )
         return float(self.settle_sec)
 
-    def start(self, *, settle_sec: float | None = None) -> dict[str, Any]:
+    def set_advance_after_capture(self, enabled: bool) -> dict[str, Any]:
+        self.advance_after_capture = bool(enabled)
+        return self.status()
+
+    def start(
+        self,
+        *,
+        settle_sec: float | None = None,
+        mode: str | None = None,
+        advance_after_capture: bool | None = None,
+    ) -> dict[str, Any]:
         self.set_settle_sec(settle_sec)
+        if mode is not None:
+            mode_norm = str(mode).strip().lower()
+            if mode_norm not in {"manual", "auto"}:
+                raise ValueError("mode must be 'manual' or 'auto'")
+            self.mode = mode_norm
+        if advance_after_capture is not None:
+            self.advance_after_capture = bool(advance_after_capture)
         self.state = "running"
         self.index = 0
-        self.phase = "settle"
         self.error = ""
         self.samples = []
         self.measurements = {}
@@ -377,6 +398,10 @@ class ColorCalibrationSession:
         self.preview_mode = False
         self.patch_started_at = time.monotonic()
         self.display_seq += 1
+        if self.mode == "manual":
+            self.phase = "waiting"
+        else:
+            self.phase = "settle"
         return self.status()
 
     def abort(self) -> dict[str, Any]:
@@ -386,73 +411,187 @@ class ColorCalibrationSession:
         self.display_seq += 1
         return self.status()
 
-    def tick(self, image: np.ndarray | None) -> None:
-        """Advance settle → sample → next patch using one perspective frame."""
-        if self.state != "running":
-            return
-        if image is None:
-            return
-        now = time.monotonic()
-        patch = self.patches[self.index]
-
-        if self.phase == "settle":
-            if now - self.patch_started_at < self.settle_sec:
-                return
-            self.phase = "sampling"
-            self.samples = []
-
+    def request_capture(self) -> dict[str, Any]:
+        """Begin sampling the current patch (manual mode). Replaces in place."""
+        if self.mode != "manual":
+            raise ValueError("capture is only available in manual mode")
+        if self.state not in {"running", "ready"}:
+            raise ValueError("start a calibration session first")
         if self.phase == "sampling":
+            raise ValueError("already capturing — wait a moment")
+        self.state = "running"
+        self.solution = None
+        self.preview_mode = False
+        self.error = ""
+        self.phase = "sampling"
+        self.samples = []
+        return self.status()
+
+    def goto(self, *, index: int | None = None, patch: str | None = None) -> dict[str, Any]:
+        """Jump to a patch without capturing (manual mode)."""
+        if self.mode != "manual":
+            raise ValueError("goto is only available in manual mode")
+        if self.state not in {"running", "ready"}:
+            raise ValueError("start a calibration session first")
+        if self.phase == "sampling":
+            raise ValueError("wait for the current capture to finish")
+        if patch is not None:
+            names = [p.name for p in self.patches]
+            if patch not in names:
+                raise ValueError(f"unknown patch {patch!r}")
+            index = names.index(patch)
+        if index is None:
+            raise ValueError("index or patch is required")
+        index = int(index)
+        if index < 0 or index >= len(self.patches):
+            raise ValueError(f"index out of range (0..{len(self.patches) - 1})")
+        if index != self.index:
+            self.index = index
+            self.display_seq += 1
+        self.phase = "waiting"
+        if self.state == "ready" and self.solution is None:
+            self.state = "running"
+        return self.status()
+
+    def next_patch(self) -> dict[str, Any]:
+        return self.goto(index=min(self.index + 1, len(self.patches) - 1))
+
+    def prev_patch(self) -> dict[str, Any]:
+        return self.goto(index=max(self.index - 1, 0))
+
+    def solve_now(self) -> dict[str, Any]:
+        """Fit matrix from whatever patches have been measured so far."""
+        if self.state not in {"running", "ready"}:
+            raise ValueError("start a calibration session first")
+        if self.phase == "sampling":
+            raise ValueError("wait for the current capture to finish")
+        if "white" not in self.measurements:
+            raise ValueError("capture the white patch before solving")
+        try:
+            self.solution = solve_calibration(self.measurements)
+        except ValueError as exc:
+            self.state = "error"
+            self.error = str(exc)
+            self.phase = "waiting"
+            return self.status()
+        self.state = "ready"
+        self.phase = "done"
+        self.preview_mode = True
+        self.error = ""
+        return self.status()
+
+    def _all_patches_measured(self) -> bool:
+        return all(p.name in self.measurements for p in self.patches)
+
+    def _finish_sample(self, mean: np.ndarray) -> None:
+        patch = self.patches[self.index]
+        self.measurements[patch.name] = mean
+        self.samples = []
+
+        if self.mode == "manual":
+            if self.advance_after_capture and self.index + 1 < len(self.patches):
+                self.index += 1
+                self.display_seq += 1
+            self.phase = "waiting"
+            if self._all_patches_measured():
+                try:
+                    self.solution = solve_calibration(self.measurements)
+                    self.state = "ready"
+                    self.phase = "done"
+                    self.preview_mode = True
+                except ValueError as exc:
+                    self.state = "error"
+                    self.error = str(exc)
+                    self.phase = "waiting"
+            else:
+                self.solution = None
+                self.state = "running"
+            return
+
+        # auto mode
+        if self.index + 1 >= len(self.patches):
             try:
-                mean = sample_center_roi(image, fraction=self.roi_fraction)
+                self.solution = solve_calibration(self.measurements)
             except ValueError as exc:
                 self.state = "error"
                 self.error = str(exc)
                 self.phase = "idle"
-                return
-            self.samples.append(mean)
-            if len(self.samples) < self.sample_frames:
-                return
-            self.measurements[patch.name] = np.mean(self.samples, axis=0)
-            self.samples = []
-            if self.index + 1 >= len(self.patches):
-                try:
-                    self.solution = solve_calibration(self.measurements)
-                except ValueError as exc:
-                    self.state = "error"
-                    self.error = str(exc)
-                    self.phase = "idle"
-                    self.display_seq += 1
-                    return
-                self.state = "ready"
-                self.phase = "done"
-                self.preview_mode = True
-                self.index = 0
                 self.display_seq += 1
                 return
-            self.index += 1
-            self.phase = "settle"
-            self.patch_started_at = now
+            self.state = "ready"
+            self.phase = "done"
+            self.preview_mode = True
+            self.index = 0
             self.display_seq += 1
+            return
+        self.index += 1
+        self.phase = "settle"
+        self.patch_started_at = time.monotonic()
+        self.display_seq += 1
+
+    def tick(self, image: np.ndarray | None) -> None:
+        """Drive auto settle/sample, or finish an in-flight manual capture."""
+        if self.state not in {"running", "ready"}:
+            return
+        if image is None:
+            return
+        now = time.monotonic()
+
+        if self.mode == "manual":
+            if self.phase != "sampling":
+                return
+        else:
+            if self.state != "running":
+                return
+            if self.phase == "settle":
+                if now - self.patch_started_at < self.settle_sec:
+                    return
+                self.phase = "sampling"
+                self.samples = []
+
+        if self.phase != "sampling":
+            return
+
+        try:
+            mean = sample_center_roi(image, fraction=self.roi_fraction)
+        except ValueError as exc:
+            self.state = "error"
+            self.error = str(exc)
+            self.phase = "idle" if self.mode == "auto" else "waiting"
+            return
+        self.samples.append(mean)
+        if len(self.samples) < self.sample_frames:
+            return
+        self._finish_sample(np.mean(self.samples, axis=0))
 
     def status(self) -> dict[str, Any]:
         total = len(self.patches)
         rgb = self.display_rgb()
+        measured = len(self.measurements)
+        active = self.state in {"running", "ready"}
         return {
             "state": self.state,
+            "mode": self.mode,
             "phase": self.phase,
             "error": self.error,
             "index": self.index,
             "total": total,
+            "measured": measured,
             "patch": self.display_name(),
             "display_rgb": list(rgb),
             "display_seq": self.display_seq,
-            "progress": round(
-                (self.index + (0.5 if self.phase == "sampling" else 0.0))
-                / max(total, 1),
-                3,
-            )
-            if self.state == "running"
-            else (1.0 if self.state == "ready" else 0.0),
+            "advance_after_capture": self.advance_after_capture,
+            "progress": round(measured / max(total, 1), 3)
+            if self.mode == "manual" and active
+            else (
+                round(
+                    (self.index + (0.5 if self.phase == "sampling" else 0.0))
+                    / max(total, 1),
+                    3,
+                )
+                if self.state == "running"
+                else (1.0 if self.state == "ready" else 0.0)
+            ),
             "measurements": {
                 name: [round(float(v), 2) for v in mean]
                 for name, mean in self.measurements.items()
@@ -461,6 +600,16 @@ class ColorCalibrationSession:
             "preview_mode": self.preview_mode,
             "settle_sec": self.settle_sec,
             "sample_frames": self.sample_frames,
+            "can_capture": (
+                self.mode == "manual"
+                and self.state in {"running", "ready"}
+                and self.phase != "sampling"
+            ),
+            "can_solve": (
+                self.state in {"running", "ready"}
+                and self.phase != "sampling"
+                and "white" in self.measurements
+            ),
         }
 
 

@@ -172,9 +172,45 @@ class _Handler(BaseHTTPRequestHandler):
                         {"ok": False, "error": "settle_sec must be a number"},
                         status=400,
                     )
+                mode = body.get("mode")
+                advance = body.get("advance_after_capture")
                 result = self.processor.start_color_calibration(
-                    settle_sec=settle_sec
+                    settle_sec=settle_sec,
+                    mode=None if mode is None else str(mode),
+                    advance_after_capture=(
+                        None if advance is None else bool(advance)
+                    ),
                 )
+                return self._send_json(
+                    result, status=200 if result.get("ok") else 400
+                )
+            if route == "/api/calibrate/color/capture":
+                result = self.processor.capture_color_calibration()
+                return self._send_json(
+                    result, status=200 if result.get("ok") else 400
+                )
+            if route == "/api/calibrate/color/navigate":
+                action = body.get("action")
+                index = body.get("index")
+                patch = body.get("patch")
+                result = self.processor.navigate_color_calibration(
+                    action=None if action is None else str(action),
+                    index=None if index is None else int(index),
+                    patch=None if patch is None else str(patch),
+                )
+                return self._send_json(
+                    result, status=200 if result.get("ok") else 400
+                )
+            if route == "/api/calibrate/color/options":
+                advance = body.get("advance_after_capture")
+                result = self.processor.set_color_calibration_options(
+                    advance_after_capture=(
+                        None if advance is None else bool(advance)
+                    )
+                )
+                return self._send_json(result)
+            if route == "/api/calibrate/color/solve":
+                result = self.processor.solve_color_calibration()
                 return self._send_json(
                     result, status=200 if result.get("ok") else 400
                 )

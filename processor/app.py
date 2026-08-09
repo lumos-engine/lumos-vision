@@ -273,7 +273,7 @@ class Processor:
             self.config.pipeline.collect_debug
             or self.want_debug_views
             or self.brokers.any_subscribers()
-            or self._color_cal.state == "running"
+            or self._color_cal.state in {"running", "ready"}
         )
 
         ctx = self.pipeline.process(frame)
@@ -832,7 +832,7 @@ class Processor:
         return self.call(run)
 
     def _tick_color_calibration(self) -> None:
-        if self._color_cal.state != "running":
+        if self._color_cal.state not in {"running", "ready"}:
             return
         ctx = self._last_ctx
         image = None if ctx is None else ctx.debug_images.get("perspective")
@@ -842,7 +842,11 @@ class Processor:
         return self._color_cal.status()
 
     def start_color_calibration(
-        self, *, settle_sec: float | None = None
+        self,
+        *,
+        settle_sec: float | None = None,
+        mode: str | None = None,
+        advance_after_capture: bool | None = None,
     ) -> dict[str, Any]:
         def run() -> dict[str, Any]:
             if self._idle:
@@ -870,11 +874,16 @@ class Processor:
                 )
                 apply_pipeline_config(self.pipeline, self.config)
             try:
-                status = self._color_cal.start(settle_sec=settle_sec)
+                status = self._color_cal.start(
+                    settle_sec=settle_sec,
+                    mode=mode,
+                    advance_after_capture=advance_after_capture,
+                )
             except (TypeError, ValueError) as exc:
                 return {"ok": False, "error": str(exc)}
             log.info(
-                "Colour calibration started (%d patches, settle %.1fs)",
+                "Colour calibration started (%s, %d patches, settle %.1fs)",
+                status["mode"],
                 status["total"],
                 status["settle_sec"],
             )
@@ -886,6 +895,59 @@ class Processor:
         def run() -> dict[str, Any]:
             status = self._color_cal.abort()
             log.info("Colour calibration aborted")
+            return {"ok": True, **status}
+
+        return self.call(run)
+
+    def capture_color_calibration(self) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            try:
+                status = self._color_cal.request_capture()
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            return {"ok": True, **status}
+
+        return self.call(run)
+
+    def navigate_color_calibration(
+        self,
+        *,
+        action: str | None = None,
+        index: int | None = None,
+        patch: str | None = None,
+    ) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            try:
+                if action == "next":
+                    status = self._color_cal.next_patch()
+                elif action == "prev":
+                    status = self._color_cal.prev_patch()
+                else:
+                    status = self._color_cal.goto(index=index, patch=patch)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            return {"ok": True, **status}
+
+        return self.call(run)
+
+    def set_color_calibration_options(
+        self, *, advance_after_capture: bool | None = None
+    ) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            if advance_after_capture is not None:
+                self._color_cal.set_advance_after_capture(advance_after_capture)
+            return {"ok": True, **self._color_cal.status()}
+
+        return self.call(run)
+
+    def solve_color_calibration(self) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            try:
+                status = self._color_cal.solve_now()
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            if status.get("state") == "error":
+                return {"ok": False, **status}
             return {"ok": True, **status}
 
         return self.call(run)

@@ -628,43 +628,93 @@ function renderColorCal(status) {
   if (!cal || !$('color-cal-meta')) return;
 
   const state = cal.state || 'idle';
+  const mode = cal.mode || 'manual';
+  const active = state === 'running' || state === 'ready';
+  const sampling = cal.phase === 'sampling';
   const pct = Math.round((Number(cal.progress) || 0) * 100);
   const bar = $('color-cal-bar');
   if (bar) bar.style.width = `${pct}%`;
 
-  const bits = [state];
-  if (cal.patch) bits.push(cal.patch);
-  if (state === 'running') bits.push(`${pct}%`);
-  if (cal.settle_sec != null) bits.push(`settle ${Number(cal.settle_sec).toFixed(1)}s`);
+  const bits = [mode, state];
+  if (cal.patch && cal.patch !== 'idle') bits.push(cal.patch);
+  if (cal.measured != null && cal.total != null) {
+    bits.push(`${cal.measured}/${cal.total}`);
+  }
+  if (active) bits.push(`${pct}%`);
+  if (mode === 'auto' && cal.settle_sec != null) {
+    bits.push(`settle ${Number(cal.settle_sec).toFixed(1)}s`);
+  }
+  if (sampling) bits.push('capturing…');
   if (cal.error) bits.push(cal.error);
   $('color-cal-meta').textContent = bits.join(' · ');
 
   const settleInput = $('color-cal-settle');
-  if (settleInput && state !== 'running' && cal.settle_sec != null
+  if (settleInput && !active && cal.settle_sec != null
       && document.activeElement !== settleInput) {
     settleInput.value = String(Number(cal.settle_sec));
   }
-  if (settleInput) settleInput.disabled = state === 'running';
+  if (settleInput) settleInput.disabled = active;
+
+  const modeManual = $('color-cal-mode-manual');
+  const modeAuto = $('color-cal-mode-auto');
+  if (modeManual && modeAuto && document.activeElement !== modeManual
+      && document.activeElement !== modeAuto) {
+    modeManual.checked = mode !== 'auto';
+    modeAuto.checked = mode === 'auto';
+  }
+  if (modeManual) modeManual.disabled = active;
+  if (modeAuto) modeAuto.disabled = active;
+
+  const advance = $('color-cal-advance');
+  if (advance && document.activeElement !== advance) {
+    advance.checked = Boolean(cal.advance_after_capture);
+  }
+  if (advance) advance.disabled = !active || mode !== 'manual' || sampling;
 
   const startBtn = $('btn-color-cal-start');
   const abortBtn = $('btn-color-cal-abort');
+  const captureBtn = $('btn-color-cal-capture');
+  const prevBtn = $('btn-color-cal-prev');
+  const nextBtn = $('btn-color-cal-next');
+  const solveBtn = $('btn-color-cal-solve');
   const applyBtn = $('btn-color-cal-apply');
   const saveBtn = $('btn-color-cal-save');
-  if (startBtn) startBtn.disabled = state === 'running';
-  if (abortBtn) abortBtn.disabled = state !== 'running';
-  if (applyBtn) applyBtn.disabled = state !== 'ready';
-  if (saveBtn) saveBtn.disabled = state !== 'ready';
+  if (startBtn) startBtn.disabled = state === 'running' || sampling;
+  if (abortBtn) abortBtn.disabled = !active;
+  if (captureBtn) {
+    captureBtn.disabled = !cal.can_capture;
+    captureBtn.hidden = mode !== 'manual';
+  }
+  if (prevBtn) {
+    prevBtn.disabled = !active || mode !== 'manual' || sampling || Number(cal.index) <= 0;
+    prevBtn.hidden = mode !== 'manual';
+  }
+  if (nextBtn) {
+    nextBtn.disabled = !active || mode !== 'manual' || sampling
+      || Number(cal.index) >= Number(cal.total) - 1;
+    nextBtn.hidden = mode !== 'manual';
+  }
+  if (solveBtn) {
+    solveBtn.disabled = !cal.can_solve;
+    solveBtn.hidden = mode !== 'manual';
+  }
+  if (applyBtn) applyBtn.disabled = state !== 'ready' || !cal.solution;
+  if (saveBtn) saveBtn.disabled = state !== 'ready' || !cal.solution;
 
   const swatches = $('color-cal-swatches');
   if (swatches) {
     const measurements = cal.measurements || {};
     const names = Object.keys(PATCH_TARGET_RGB);
+    const current = cal.patch;
     swatches.innerHTML = names.map((name) => {
       const target = PATCH_TARGET_RGB[name];
       const measured = measurements[name];
       const targetCss = `rgb(${target[0]},${target[1]},${target[2]})`;
       const measuredCss = measured ? bgrToCss(measured) : 'transparent';
-      return `<div class="cal-swatch"><div class="pair"><i style="background:${targetCss}"></i><i style="background:${measuredCss};outline:1px solid var(--line)"></i></div>${name}</div>`;
+      const cls = ['cal-swatch'];
+      if (name === current) cls.push('current');
+      if (measured) cls.push('measured');
+      return `<button type="button" class="${cls.join(' ')}" data-patch="${name}"><div class="pair"><i style="background:${targetCss}"></i><i style="background:${measuredCss};outline:1px solid var(--line)"></i></div>${name}</button>`;
     }).join('');
   }
 
@@ -693,18 +743,30 @@ async function buildColorCalPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Colour calibrate</h3>
-    <p class="hint">Occasional manual run: open the patch page fullscreen on the
-    HDMI TV, keep this wizard on your other display, then Start. Cycles ~20
-    patches, fits a 3×3 colour matrix + gamma. Raise <strong>Settle</strong> if
-    the phone is still autofocusing when samples are taken (try 4–8&nbsp;s).
-    Use <strong>Apply &amp; Save</strong> to keep results in config.yaml.</p>
+    <p class="hint">Open the patch page fullscreen on the HDMI TV. In
+    <strong>Manual</strong> mode, wait until focus looks sharp, then
+    <strong>Capture</strong> (replaces that colour in place — redo anytime).
+    Turn on <strong>Advance after capture</strong> to step to the next colour
+    automatically; leave it off to stay and re-shoot. Click a swatch to jump.
+    <strong>Solve</strong> when ready, then Apply &amp; Save.</p>
     <div class="control">
-      <label for="color-cal-settle">Settle before sample (seconds)</label>
+      <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-manual" value="manual" checked> Manual capture</label>
+      <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-auto" value="auto"> Auto-run (timed settle)</label>
+    </div>
+    <div class="control">
+      <label for="color-cal-settle">Auto settle before sample (seconds)</label>
       <input id="color-cal-settle" type="number" min="0.5" max="30" step="0.5" value="3.5">
+    </div>
+    <div class="control">
+      <label class="check"><input type="checkbox" id="color-cal-advance"> Advance after capture</label>
     </div>
     <div class="source-actions">
       <a class="btn" id="btn-color-cal-display" href="/calibrate/display" target="_blank" rel="noopener">Open patch page on TV (HDMI)</a>
       <button type="button" class="btn btn-primary" id="btn-color-cal-start">Start</button>
+      <button type="button" class="btn btn-primary" id="btn-color-cal-capture" hidden disabled>Capture</button>
+      <button type="button" class="btn" id="btn-color-cal-prev" hidden disabled>Prev</button>
+      <button type="button" class="btn" id="btn-color-cal-next" hidden disabled>Next</button>
+      <button type="button" class="btn" id="btn-color-cal-solve" hidden disabled>Solve</button>
       <button type="button" class="btn" id="btn-color-cal-abort" disabled>Abort</button>
       <button type="button" class="btn" id="btn-color-cal-apply" disabled>Apply</button>
       <button type="button" class="btn" id="btn-color-cal-save" disabled>Apply &amp; Save</button>
@@ -715,13 +777,81 @@ async function buildColorCalPanel() {
     <p class="cal-solution" id="color-cal-solution"></p>`;
   root.append(section);
 
+  const selectedMode = () => (
+    $('color-cal-mode-auto')?.checked ? 'auto' : 'manual'
+  );
+
   $('btn-color-cal-start')?.addEventListener('click', async () => {
     try {
       const settleRaw = Number($('color-cal-settle')?.value);
       const settle_sec = Number.isFinite(settleRaw) ? settleRaw : undefined;
-      const result = await api('/api/calibrate/color/start', { settle_sec });
+      const result = await api('/api/calibrate/color/start', {
+        settle_sec,
+        mode: selectedMode(),
+        advance_after_capture: Boolean($('color-cal-advance')?.checked),
+      });
       if (!result.ok) throw new Error(result.error || 'start failed');
-      toast(`Colour calibration started (settle ${Number(result.settle_sec).toFixed(1)}s)`);
+      toast(result.mode === 'manual'
+        ? 'Manual calibration — Capture when focus looks good'
+        : `Auto calibration (settle ${Number(result.settle_sec).toFixed(1)}s)`);
+      renderColorCal(result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-color-cal-capture')?.addEventListener('click', async () => {
+    try {
+      const result = await api('/api/calibrate/color/capture', {});
+      if (!result.ok) throw new Error(result.error || 'capture failed');
+      renderColorCal(result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-color-cal-prev')?.addEventListener('click', async () => {
+    try {
+      const result = await api('/api/calibrate/color/navigate', { action: 'prev' });
+      if (!result.ok) throw new Error(result.error || 'prev failed');
+      renderColorCal(result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-color-cal-next')?.addEventListener('click', async () => {
+    try {
+      const result = await api('/api/calibrate/color/navigate', { action: 'next' });
+      if (!result.ok) throw new Error(result.error || 'next failed');
+      renderColorCal(result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-color-cal-solve')?.addEventListener('click', async () => {
+    try {
+      const result = await api('/api/calibrate/color/solve', {});
+      if (!result.ok) throw new Error(result.error || 'solve failed');
+      toast('Matrix solved — Apply & Save when happy');
+      renderColorCal(result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('color-cal-advance')?.addEventListener('change', async (ev) => {
+    try {
+      const result = await api('/api/calibrate/color/options', {
+        advance_after_capture: Boolean(ev.target.checked),
+      });
+      renderColorCal(result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('color-cal-swatches')?.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-patch]');
+    if (!btn) return;
+    try {
+      const result = await api('/api/calibrate/color/navigate', { patch: btn.dataset.patch });
+      if (!result.ok) throw new Error(result.error || 'goto failed');
       renderColorCal(result);
     } catch (err) {
       toast(err.message, 'error');
@@ -749,7 +879,7 @@ async function buildColorCalPanel() {
   };
   $('btn-color-cal-apply')?.addEventListener('click', () => applyCal(false));
   $('btn-color-cal-save')?.addEventListener('click', () => applyCal(true));
-  renderColorCal({ state: 'idle', progress: 0, measurements: {} });
+  renderColorCal({ state: 'idle', mode: 'manual', progress: 0, measurements: {} });
 }
 
 async function buildSourcePanel() {
