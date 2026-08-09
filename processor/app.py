@@ -97,7 +97,8 @@ class Processor:
         self.want_debug_views = False
 
         self._idle = False
-        self._leds_off = False
+        #: ``None`` until the first HyperHDR LEDDEVICE request (unknown).
+        self._leds_off: bool | None = None
         self._last_power_check = 0.0
         self._black_frame: np.ndarray | None = None
         self._logged_reconnect_ping = False
@@ -363,13 +364,19 @@ class Processor:
         )
 
     def _set_leds_unlocked(self, enabled: bool) -> None:
+        # HyperHDR's web UI reloads from the last *saved* config whenever
+        # LEDDEVICE is toggled over JSON-RPC. Skip no-op calls so idle/ping
+        # chatter does not wipe unsaved brightness / LED-plugin edits.
+        want_off = not enabled
+        if self._leds_off is not None and want_off == self._leds_off:
+            return
         url = (self.config.power.hyperhdr_url or "").strip()
         if not url:
-            self._leds_off = not enabled
+            self._leds_off = want_off
             return
         result = set_led_device(url, enabled)
         # Track requested state even if HyperHDR is briefly unreachable.
-        self._leds_off = not enabled
+        self._leds_off = want_off
         if not result.get("ok") and not result.get("skipped"):
             log.warning("LEDDEVICE toggle incomplete: %s", result.get("error"))
 
