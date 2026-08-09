@@ -595,6 +595,132 @@ async function buildScrcpyPanel() {
   syncScrcpyForm({ force: true });
 }
 
+// ---------------------------------------------------- colour calibration
+const PATCH_TARGET_RGB = {
+  black: [0, 0, 0],
+  white: [255, 255, 255],
+  grey: [128, 128, 128],
+  red: [255, 0, 0],
+  green: [0, 255, 0],
+  blue: [0, 0, 255],
+};
+
+function bgrToCss(bgr) {
+  if (!bgr || bgr.length < 3) return 'rgb(0,0,0)';
+  const [b, g, r] = bgr.map((v) => Math.max(0, Math.min(255, Math.round(Number(v)))));
+  return `rgb(${r},${g},${b})`;
+}
+
+function renderColorCal(status) {
+  const cal = status?.color_calibration || status;
+  if (!cal || !$('color-cal-meta')) return;
+
+  const state = cal.state || 'idle';
+  const pct = Math.round((Number(cal.progress) || 0) * 100);
+  const bar = $('color-cal-bar');
+  if (bar) bar.style.width = `${pct}%`;
+
+  const bits = [state];
+  if (cal.patch) bits.push(cal.patch);
+  if (state === 'running') bits.push(`${pct}%`);
+  if (cal.error) bits.push(cal.error);
+  $('color-cal-meta').textContent = bits.join(' · ');
+
+  const startBtn = $('btn-color-cal-start');
+  const abortBtn = $('btn-color-cal-abort');
+  const applyBtn = $('btn-color-cal-apply');
+  const saveBtn = $('btn-color-cal-save');
+  if (startBtn) startBtn.disabled = state === 'running';
+  if (abortBtn) abortBtn.disabled = state !== 'running';
+  if (applyBtn) applyBtn.disabled = state !== 'ready';
+  if (saveBtn) saveBtn.disabled = state !== 'ready';
+
+  const swatches = $('color-cal-swatches');
+  if (swatches) {
+    const measurements = cal.measurements || {};
+    const names = Object.keys(PATCH_TARGET_RGB);
+    swatches.innerHTML = names.map((name) => {
+      const target = PATCH_TARGET_RGB[name];
+      const measured = measurements[name];
+      const targetCss = `rgb(${target[0]},${target[1]},${target[2]})`;
+      const measuredCss = measured ? bgrToCss(measured) : 'transparent';
+      return `<div class="cal-swatch"><div class="pair"><i style="background:${targetCss}"></i><i style="background:${measuredCss};outline:1px solid var(--line)"></i></div>${name}</div>`;
+    }).join('');
+  }
+
+  const sol = $('color-cal-solution');
+  if (sol) {
+    if (cal.solution?.gains) {
+      const g = cal.solution.gains;
+      const notes = (cal.solution.notes || []).join('; ');
+      sol.textContent = `Proposed gains R${g.r} G${g.g} B${g.b} · gamma ${cal.solution.gamma}`
+        + (notes ? ` · ${notes}` : '');
+    } else {
+      sol.textContent = '';
+    }
+  }
+}
+
+async function buildColorCalPanel() {
+  const root = $('color-cal-panel');
+  if (!root) return;
+  root.innerHTML = '';
+
+  const section = document.createElement('div');
+  section.className = 'control-group';
+  section.innerHTML = `
+    <h3>Colour calibrate</h3>
+    <p class="hint">Automated solid patches on the HDMI TV. Open the patch page
+    fullscreen on the TV, keep this wizard on your other display, then Start.
+    Measures the centre of the rectified panel and sets manual RGB gains.</p>
+    <div class="source-actions">
+      <a class="btn" id="btn-color-cal-display" href="/calibrate/display" target="_blank" rel="noopener">Open patch page on TV (HDMI)</a>
+      <button type="button" class="btn btn-primary" id="btn-color-cal-start">Start</button>
+      <button type="button" class="btn" id="btn-color-cal-abort" disabled>Abort</button>
+      <button type="button" class="btn" id="btn-color-cal-apply" disabled>Apply</button>
+      <button type="button" class="btn" id="btn-color-cal-save" disabled>Apply &amp; Save</button>
+    </div>
+    <div class="cal-progress"><span id="color-cal-bar"></span></div>
+    <p class="source-meta" id="color-cal-meta">idle</p>
+    <div class="cal-swatches" id="color-cal-swatches"></div>
+    <p class="cal-solution" id="color-cal-solution"></p>`;
+  root.append(section);
+
+  $('btn-color-cal-start')?.addEventListener('click', async () => {
+    try {
+      const result = await api('/api/calibrate/color/start', {});
+      if (!result.ok) throw new Error(result.error || 'start failed');
+      toast('Colour calibration started — watch the TV patches');
+      renderColorCal(result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-color-cal-abort')?.addEventListener('click', async () => {
+    try {
+      const result = await api('/api/calibrate/color/abort', {});
+      toast('Colour calibration aborted');
+      renderColorCal(result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  const applyCal = async (save) => {
+    try {
+      const result = await api('/api/calibrate/color/apply', { save: Boolean(save) });
+      if (!result.ok) throw new Error(result.error || 'apply failed');
+      if (result.config) applyConfig(result.config);
+      toast(save ? 'Colour calibration saved' : 'Colour calibration applied');
+      renderColorCal(result.calibration || result);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+  $('btn-color-cal-apply')?.addEventListener('click', () => applyCal(false));
+  $('btn-color-cal-save')?.addEventListener('click', () => applyCal(true));
+  renderColorCal({ state: 'idle', progress: 0, measurements: {} });
+}
+
 async function buildSourcePanel() {
   const root = $('source-panel');
   if (!root) return;
@@ -1219,6 +1345,9 @@ async function refresh() {
       syncScrcpyMeta();
     }
   }
+  if (status.color_calibration) {
+    renderColorCal(status.color_calibration);
+  }
 
   // Adopt the pipeline's corners only while the user is not editing them.
   if (!picker.dirty && picker.dragging < 0 && state.corners && state.frame_size) {
@@ -1283,6 +1412,7 @@ async function init() {
   buildControls();
   await buildSourcePanel();
   await buildScrcpyPanel();
+  await buildColorCalPanel();
   await buildCameraControls();
   setupPicker();
   wireButtons();

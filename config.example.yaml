@@ -143,6 +143,14 @@ logging:
 # When the TV is offline, release the USB camera, pause the pipeline, keep
 # writing black frames to /dev/video10 (HyperHDR grabber stays up), and
 # disable HyperHDR's LEDDEVICE for true LED power-off.  Empty tv_host disables.
+# Colour calibrate wizard writes manual gains after an HDMI patch run:
+# color:
+#   white_balance: manual
+#   gains: { r: 1.0, g: 1.0, b: 1.0 }
+#   gamma: 1.0
+#   calibration:
+#     calibrated_at: "2026-08-10T00:00:00Z"
+
 # power:
 #   tv_host: "192.168.1.244"
 #   hyperhdr_url: "http://127.0.0.1:8090"   # empty = camera idle only, no LED off

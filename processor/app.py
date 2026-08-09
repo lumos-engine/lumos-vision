@@ -30,6 +30,7 @@ from processor.pipeline.pipeline import Pipeline
 from processor.pipeline.registry import apply_config as apply_pipeline_config
 from processor.pipeline.registry import build_pipeline
 from processor.stages.boundary import BoundaryStage
+from processor.utils.color_calibrate import ColorCalibrationSession, iso_now
 from processor.utils.hyperhdr_leds import set_led_device
 from processor.utils.logging import get_logger
 from processor.utils.scrcpy import (
@@ -137,6 +138,7 @@ class Processor:
             online_checks=config.power.success_pings,
         )
         self._scrcpy = ScrcpyManager()
+        self._color_cal = ColorCalibrationSession()
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -255,6 +257,7 @@ class Processor:
                 last_processed = now
 
                 self.process_frame(frame)
+                self._tick_color_calibration()
                 self._maybe_log_stats(now)
         finally:
             self._loop_active = False
@@ -270,6 +273,7 @@ class Processor:
             self.config.pipeline.collect_debug
             or self.want_debug_views
             or self.brokers.any_subscribers()
+            or self._color_cal.state == "running"
         )
 
         ctx = self.pipeline.process(frame)
@@ -827,6 +831,93 @@ class Processor:
 
         return self.call(run)
 
+    def _tick_color_calibration(self) -> None:
+        if self._color_cal.state != "running":
+            return
+        ctx = self._last_ctx
+        image = None if ctx is None else ctx.debug_images.get("perspective")
+        self._color_cal.tick(image)
+
+    def color_calibration_status(self) -> dict[str, Any]:
+        return self._color_cal.status()
+
+    def start_color_calibration(self) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            if self._idle:
+                return {"ok": False, "error": "cannot calibrate while TV idle"}
+            if self.state.corners is None:
+                return {
+                    "ok": False,
+                    "error": "mark TV corners first so the sample ROI is on-panel",
+                }
+            # Measuring must see the uncorrected panel.
+            if self.config.color.white_balance != "off" or abs(
+                self.config.color.gamma - 1.0
+            ) > 1e-3:
+                self.config = apply_updates(
+                    self.config,
+                    {
+                        "color.white_balance": "off",
+                        "color.gamma": 1.0,
+                        "color.exposure.enabled": False,
+                    },
+                )
+                apply_pipeline_config(self.pipeline, self.config)
+            status = self._color_cal.start()
+            log.info("Colour calibration started (%d patches)", status["total"])
+            return {"ok": True, **status}
+
+        return self.call(run)
+
+    def abort_color_calibration(self) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            status = self._color_cal.abort()
+            log.info("Colour calibration aborted")
+            return {"ok": True, **status}
+
+        return self.call(run)
+
+    def apply_color_calibration(self, *, save: bool = False) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            solution = self._color_cal.solution
+            if solution is None or self._color_cal.state not in {"ready"}:
+                return {
+                    "ok": False,
+                    "error": "no calibration solution yet — run Colour calibrate first",
+                }
+            r, g, b = solution.gains_rgb()
+            updates = {
+                "color.white_balance": "manual",
+                "color.gains.r": r,
+                "color.gains.g": g,
+                "color.gains.b": b,
+                "color.gamma": solution.gamma,
+                "color.exposure.enabled": False,
+                "color.calibration.calibrated_at": iso_now(),
+                "color.calibration.patch_means_bgr": solution.patch_means_bgr,
+                "color.calibration.notes": list(solution.notes),
+            }
+            self.config = apply_updates(self.config, updates)
+            apply_pipeline_config(self.pipeline, self.config)
+            saved_path = str(self.save()) if save else None
+            log.info(
+                "Colour calibration applied (gains R%.3f G%.3f B%.3f gamma %.3f)%s",
+                r,
+                g,
+                b,
+                solution.gamma,
+                f" → {saved_path}" if saved_path else "",
+            )
+            return {
+                "ok": True,
+                "solution": solution.as_dict(),
+                "config": config_to_dict(self.config),
+                "saved": saved_path,
+                "calibration": self._color_cal.status(),
+            }
+
+        return self.call(run)
+
     def force_recalibration(self) -> bool:
         def run() -> bool:
             stage = self.pipeline.get("boundary")
@@ -932,6 +1023,7 @@ class Processor:
                 "leds_off": self._leds_off,
             },
             "scrcpy": self._scrcpy.status(self.config.scrcpy).as_dict(),
+            "color_calibration": self._color_cal.status(),
         }
 
     def available_views(self) -> list[str]:

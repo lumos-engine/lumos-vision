@@ -209,6 +209,17 @@ class GainsConfig:
 
 
 @dataclass
+class ColorCalibrationInfo:
+    """Provenance from the solid-patch colour calibration wizard."""
+
+    #: UTC ISO timestamp of the last successful apply, or empty.
+    calibrated_at: str = ""
+    #: Measured mean BGR per patch name, e.g. ``{"white": [b, g, r]}``.
+    patch_means_bgr: dict[str, list[float]] = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ColorConfig:
     enabled: bool = True
     #: off | auto (grey-world) | manual (use ``gains``)
@@ -222,6 +233,7 @@ class ColorConfig:
     brightness: float = 1.0
     contrast: float = 1.0
     saturation: float = 1.0
+    calibration: ColorCalibrationInfo = field(default_factory=ColorCalibrationInfo)
 
 
 @dataclass

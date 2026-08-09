@@ -95,6 +95,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if route in ("/", "/index.html"):
                 return self._serve_static("index.html")
+            if route in ("/calibrate/display", "/calibrate/display.html"):
+                return self._serve_static("calibrate-display.html")
             if route.startswith("/static/"):
                 return self._serve_static(route[len("/static/") :])
             if route.startswith("/stream/"):
@@ -110,6 +112,14 @@ class _Handler(BaseHTTPRequestHandler):
             if route == "/api/scrcpy":
                 return self._send_json(
                     {"ok": True, "scrcpy": self.processor.scrcpy_status()}
+                )
+            if route in (
+                "/api/calibrate/color",
+                "/api/calibrate/color/status",
+                "/api/calibrate/color/display",
+            ):
+                return self._send_json(
+                    {"ok": True, **self.processor.color_calibration_status()}
                 )
             if route == "/api/snapshot":
                 return self._serve_snapshot(query.get("view", ["source"])[0])
@@ -153,6 +163,19 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._apply_camera_source(body)
             if route == "/api/scrcpy":
                 return self._apply_scrcpy(body)
+            if route == "/api/calibrate/color/start":
+                result = self.processor.start_color_calibration()
+                return self._send_json(
+                    result, status=200 if result.get("ok") else 400
+                )
+            if route == "/api/calibrate/color/abort":
+                return self._send_json(self.processor.abort_color_calibration())
+            if route == "/api/calibrate/color/apply":
+                save = bool(body.get("save"))
+                result = self.processor.apply_color_calibration(save=save)
+                return self._send_json(
+                    result, status=200 if result.get("ok") else 400
+                )
             self.send_error(404, "not found")
         except (BrokenPipeError, ConnectionResetError):
             pass

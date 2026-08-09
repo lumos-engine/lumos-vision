@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screen Sight — Colour patches (TV)</title>
+<style>
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    color: #666;
+    font: 14px/1.4 ui-sans-serif, system-ui, sans-serif;
+    overflow: hidden;
+    cursor: none;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    background: #000;
+  }
+  #hud {
+    position: fixed;
+    left: 12px;
+    bottom: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(0,0,0,.35);
+    color: rgba(255,255,255,.55);
+    font-size: 12px;
+    letter-spacing: .04em;
+    pointer-events: none;
+    user-select: none;
+  }
+  #hint {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px;
+    color: #8a93a8;
+    background: #0b0e14;
+  }
+  #hint strong { color: #dde5f2; }
+  body.live #hint { display: none; }
+  body.live { cursor: none; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="hud">Waiting for calibration… · F11 fullscreen on HDMI</div>
+<div id="hint">
+  <div>
+    <strong>Colour patch display</strong><br>
+    Move this window to the HDMI TV and press F11 for fullscreen.<br>
+    Start <em>Colour calibrate</em> from the Screen Sight wizard on your other display.
+  </div>
+</div>
+<script>
+'use strict';
+const stage = document.getElementById('stage');
+const hud = document.getElementById('hud');
+let lastSeq = -1;
+
+function applyPatch(data) {
+  const rgb = data.display_rgb || [0, 0, 0];
+  const [r, g, b] = rgb;
+  stage.style.background = `rgb(${r},${g},${b})`;
+  const live = data.state === 'running' || data.state === 'ready';
+  document.body.classList.toggle('live', live);
+  const bits = [
+    data.patch || 'idle',
+    `rgb(${r},${g},${b})`,
+    data.state || '',
+  ];
+  if (data.state === 'running') {
+    bits.push(`${Math.round((data.progress || 0) * 100)}%`);
+  }
+  hud.textContent = bits.filter(Boolean).join(' · ');
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/api/calibrate/color/display', { cache: 'no-store' });
+    const data = await res.json();
+    if (data.display_seq !== lastSeq || data.state === 'running' || data.state === 'ready') {
+      lastSeq = data.display_seq;
+      applyPatch(data);
+    }
+  } catch (err) {
+    hud.textContent = 'Disconnected — is Screen Sight running?';
+    document.body.classList.remove('live');
+  }
+}
+
+poll();
+setInterval(poll, 200);
+</script>
+</body>
+</html>
