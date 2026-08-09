@@ -274,7 +274,7 @@ async function buildSourcePanel() {
       </select>
     </div>
     <div class="control" data-source-for="v4l2">
-      <label for="source-device">USB camera</label>
+      <label for="source-device">Camera device</label>
       <select id="source-device"></select>
     </div>
     <div class="source-fields" data-source-for="rtsp">

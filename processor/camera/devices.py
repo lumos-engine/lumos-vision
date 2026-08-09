@@ -20,7 +20,9 @@ log = get_logger(__name__)
 BY_ID_DIR = Path("/dev/v4l/by-id")
 BY_PATH_DIR = Path("/dev/v4l/by-path")
 
-_LOOPBACK_MARKERS = ("v4l2loopback", "screen sight", "dummy video device")
+#: Our HyperHDR-facing sink only -- other v4l2loopback cards (e.g. scrcpy
+#: "Android Cam") are valid capture inputs and must stay listed.
+_OUTPUT_LOOPBACK_MARKERS = ("screen sight",)
 _INFO_CARD = re.compile(r"Card type\s*:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
 _INFO_BUS = re.compile(r"Bus info\s*:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
 _INFO_DRIVER = re.compile(r"Driver name\s*:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
@@ -75,15 +77,14 @@ def _read_v4l2_info(device: str) -> dict[str, str]:
     return info
 
 
-def _is_loopback(info: dict[str, str], name: str) -> bool:
-    blob = " ".join(
-        (
-            info.get("driver", ""),
-            info.get("card", ""),
-            name,
-        )
-    ).lower()
-    return any(marker in blob for marker in _LOOPBACK_MARKERS)
+def _is_output_loopback(info: dict[str, str], name: str) -> bool:
+    """True for Screen Sight's own loopback sink (never a capture source)."""
+    blob = " ".join((info.get("card", ""), name)).lower()
+    return any(marker in blob for marker in _OUTPUT_LOOPBACK_MARKERS)
+
+
+def _is_loopback_driver(info: dict[str, str]) -> bool:
+    return "v4l2loopback" in (info.get("driver") or "").lower()
 
 
 def _is_capture_capable(device: str) -> bool:
@@ -152,7 +153,7 @@ def _collect_from_dir(directory: Path, *, kind: str) -> list[dict[str, Any]]:
         info = _read_v4l2_info(id_path)
         if not info:
             info = _read_v4l2_info(video_path)
-        if _is_loopback(info, entry.name):
+        if _is_output_loopback(info, entry.name):
             continue
         # UVC metadata nodes are usually *-video-index1+.  Check the symlink
         # name first so a bare /dev/video1 fallback cannot resurrect them.
@@ -162,7 +163,10 @@ def _collect_from_dir(directory: Path, *, kind: str) -> list[dict[str, Any]]:
         if not _is_capture_capable(id_path):
             # Some hosts only answer ioctl queries on the resolved node.
             if id_path == video_path or not _is_capture_capable(video_path):
-                continue
+                # exclusive_caps loopbacks only advertise Capture once a
+                # producer (scrcpy) is attached -- still list them as inputs.
+                if not _is_loopback_driver(info):
+                    continue
         found.append(
             {
                 "id_path": id_path,
@@ -184,9 +188,9 @@ def _collect_bare_video_nodes(seen_video: set[str]) -> list[dict[str, Any]]:
         if not os.path.exists(path) or path in seen_video:
             continue
         info = _read_v4l2_info(path)
-        if _is_loopback(info, path):
+        if _is_output_loopback(info, path):
             continue
-        if not _is_capture_capable(path):
+        if not _is_capture_capable(path) and not _is_loopback_driver(info):
             continue
         found.append(
             {
@@ -235,8 +239,12 @@ def list_capture_devices(
         devices.append(entry)
         seen_video.add(entry["video_path"])
 
-    if include_bare_video and not devices:
-        devices.extend(_collect_bare_video_nodes(seen_video))
+    # Platform loopbacks (scrcpy → Android Cam) rarely appear under by-id.
+    # Always merge unseen /dev/videoN nodes so they show next to USB cams.
+    if include_bare_video:
+        for entry in _collect_bare_video_nodes(seen_video):
+            devices.append(entry)
+            seen_video.add(entry["video_path"])
 
     selected_path = resolve_device_path(selected or "")
     selected_real = real_video_node(selected_path) if selected_path else None

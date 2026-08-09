@@ -80,6 +80,75 @@ def test_list_capture_devices_prefers_by_id_and_filters(tmp_path, monkeypatch):
     assert entry["selected"] is True
 
 
+def test_list_keeps_input_loopback_excludes_screen_sight(tmp_path, monkeypatch):
+    video_root = tmp_path / "dev"
+    video_root.mkdir()
+    for name in ("video0", "video10", "video11"):
+        (video_root / name).touch()
+
+    by_id = tmp_path / "by-id"
+    by_id.mkdir()
+    (by_id / "usb-cam-video-index0").symlink_to(video_root / "video0")
+    (by_id / "platform-v4l2loopback-0-video-index0").symlink_to(video_root / "video10")
+    (by_id / "platform-v4l2loopback-1-video-index0").symlink_to(video_root / "video11")
+
+    def fake_info(device: str) -> dict[str, str]:
+        text = str(device)
+        if text.endswith("video10") or "loopback-0" in text:
+            return {"card": "Screen Sight", "driver": "v4l2loopback", "bus_info": "platform:0"}
+        if text.endswith("video11") or "loopback-1" in text:
+            return {"card": "Android Cam", "driver": "v4l2loopback", "bus_info": "platform:1"}
+        return {"card": "USB Cam", "driver": "uvcvideo", "bus_info": "usb-1"}
+
+    monkeypatch.setattr("processor.camera.devices._read_v4l2_info", fake_info)
+    monkeypatch.setattr("processor.camera.devices._is_capture_capable", lambda device: True)
+
+    devices = list_capture_devices(
+        by_id_dir=by_id,
+        by_path_dir=tmp_path / "missing",
+        include_bare_video=False,
+    )
+    names = {entry["name"] for entry in devices}
+    assert names == {"USB Cam", "Android Cam"}
+
+
+def test_list_merges_bare_video_when_by_id_already_has_devices(tmp_path, monkeypatch):
+    video_root = tmp_path / "dev"
+    video_root.mkdir()
+    (video_root / "video0").touch()
+    by_id = tmp_path / "by-id"
+    by_id.mkdir()
+    (by_id / "usb-cam-video-index0").symlink_to(video_root / "video0")
+
+    monkeypatch.setattr(
+        "processor.camera.devices._read_v4l2_info",
+        lambda device: {"card": "USB Cam", "driver": "uvcvideo"},
+    )
+    monkeypatch.setattr("processor.camera.devices._is_capture_capable", lambda device: True)
+    monkeypatch.setattr(
+        "processor.camera.devices._collect_bare_video_nodes",
+        lambda seen: [
+            {
+                "id_path": "/dev/video11",
+                "video_path": "/dev/video11",
+                "name": "Android Cam",
+                "bus_info": "platform:v4l2loopback-001",
+                "driver": "v4l2loopback",
+                "stable_kind": "video",
+            }
+        ]
+        if "/dev/video11" not in seen
+        else [],
+    )
+
+    devices = list_capture_devices(
+        by_id_dir=by_id,
+        by_path_dir=tmp_path / "missing",
+        include_bare_video=True,
+    )
+    assert [d["name"] for d in devices] == ["USB Cam", "Android Cam"]
+
+
 def test_list_capture_devices_selected_matches_bare_video(tmp_path, monkeypatch):
     video_root = tmp_path / "dev"
     video_root.mkdir()
