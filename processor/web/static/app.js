@@ -635,8 +635,16 @@ function renderColorCal(status) {
   const bits = [state];
   if (cal.patch) bits.push(cal.patch);
   if (state === 'running') bits.push(`${pct}%`);
+  if (cal.settle_sec != null) bits.push(`settle ${Number(cal.settle_sec).toFixed(1)}s`);
   if (cal.error) bits.push(cal.error);
   $('color-cal-meta').textContent = bits.join(' · ');
+
+  const settleInput = $('color-cal-settle');
+  if (settleInput && state !== 'running' && cal.settle_sec != null
+      && document.activeElement !== settleInput) {
+    settleInput.value = String(Number(cal.settle_sec));
+  }
+  if (settleInput) settleInput.disabled = state === 'running';
 
   const startBtn = $('btn-color-cal-start');
   const abortBtn = $('btn-color-cal-abort');
@@ -685,11 +693,15 @@ async function buildColorCalPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Colour calibrate</h3>
-    <p class="hint">Occasional manual run (~1–1.5&nbsp;min): open the patch page
-    fullscreen on the HDMI TV, keep this wizard on your other display, then
-    Start. Cycles ~20 patches (greys, primaries/secondaries, mid hues, skin
-    tones), fits a 3×3 colour matrix + gamma, and writes them to config.
-    Use <strong>Apply &amp; Save</strong> to keep them in config.yaml.</p>
+    <p class="hint">Occasional manual run: open the patch page fullscreen on the
+    HDMI TV, keep this wizard on your other display, then Start. Cycles ~20
+    patches, fits a 3×3 colour matrix + gamma. Raise <strong>Settle</strong> if
+    the phone is still autofocusing when samples are taken (try 4–8&nbsp;s).
+    Use <strong>Apply &amp; Save</strong> to keep results in config.yaml.</p>
+    <div class="control">
+      <label for="color-cal-settle">Settle before sample (seconds)</label>
+      <input id="color-cal-settle" type="number" min="0.5" max="30" step="0.5" value="3.5">
+    </div>
     <div class="source-actions">
       <a class="btn" id="btn-color-cal-display" href="/calibrate/display" target="_blank" rel="noopener">Open patch page on TV (HDMI)</a>
       <button type="button" class="btn btn-primary" id="btn-color-cal-start">Start</button>
@@ -705,9 +717,11 @@ async function buildColorCalPanel() {
 
   $('btn-color-cal-start')?.addEventListener('click', async () => {
     try {
-      const result = await api('/api/calibrate/color/start', {});
+      const settleRaw = Number($('color-cal-settle')?.value);
+      const settle_sec = Number.isFinite(settleRaw) ? settleRaw : undefined;
+      const result = await api('/api/calibrate/color/start', { settle_sec });
       if (!result.ok) throw new Error(result.error || 'start failed');
-      toast('Colour calibration started — watch the TV patches');
+      toast(`Colour calibration started (settle ${Number(result.settle_sec).toFixed(1)}s)`);
       renderColorCal(result);
     } catch (err) {
       toast(err.message, 'error');

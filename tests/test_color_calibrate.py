@@ -86,9 +86,22 @@ def _synthetic_solids(channel_cast: np.ndarray | None = None) -> dict[str, tuple
     return solids
 
 
+def test_session_settle_sec_is_clamped_on_start():
+    session = ColorCalibrationSession()
+    status = session.start(settle_sec=8.0)
+    assert status["settle_sec"] == 8.0
+    session.abort()
+    status = session.start(settle_sec=0.1)
+    assert status["settle_sec"] == pytest.approx(0.5)
+    session.abort()
+    status = session.start(settle_sec=99.0)
+    assert status["settle_sec"] == pytest.approx(30.0)
+
+
 def test_session_runs_to_ready_with_synthetic_frames():
     session = ColorCalibrationSession(settle_sec=0.0, sample_frames=2)
-    session.start()
+    session.start(settle_sec=0.5)
+    session.settle_sec = 0.0  # tests run as fast as possible after start
     assert session.state == "running"
     assert session.status()["total"] == len(DEFAULT_PATCHES)
 

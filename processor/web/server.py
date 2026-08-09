@@ -164,7 +164,17 @@ class _Handler(BaseHTTPRequestHandler):
             if route == "/api/scrcpy":
                 return self._apply_scrcpy(body)
             if route == "/api/calibrate/color/start":
-                result = self.processor.start_color_calibration()
+                settle = body.get("settle_sec", None)
+                try:
+                    settle_sec = None if settle is None else float(settle)
+                except (TypeError, ValueError):
+                    return self._send_json(
+                        {"ok": False, "error": "settle_sec must be a number"},
+                        status=400,
+                    )
+                result = self.processor.start_color_calibration(
+                    settle_sec=settle_sec
+                )
                 return self._send_json(
                     result, status=200 if result.get("ok") else 400
                 )

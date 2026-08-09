@@ -314,9 +314,12 @@ def solve_gains(
 class ColorCalibrationSession:
     """Automated patch sequence driven from the pipeline thread."""
 
-    settle_sec: float = 1.8
+    #: Wait after each patch colour change before sampling (autofocus / AE).
+    settle_sec: float = 3.5
     sample_frames: int = 8
     roi_fraction: float = 0.25
+    settle_sec_min: float = 0.5
+    settle_sec_max: float = 30.0
     patches: tuple[Patch, ...] = field(
         default_factory=lambda: tuple(
             Patch(name, rgb) for name, rgb in DEFAULT_PATCHES
@@ -350,7 +353,20 @@ class ColorCalibrationSession:
             return ""
         return self.patches[min(self.index, len(self.patches) - 1)].name
 
-    def start(self) -> dict[str, Any]:
+    def set_settle_sec(self, settle_sec: float | None) -> float:
+        """Clamp and store settle time; returns the value actually used."""
+        if settle_sec is None:
+            return float(self.settle_sec)
+        value = float(settle_sec)
+        if not np.isfinite(value):
+            raise ValueError("settle_sec must be a finite number")
+        self.settle_sec = float(
+            np.clip(value, self.settle_sec_min, self.settle_sec_max)
+        )
+        return float(self.settle_sec)
+
+    def start(self, *, settle_sec: float | None = None) -> dict[str, Any]:
+        self.set_settle_sec(settle_sec)
         self.state = "running"
         self.index = 0
         self.phase = "settle"

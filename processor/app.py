@@ -841,7 +841,9 @@ class Processor:
     def color_calibration_status(self) -> dict[str, Any]:
         return self._color_cal.status()
 
-    def start_color_calibration(self) -> dict[str, Any]:
+    def start_color_calibration(
+        self, *, settle_sec: float | None = None
+    ) -> dict[str, Any]:
         def run() -> dict[str, Any]:
             if self._idle:
                 return {"ok": False, "error": "cannot calibrate while TV idle"}
@@ -867,8 +869,15 @@ class Processor:
                     },
                 )
                 apply_pipeline_config(self.pipeline, self.config)
-            status = self._color_cal.start()
-            log.info("Colour calibration started (%d patches)", status["total"])
+            try:
+                status = self._color_cal.start(settle_sec=settle_sec)
+            except (TypeError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
+            log.info(
+                "Colour calibration started (%d patches, settle %.1fs)",
+                status["total"],
+                status["settle_sec"],
+            )
             return {"ok": True, **status}
 
         return self.call(run)
