@@ -221,8 +221,9 @@ class _Handler(BaseHTTPRequestHandler):
             result = self.processor.apply_scrcpy(fields, action=action, save=save)
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, status=400)
-        status = 200 if result.get("ok") else 400
-        self._send_json(result, status=status)
+        # Always 200 when the config mutation ran: a scrcpy spawn failure should
+        # still leave enabled/zoom/pan reflected in the wizard, not roll the UI back.
+        self._send_json(result, status=200)
 
     def _apply_camera_source(self, body: dict[str, Any]) -> None:
         save = bool(body.get("save"))

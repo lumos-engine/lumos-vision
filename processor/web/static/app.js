@@ -275,6 +275,25 @@ let scrcpyPanelState = {
   last_error: '',
   crop: '',
 };
+/** True while the user is editing the scrcpy form; blocks status-poll overwrites. */
+let scrcpyFormDirty = false;
+let scrcpyBusy = false;
+
+const SCRCPY_FIELD_IDS = [
+  'scrcpy-enabled',
+  'scrcpy-binary',
+  'scrcpy-serial',
+  'scrcpy-camera-id',
+  'scrcpy-camera-size',
+  'scrcpy-camera-fps',
+  'scrcpy-zoom',
+  'scrcpy-view-zoom',
+  'scrcpy-sink',
+];
+
+function markScrcpyDirty() {
+  scrcpyFormDirty = true;
+}
 
 function applyScrcpyPanelFromConfig(config) {
   const sc = config?.scrcpy || {};
@@ -294,42 +313,64 @@ function applyScrcpyPanelFromConfig(config) {
     zoom_max: Number(sc.zoom_max || 10),
     v4l2_sink: sc.v4l2_sink || '/dev/video11',
   };
-  syncScrcpyForm();
+  scrcpyFormDirty = false;
+  syncScrcpyForm({ force: true });
 }
 
-function syncScrcpyForm() {
+function syncScrcpyMeta() {
+  const meta = $('scrcpy-meta');
+  if (!meta) return;
+  const bits = [
+    scrcpyPanelState.running ? 'running' : 'stopped',
+    `phone ${Number(scrcpyPanelState.camera_zoom).toFixed(2)}×`,
+    `frame ${Number(scrcpyPanelState.view_zoom).toFixed(2)}×`,
+    `pan ${Number(scrcpyPanelState.pan_x).toFixed(2)},${Number(scrcpyPanelState.pan_y).toFixed(2)}`,
+    scrcpyPanelState.v4l2_sink,
+  ];
+  if (scrcpyPanelState.crop) bits.push(`crop ${scrcpyPanelState.crop}`);
+  if (scrcpyPanelState.last_error) bits.push(scrcpyPanelState.last_error);
+  if (scrcpyFormDirty) bits.push('unsaved edits');
+  meta.textContent = bits.join(' · ');
+}
+
+function syncScrcpyForm({ force = false } = {}) {
+  const active = document.activeElement;
   const set = (id, value) => {
     const el = $(id);
     if (!el) return;
+    // Never clobber a field the user is mid-edit.
+    if (!force && active === el) return;
     if (el.type === 'checkbox') el.checked = Boolean(value);
     else el.value = value;
   };
-  set('scrcpy-enabled', scrcpyPanelState.enabled);
-  set('scrcpy-binary', scrcpyPanelState.binary);
-  set('scrcpy-serial', scrcpyPanelState.serial);
-  set('scrcpy-camera-id', scrcpyPanelState.camera_id);
-  set('scrcpy-camera-size', scrcpyPanelState.camera_size);
-  set('scrcpy-camera-fps', scrcpyPanelState.camera_fps);
-  set('scrcpy-zoom', scrcpyPanelState.camera_zoom);
-  set('scrcpy-view-zoom', scrcpyPanelState.view_zoom);
-  set('scrcpy-sink', scrcpyPanelState.v4l2_sink);
-  const zoomLabel = $('scrcpy-zoom-label');
-  if (zoomLabel) zoomLabel.textContent = Number(scrcpyPanelState.camera_zoom).toFixed(2);
-  const viewLabel = $('scrcpy-view-zoom-label');
-  if (viewLabel) viewLabel.textContent = Number(scrcpyPanelState.view_zoom).toFixed(2);
-  const meta = $('scrcpy-meta');
-  if (meta) {
-    const bits = [
-      scrcpyPanelState.running ? 'running' : 'stopped',
-      `phone ${Number(scrcpyPanelState.camera_zoom).toFixed(2)}×`,
-      `frame ${Number(scrcpyPanelState.view_zoom).toFixed(2)}×`,
-      `pan ${Number(scrcpyPanelState.pan_x).toFixed(2)},${Number(scrcpyPanelState.pan_y).toFixed(2)}`,
-      scrcpyPanelState.v4l2_sink,
-    ];
-    if (scrcpyPanelState.crop) bits.push(`crop ${scrcpyPanelState.crop}`);
-    if (scrcpyPanelState.last_error) bits.push(scrcpyPanelState.last_error);
-    meta.textContent = bits.join(' · ');
+  if (force || !scrcpyFormDirty) {
+    set('scrcpy-enabled', scrcpyPanelState.enabled);
+    set('scrcpy-binary', scrcpyPanelState.binary);
+    set('scrcpy-serial', scrcpyPanelState.serial);
+    set('scrcpy-camera-id', scrcpyPanelState.camera_id);
+    set('scrcpy-camera-size', scrcpyPanelState.camera_size);
+    set('scrcpy-camera-fps', scrcpyPanelState.camera_fps);
+    set('scrcpy-zoom', scrcpyPanelState.camera_zoom);
+    set('scrcpy-view-zoom', scrcpyPanelState.view_zoom);
+    set('scrcpy-sink', scrcpyPanelState.v4l2_sink);
   }
+  const zoomLabel = $('scrcpy-zoom-label');
+  if (zoomLabel && (force || active !== $('scrcpy-zoom'))) {
+    zoomLabel.textContent = Number(
+      force || !scrcpyFormDirty
+        ? scrcpyPanelState.camera_zoom
+        : ($('scrcpy-zoom')?.value || scrcpyPanelState.camera_zoom)
+    ).toFixed(2);
+  }
+  const viewLabel = $('scrcpy-view-zoom-label');
+  if (viewLabel && (force || active !== $('scrcpy-view-zoom'))) {
+    viewLabel.textContent = Number(
+      force || !scrcpyFormDirty
+        ? scrcpyPanelState.view_zoom
+        : ($('scrcpy-view-zoom')?.value || scrcpyPanelState.view_zoom)
+    ).toFixed(2);
+  }
+  syncScrcpyMeta();
 }
 
 function readScrcpyFields() {
@@ -352,30 +393,49 @@ function readScrcpyFields() {
 }
 
 async function postScrcpy(action, fields, { save = false } = {}) {
+  if (scrcpyBusy) throw new Error('scrcpy is busy — wait a moment');
+  scrcpyBusy = true;
   const status = $('tune-status');
   if (status) status.textContent = `scrcpy ${action}…`;
-  const body = { action, save, ...(fields || {}) };
-  const result = await api('/api/scrcpy', body);
-  if (result.scrcpy) {
-    scrcpyPanelState.running = Boolean(result.scrcpy.running);
-    scrcpyPanelState.last_error = result.scrcpy.last_error || '';
-    scrcpyPanelState.camera_zoom = Number(result.scrcpy.zoom || scrcpyPanelState.camera_zoom);
-    scrcpyPanelState.view_zoom = Number(result.scrcpy.view_zoom ?? scrcpyPanelState.view_zoom);
-    scrcpyPanelState.pan_x = Number(result.scrcpy.pan_x ?? scrcpyPanelState.pan_x);
-    scrcpyPanelState.pan_y = Number(result.scrcpy.pan_y ?? scrcpyPanelState.pan_y);
-    scrcpyPanelState.crop = result.scrcpy.crop || '';
+  try {
+    const body = { action, save, ...(fields || {}) };
+    // Use fetch directly so a failed scrcpy spawn (4xx) still returns the
+    // updated config — enabled stays on even if the binary/device is wrong.
+    const response = await fetch('/api/scrcpy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    let result = {};
+    try { result = text ? JSON.parse(text) : {}; } catch { /* ignore */ }
+
+    if (result.scrcpy) {
+      scrcpyPanelState.running = Boolean(result.scrcpy.running);
+      scrcpyPanelState.last_error = result.scrcpy.last_error || result.error || '';
+      scrcpyPanelState.camera_zoom = Number(result.scrcpy.zoom || scrcpyPanelState.camera_zoom);
+      scrcpyPanelState.view_zoom = Number(result.scrcpy.view_zoom ?? scrcpyPanelState.view_zoom);
+      scrcpyPanelState.pan_x = Number(result.scrcpy.pan_x ?? scrcpyPanelState.pan_x);
+      scrcpyPanelState.pan_y = Number(result.scrcpy.pan_y ?? scrcpyPanelState.pan_y);
+      scrcpyPanelState.crop = result.scrcpy.crop || '';
+    }
+    if (result.config) {
+      applyConfig(result.config);
+      applyScrcpyPanelFromConfig(result.config);
+      applySourcePanelFromConfig(result.config);
+      fillDeviceSelect(result.config.camera?.device || '');
+    } else {
+      scrcpyFormDirty = false;
+      syncScrcpyForm({ force: true });
+    }
+    if (status) status.textContent = 'changes apply live';
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.error || result.scrcpy?.last_error || 'scrcpy action failed');
+    }
+    return result;
+  } finally {
+    scrcpyBusy = false;
   }
-  if (result.config) {
-    applyConfig(result.config);
-    applyScrcpyPanelFromConfig(result.config);
-    applySourcePanelFromConfig(result.config);
-    fillDeviceSelect(result.config.camera?.device || '');
-  } else {
-    syncScrcpyForm();
-  }
-  if (status) status.textContent = 'changes apply live';
-  if (!result.ok) throw new Error(result.error || 'scrcpy action failed');
-  return result;
 }
 
 async function buildScrcpyPanel() {
@@ -440,14 +500,35 @@ async function buildScrcpyPanel() {
     </div>`;
   root.append(section);
 
+  for (const id of SCRCPY_FIELD_IDS) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener('input', markScrcpyDirty);
+    el.addEventListener('change', markScrcpyDirty);
+  }
+
   const bindZoomLabel = (inputId, labelId) => {
     $(inputId)?.addEventListener('input', () => {
       const label = $(labelId);
       if (label) label.textContent = Number($(inputId).value).toFixed(2);
+      syncScrcpyMeta();
     });
   };
   bindZoomLabel('scrcpy-zoom', 'scrcpy-zoom-label');
   bindZoomLabel('scrcpy-view-zoom', 'scrcpy-view-zoom-label');
+
+  // Toggle applies immediately so the 1 Hz status poll cannot snap it back.
+  $('scrcpy-enabled')?.addEventListener('change', async () => {
+    markScrcpyDirty();
+    try {
+      await postScrcpy('apply', readScrcpyFields(), { save: false });
+      toast(scrcpyPanelState.enabled ? 'scrcpy enabled' : 'scrcpy disabled');
+      await loadCaptureDevices();
+      fillDeviceSelect(sourcePanelState.device || scrcpyPanelState.v4l2_sink);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 
   const panToast = () => {
     toast(
@@ -511,7 +592,7 @@ async function buildScrcpyPanel() {
       toast(err.message, 'error');
     }
   });
-  syncScrcpyForm();
+  syncScrcpyForm({ force: true });
 }
 
 async function buildSourcePanel() {
@@ -1118,15 +1199,25 @@ async function refresh() {
     scrcpyPanelState.running = Boolean(status.scrcpy.running);
     scrcpyPanelState.last_error = status.scrcpy.last_error || '';
     scrcpyPanelState.crop = status.scrcpy.crop || '';
-    if (status.scrcpy.zoom != null && document.activeElement !== $('scrcpy-zoom')) {
-      scrcpyPanelState.camera_zoom = Number(status.scrcpy.zoom);
+    // While the user is editing, only refresh live status text — never the inputs.
+    if (!scrcpyFormDirty && !scrcpyBusy) {
+      if (status.scrcpy.zoom != null) {
+        scrcpyPanelState.camera_zoom = Number(status.scrcpy.zoom);
+      }
+      if (status.scrcpy.view_zoom != null) {
+        scrcpyPanelState.view_zoom = Number(status.scrcpy.view_zoom);
+      }
+      if (status.scrcpy.pan_x != null) scrcpyPanelState.pan_x = Number(status.scrcpy.pan_x);
+      if (status.scrcpy.pan_y != null) scrcpyPanelState.pan_y = Number(status.scrcpy.pan_y);
+      if (status.config?.scrcpy) {
+        scrcpyPanelState.enabled = Boolean(status.config.scrcpy.enabled);
+      } else if (status.scrcpy.enabled != null) {
+        scrcpyPanelState.enabled = Boolean(status.scrcpy.enabled);
+      }
+      syncScrcpyForm();
+    } else {
+      syncScrcpyMeta();
     }
-    if (status.scrcpy.view_zoom != null && document.activeElement !== $('scrcpy-view-zoom')) {
-      scrcpyPanelState.view_zoom = Number(status.scrcpy.view_zoom);
-    }
-    if (status.scrcpy.pan_x != null) scrcpyPanelState.pan_x = Number(status.scrcpy.pan_x);
-    if (status.scrcpy.pan_y != null) scrcpyPanelState.pan_y = Number(status.scrcpy.pan_y);
-    syncScrcpyForm();
   }
 
   // Adopt the pipeline's corners only while the user is not editing them.
