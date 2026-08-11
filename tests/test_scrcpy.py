@@ -163,6 +163,10 @@ def test_apply_scrcpy_zoom_restarts(monkeypatch):
         def __init__(self):
             self._running = False
 
+        @property
+        def running(self):
+            return self._running
+
         def status(self, cfg):
             from processor.utils.scrcpy import ScrcpyStatus
 
@@ -233,6 +237,10 @@ def test_apply_scrcpy_pan_left(monkeypatch):
     class FakeMgr:
         def __init__(self):
             self._running = False
+
+        @property
+        def running(self):
+            return self._running
 
         def status(self, cfg):
             from processor.utils.scrcpy import ScrcpyStatus

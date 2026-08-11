@@ -411,6 +411,28 @@ class Processor:
             self.config.power.tv_host or "(power disabled)",
         )
 
+    def _release_scrcpy_sink_reader_unlocked(self) -> None:
+        """Drop capture on the scrcpy loopback so the producer can reopen it.
+
+        With ``exclusive_caps=1``, Screen Sight holding ``/dev/video11`` open
+        prevents scrcpy from attaching after a phone reconnect.
+        """
+        cfg = self.config.scrcpy
+        sink = (cfg.v4l2_sink or "").strip()
+        if not sink or self.source is None:
+            return
+        device = (self.config.camera.device or "").strip()
+        if not cfg.bind_camera and device != sink:
+            return
+        log.info("Releasing capture on %s so scrcpy can reopen it", sink)
+        try:
+            self.source.stop()
+        except Exception:
+            log.exception("Failed to stop capture source before scrcpy start")
+        self.source = None
+        self._last_source = None
+        self._last_ctx = None
+
     def _start_scrcpy_unlocked(self, *, restart: bool = False) -> dict[str, Any]:
         cfg = self.config.scrcpy
         if not cfg.enabled:
@@ -426,6 +448,9 @@ class Processor:
                     updates["camera.device"] = sink
                 if updates:
                     self.config = apply_updates(self.config, updates)
+        # Producer attach needs an idle sink node (exclusive_caps).
+        if restart or not self._scrcpy.running:
+            self._release_scrcpy_sink_reader_unlocked()
         if restart:
             result = self._scrcpy.restart(cfg)
         else:
@@ -449,7 +474,7 @@ class Processor:
         if not adb_device_ready(cfg.serial):
             return
         log.info("scrcpy not running — restarting (phone reconnected?)")
-        result = self._start_scrcpy_unlocked()
+        result = self._start_scrcpy_unlocked(restart=True)
         if not result.get("ok") or not result.get("running"):
             return
         try:
@@ -822,10 +847,10 @@ class Processor:
                 }
             elif action_name == "stop" or not self.config.scrcpy.enabled:
                 scrcpy_result = self._scrcpy.stop()
-            elif action_name == "restart" or updates:
-                scrcpy_result = self._scrcpy.restart(self.config.scrcpy)
             else:
-                scrcpy_result = self._start_scrcpy_unlocked()
+                # Always go through _start_scrcpy_unlocked so the V4L2 reader
+                # releases the sink before scrcpy reattaches (exclusive_caps).
+                scrcpy_result = self._start_scrcpy_unlocked(restart=True)
 
             source_result: dict[str, Any] | None = None
             if (
@@ -833,6 +858,8 @@ class Processor:
                 and self.config.scrcpy.enabled
                 and self.config.scrcpy.bind_camera
                 and action_name != "stop"
+                and scrcpy_result.get("ok")
+                and scrcpy_result.get("running")
             ):
                 # Reopen capture after the loopback producer respawns.
                 try:

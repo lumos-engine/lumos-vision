@@ -334,6 +334,11 @@ class ScrcpyManager:
             output = self._read_process_output(proc)
             self._proc = None
             self._last_error = output.strip() or f"scrcpy exited with code {proc.returncode}"
+            if "Failed to open output device" in self._last_error:
+                self._last_error += (
+                    " — usually exclusive_caps: stop readers of the sink "
+                    "(Screen Sight) or wrong /dev/videoN"
+                )
             log.error("scrcpy startup failed: %s", self._last_error)
             return {"ok": False, "error": self._last_error, "running": False}
 
