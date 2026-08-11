@@ -438,6 +438,10 @@ class ScrcpyConfig:
     bind_camera: bool = True
     #: How long to wait for the sink to advertise capture after spawn.
     startup_timeout_sec: float = 12.0
+    #: If scrcpy dies (phone unplug), keep trying to restart when ADB returns.
+    auto_restart: bool = True
+    #: Minimum seconds between automatic restart attempts.
+    restart_interval_sec: float = 5.0
     #: Extra CLI tokens appended verbatim.
     extra_args: list[str] = field(default_factory=list)
 

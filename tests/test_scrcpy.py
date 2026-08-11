@@ -8,12 +8,26 @@ from processor.utils.scrcpy import (
     MIN_VIEW_ZOOM_FOR_PAN,
     ZOOM_STEP,
     ScrcpyManager,
+    adb_device_ready,
     build_crop_arg,
     build_scrcpy_command,
     clamp_zoom,
     step_pan,
     step_zoom,
 )
+
+
+def test_adb_device_ready_parses_devices(monkeypatch):
+    class Result:
+        stdout = "List of devices attached\n452ee42b0506\tdevice\n"
+
+    monkeypatch.setattr(
+        "processor.utils.scrcpy.subprocess.run",
+        lambda *a, **k: Result(),
+    )
+    assert adb_device_ready() is True
+    assert adb_device_ready("452ee42b0506") is True
+    assert adb_device_ready("other") is False
 
 
 def test_build_scrcpy_command_includes_camera_and_sink():

@@ -75,6 +75,34 @@ class ScrcpyStatus:
         }
 
 
+def adb_device_ready(serial: str = "", *, adb: str = "adb") -> bool:
+    """True when ``adb devices`` lists an authorized device (optionally matching serial)."""
+    try:
+        result = subprocess.run(
+            [adb, "devices"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    want = (serial or "").strip()
+    for line in (result.stdout or "").splitlines():
+        text = line.strip()
+        if not text or text.startswith("List of devices"):
+            continue
+        parts = text.split()
+        if len(parts) < 2:
+            continue
+        device_serial, state = parts[0], parts[1]
+        if state != "device":
+            continue
+        if not want or device_serial == want:
+            return True
+    return False
+
+
 def resolve_scrcpy_binary(configured: str) -> str:
     text = (configured or "").strip() or "scrcpy"
     if os.path.isfile(text) and os.access(text, os.X_OK):
@@ -230,6 +258,15 @@ class ScrcpyManager:
     def status(self, cfg: ScrcpyConfig) -> ScrcpyStatus:
         alive = self.running
         pid = self._proc.pid if alive and self._proc is not None else None
+        waiting_adb = (
+            bool(cfg.enabled)
+            and bool(cfg.auto_restart)
+            and not alive
+            and not adb_device_ready(cfg.serial)
+        )
+        last_error = self._last_error
+        if waiting_adb and not last_error:
+            last_error = "waiting for adb device (reconnect phone / accept USB debugging)"
         return ScrcpyStatus(
             enabled=bool(cfg.enabled),
             running=alive,
@@ -244,7 +281,7 @@ class ScrcpyManager:
             camera_fps=int(cfg.camera_fps),
             v4l2_sink=str(cfg.v4l2_sink),
             binary=self._binary or cfg.binary,
-            last_error=self._last_error,
+            last_error=last_error,
             command=list(self._command),
         )
 
@@ -418,6 +455,7 @@ __all__ = [
     "ZOOM_STEP",
     "ScrcpyManager",
     "ScrcpyStatus",
+    "adb_device_ready",
     "build_crop_arg",
     "build_scrcpy_command",
     "clamp_pan",

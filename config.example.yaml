@@ -137,6 +137,8 @@ logging:
 #   pan_y: 0.0                      # -1 up .. +1 down
 #   v4l2_sink: /dev/video11
 #   bind_camera: true               # also set camera.device to the sink
+#   auto_restart: true              # restart scrcpy when phone USB reconnects
+#   restart_interval_sec: 5.0
 #   no_playback: true
 #   no_audio: true
 

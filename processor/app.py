@@ -35,6 +35,7 @@ from processor.utils.hyperhdr_leds import set_led_device
 from processor.utils.logging import get_logger
 from processor.utils.scrcpy import (
     ScrcpyManager,
+    adb_device_ready,
     clamp_pan,
     clamp_view_zoom,
     clamp_zoom,
@@ -138,6 +139,7 @@ class Processor:
             online_checks=config.power.success_pings,
         )
         self._scrcpy = ScrcpyManager()
+        self._scrcpy_next_retry = 0.0
         self._color_cal = ColorCalibrationSession()
 
     # ------------------------------------------------------------------
@@ -225,6 +227,7 @@ class Processor:
             while not self._stop.is_set():
                 self._drain_commands()
                 self._tick_power()
+                self._tick_scrcpy_watchdog()
 
                 if self._idle:
                     self._write_idle_frame()
@@ -430,6 +433,29 @@ class Processor:
         if not result.get("ok"):
             log.warning("scrcpy start incomplete: %s", result.get("error"))
         return result
+
+    def _tick_scrcpy_watchdog(self) -> None:
+        """Restart scrcpy after phone unplug/replug when auto_restart is on."""
+        cfg = self.config.scrcpy
+        if self._idle or not cfg.enabled or not cfg.auto_restart:
+            return
+        if self._scrcpy.running:
+            return
+        now = time.monotonic()
+        if now < self._scrcpy_next_retry:
+            return
+        interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
+        self._scrcpy_next_retry = now + interval
+        if not adb_device_ready(cfg.serial):
+            return
+        log.info("scrcpy not running — restarting (phone reconnected?)")
+        result = self._start_scrcpy_unlocked()
+        if not result.get("ok") or not result.get("running"):
+            return
+        try:
+            self._recreate_source_unlocked()
+        except Exception:
+            log.exception("Failed to recreate capture source after scrcpy restart")
 
     def _set_leds_unlocked(self, enabled: bool) -> None:
         url = (self.config.power.hyperhdr_url or "").strip()
