@@ -909,10 +909,11 @@ class Processor:
                     "ok": False,
                     "error": "mark TV corners first so the sample ROI is on-panel",
                 }
-            # Measuring must see the uncorrected panel (no WB / matrix / gamma).
+            # Measuring must see the uncorrected panel (no WB / matrix / black / gamma).
             needs_bypass = (
                 self.config.color.white_balance != "off"
                 or self.config.color.matrix_enabled
+                or self.config.color.black_level_enabled
                 or abs(self.config.color.gamma - 1.0) > 1e-3
             )
             if needs_bypass:
@@ -921,6 +922,7 @@ class Processor:
                     {
                         "color.white_balance": "off",
                         "color.matrix_enabled": False,
+                        "color.black_level_enabled": False,
                         "color.gamma": 1.0,
                         "color.exposure.enabled": False,
                     },
@@ -1014,7 +1016,9 @@ class Processor:
                     "error": "no calibration solution yet — run Colour calibrate first",
                 }
             r, g, b = solution.gains_rgb()
+            br, bg, bb = solution.black_level_rgb()
             matrix = solution.matrix_flat()
+            black_enabled = any(v > 0.5 for v in solution.black_level_bgr)
             updates = {
                 "color.white_balance": "manual",
                 "color.gains.r": r,
@@ -1022,21 +1026,28 @@ class Processor:
                 "color.gains.b": b,
                 "color.matrix_enabled": True,
                 "color.matrix": matrix,
+                "color.black_level_enabled": black_enabled,
+                "color.black_level.r": br,
+                "color.black_level.g": bg,
+                "color.black_level.b": bb,
                 "color.gamma": solution.gamma,
                 "color.exposure.enabled": False,
                 "color.calibration.calibrated_at": iso_now(),
                 "color.calibration.patch_means_bgr": solution.patch_means_bgr,
                 "color.calibration.matrix": matrix,
+                "color.calibration.black_level.r": br,
+                "color.calibration.black_level.g": bg,
+                "color.calibration.black_level.b": bb,
                 "color.calibration.notes": list(solution.notes),
             }
             self.config = apply_updates(self.config, updates)
             apply_pipeline_config(self.pipeline, self.config)
             saved_path = str(self.save()) if save else None
             log.info(
-                "Colour calibration applied (3×3 matrix, gains R%.3f G%.3f B%.3f gamma %.3f)%s",
-                r,
-                g,
-                b,
+                "Colour calibration applied (3×3 matrix, black R%.1f G%.1f B%.1f, gamma %.3f)%s",
+                br,
+                bg,
+                bb,
                 solution.gamma,
                 f" → {saved_path}" if saved_path else "",
             )

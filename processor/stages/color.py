@@ -22,6 +22,7 @@ from processor.config.schema import ColorConfig
 from processor.pipeline.context import FrameContext, PipelineState
 from processor.pipeline.stage import Stage
 from processor.utils.color_calibrate import (
+    apply_black_level_bgr,
     apply_matrix_bgr,
     is_identity_matrix,
     matrix_from_flat,
@@ -102,6 +103,7 @@ class ColorStage(Stage):
             "enabled": self.enabled,
             "white_balance": self.config.white_balance,
             "matrix_enabled": bool(self.config.matrix_enabled),
+            "black_level_enabled": bool(self.config.black_level_enabled),
             "gains": [round(g, 3) for g in self._measured["gains"]],
             "exposure_gain": round(float(self._measured["exposure"]), 3),
             "mean_luma": round(float(self._measured["luma"]), 1),
@@ -114,6 +116,10 @@ class ColorStage(Stage):
         if image.ndim != 3 or image.shape[2] != 3:
             ctx.skipped[self.name] = "not a colour image"
             return
+
+        black_level = self._resolve_black_level()
+        if black_level is not None:
+            image = apply_black_level_bgr(image, black_level)
 
         matrix = self._resolve_matrix()
         if matrix is not None:
@@ -159,6 +165,7 @@ class ColorStage(Stage):
             saturation=saturation,
             gamma=self.config.gamma,
             matrix=bool(matrix is not None),
+            black_level=bool(black_level is not None),
         )
 
     # -- measurement -------------------------------------------------------
@@ -166,6 +173,16 @@ class ColorStage(Stage):
     def _sample(self, image: np.ndarray) -> np.ndarray:
         """Every 4th pixel; plenty for a global statistic and 16x cheaper."""
         return image[::4, ::4].reshape(-1, 3).astype(np.float32)
+
+    def _resolve_black_level(self) -> tuple[float, float, float] | None:
+        if not self.config.black_level_enabled:
+            return None
+        level = self.config.black_level
+        # Config is RGB fields; OpenCV images are BGR.
+        bgr = (float(level.b), float(level.g), float(level.r))
+        if max(bgr) < 0.5:
+            return None
+        return bgr
 
     def _resolve_matrix(self) -> np.ndarray | None:
         if not self.config.matrix_enabled:

@@ -40,6 +40,19 @@ def test_solve_identity_when_measure_equals_target():
     assert is_identity_matrix(solution.matrix_bgr, atol=0.08)
     assert solution.gains_bgr == (1.0, 1.0, 1.0)
     assert abs(solution.gamma - 1.0) < 0.1
+    assert solution.black_level_bgr == pytest.approx((0.0, 0.0, 0.0), abs=0.5)
+
+
+def test_solve_recovers_black_pedestal_and_near_identity_matrix():
+    pedestal = np.array([18.0, 12.0, 22.0], dtype=np.float64)
+    means = {
+        name: np.clip(tgt + pedestal, 0.0, 255.0)
+        for name, tgt in patch_targets_bgr().items()
+    }
+    solution = solve_calibration(means)
+    assert solution.black_level_bgr == pytest.approx(tuple(pedestal), abs=1.5)
+    assert is_identity_matrix(solution.matrix_bgr, atol=0.12)
+    assert solution.as_dict()["black_level_enabled"] is True
 
 
 def test_solve_matrix_reduces_skin_error_vs_gains_only():
@@ -64,7 +77,8 @@ def test_solve_matrix_reduces_skin_error_vs_gains_only():
     gains_err = float(np.linalg.norm(skin * gains - tgt))
 
     solution = solve_calibration(means)
-    matrix_err = float(np.linalg.norm(skin @ solution.matrix_bgr - tgt))
+    adj = np.maximum(skin - np.asarray(solution.black_level_bgr), 0.0)
+    matrix_err = float(np.linalg.norm(adj @ solution.matrix_bgr - tgt))
     assert matrix_err < gains_err
     assert matrix_err < 35.0
     assert solution.gains_bgr == (1.0, 1.0, 1.0)
@@ -204,7 +218,12 @@ def test_processor_apply_color_calibration_persists_matrix(tmp_path):
 
         session = app._color_cal
         session.sample_frames = 2
-        solids = _synthetic_solids()
+        glow = np.array([16, 10, 20], dtype=np.float64)  # BGR backlight floor
+        solids = {}
+        for name, bgr in _synthetic_solids().items():
+            solids[name] = tuple(
+                int(np.clip(v + g, 0, 255)) for v, g in zip(bgr, glow)
+            )
         for name, bgr in solids.items():
             app.navigate_color_calibration(patch=name)
             captured = app.capture_color_calibration()
@@ -233,6 +252,9 @@ def test_processor_apply_color_calibration_persists_matrix(tmp_path):
         assert app.config.color.gains.r == pytest.approx(1.0)
         assert app.config.color.calibration.calibrated_at
         assert "skin_medium" in app.config.color.calibration.patch_means_bgr
+        assert app.config.color.black_level_enabled is True
+        assert app.config.color.black_level.r == pytest.approx(20.0, abs=2.0)
+        assert app.config.color.black_level.b == pytest.approx(16.0, abs=2.0)
 
         path = tmp_path / "config.yaml"
         assert path.exists()
@@ -240,5 +262,7 @@ def test_processor_apply_color_calibration_persists_matrix(tmp_path):
         assert saved["color"]["matrix_enabled"] is True
         assert len(saved["color"]["matrix"]) == 9
         assert saved["color"]["calibration"]["matrix"]
+        assert saved["color"]["black_level_enabled"] is True
+        assert "r" in saved["color"]["black_level"]
     finally:
         app.shutdown()

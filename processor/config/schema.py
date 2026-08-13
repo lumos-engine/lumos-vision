@@ -209,6 +209,15 @@ class GainsConfig:
 
 
 @dataclass
+class BlackLevelConfig:
+    """Per-channel black pedestal in display RGB order (0–255 scale)."""
+
+    r: float = 0.0
+    g: float = 0.0
+    b: float = 0.0
+
+
+@dataclass
 class ColorCalibrationInfo:
     """Provenance from the solid-patch colour calibration wizard."""
 
@@ -220,6 +229,8 @@ class ColorCalibrationInfo:
     matrix: list[float] = field(
         default_factory=lambda: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
     )
+    #: Black pedestal from the last apply (RGB channel fields).
+    black_level: BlackLevelConfig = field(default_factory=BlackLevelConfig)
     notes: list[str] = field(default_factory=list)
 
 
@@ -238,6 +249,9 @@ class ColorConfig:
     matrix: list[float] = field(
         default_factory=lambda: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
     )
+    #: Subtract camera/TV black floor before matrix/LUT (backlight glow).
+    black_level_enabled: bool = False
+    black_level: BlackLevelConfig = field(default_factory=BlackLevelConfig)
     exposure: ExposureConfig = field(default_factory=ExposureConfig)
     gamma: float = 1.0
     brightness: float = 1.0

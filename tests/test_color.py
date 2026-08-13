@@ -1,7 +1,13 @@
 import numpy as np
 import pytest
 
-from processor.config.schema import ColorConfig, CropConfig, InsetConfig, ReflectionConfig
+from processor.config.schema import (
+    BlackLevelConfig,
+    ColorConfig,
+    CropConfig,
+    InsetConfig,
+    ReflectionConfig,
+)
 from processor.pipeline.context import FrameContext, PipelineState
 from processor.stages.color import ColorStage, build_lut
 from processor.stages.crop import CropStage, resolve_insets
@@ -150,6 +156,21 @@ def test_identity_matrix_is_noop():
     stage = ColorStage(config, PipelineState())
     image = grey_image(90)
     assert np.array_equal(run(stage, image).image, image)
+
+
+def test_color_stage_subtracts_black_level_before_matrix():
+    config = ColorConfig(
+        black_level_enabled=True,
+        black_level=BlackLevelConfig(r=20.0, g=10.0, b=30.0),
+    )
+    stage = ColorStage(config, PipelineState())
+    image = np.full((16, 16, 3), 100, dtype=np.uint8)
+    out = run(stage, image).image
+    # BGR: b-=30, g-=10, r-=20
+    assert int(out[0, 0, 0]) == pytest.approx(70, abs=1)
+    assert int(out[0, 0, 1]) == pytest.approx(90, abs=1)
+    assert int(out[0, 0, 2]) == pytest.approx(80, abs=1)
+    assert stage.status()["black_level_enabled"] is True
 
 
 # ----------------------------------------------------------- crop / reflect

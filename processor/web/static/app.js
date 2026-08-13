@@ -722,11 +722,15 @@ function renderColorCal(status) {
   if (sol) {
     if (cal.solution?.matrix || cal.solution?.gains) {
       const g = cal.solution.gains || {};
+      const bl = cal.solution.black_level || {};
       const notes = (cal.solution.notes || []).join('; ');
       const matrixBits = cal.solution.matrix
         ? `3×3 matrix + gamma ${cal.solution.gamma}`
         : `gains R${g.r} G${g.g} B${g.b} · gamma ${cal.solution.gamma}`;
-      sol.textContent = `Proposed ${matrixBits}`
+      const blackBits = (bl.r != null && (Number(bl.r) + Number(bl.g) + Number(bl.b)) > 0.5)
+        ? ` · black floor R${Number(bl.r).toFixed(1)} G${Number(bl.g).toFixed(1)} B${Number(bl.b).toFixed(1)}`
+        : '';
+      sol.textContent = `Proposed ${matrixBits}${blackBits}`
         + (notes ? ` · ${notes}` : '');
     } else {
       sol.textContent = '';
@@ -743,12 +747,13 @@ async function buildColorCalPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Colour calibrate</h3>
-    <p class="hint">Open the patch page fullscreen on the HDMI TV. In
-    <strong>Manual</strong> mode, wait until focus looks sharp, then
-    <strong>Capture</strong> (replaces that colour in place — redo anytime).
-    Turn on <strong>Advance after capture</strong> to step to the next colour
-    automatically; leave it off to stay and re-shoot. Click a swatch to jump.
-    <strong>Solve</strong> when ready, then Apply &amp; Save.</p>
+    <p class="hint">Open the patch page fullscreen on the HDMI TV (room lights
+    off helps). In <strong>Manual</strong> mode, wait until focus/AE settle,
+    then <strong>Capture</strong> (replaces that colour in place — redo anytime).
+    Capture <strong>black</strong> carefully: the phone often exaggerates
+    top/bottom backlight glow; that becomes the black floor. Turn on
+    <strong>Advance after capture</strong> to step forward automatically.
+    Click a swatch to jump. <strong>Solve</strong>, then Apply &amp; Save.</p>
     <div class="control">
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-manual" value="manual" checked> Manual capture</label>
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-auto" value="auto"> Auto-run (timed settle)</label>

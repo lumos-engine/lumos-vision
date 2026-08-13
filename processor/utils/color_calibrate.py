@@ -67,6 +67,8 @@ _PATCH_WEIGHTS: dict[str, float] = {
 _IDENTITY_3 = np.eye(3, dtype=np.float64)
 _LUMA_BGR = np.array([0.114, 0.587, 0.299], dtype=np.float64)
 IDENTITY_MATRIX_FLAT: list[float] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+#: Cap per-channel black pedestal so a blown black sample cannot crush colours.
+_BLACK_PEDESTAL_MAX = 60.0
 
 
 def patch_targets_bgr() -> dict[str, np.ndarray]:
@@ -97,11 +99,17 @@ class CalibrationSolution:
     gamma: float
     #: 3×3 row-major BGR matrix: ``corrected = measured @ matrix``.
     matrix_bgr: np.ndarray
-    patch_means_bgr: dict[str, list[float]]
+    #: Camera/TV black floor (BGR) subtracted before the matrix fit / at runtime.
+    black_level_bgr: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    patch_means_bgr: dict[str, list[float]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     def gains_rgb(self) -> tuple[float, float, float]:
         b, g, r = self.gains_bgr
+        return (r, g, b)
+
+    def black_level_rgb(self) -> tuple[float, float, float]:
+        b, g, r = self.black_level_bgr
         return (r, g, b)
 
     def matrix_flat(self) -> list[float]:
@@ -109,11 +117,18 @@ class CalibrationSolution:
 
     def as_dict(self) -> dict[str, Any]:
         r, g, b = self.gains_rgb()
+        br, bg, bb = self.black_level_rgb()
         return {
             "gains": {"r": round(r, 4), "g": round(g, 4), "b": round(b, 4)},
             "gamma": round(float(self.gamma), 4),
             "matrix": [round(v, 5) for v in self.matrix_flat()],
             "matrix_enabled": True,
+            "black_level": {
+                "r": round(br, 2),
+                "g": round(bg, 2),
+                "b": round(bb, 2),
+            },
+            "black_level_enabled": any(v > 0.5 for v in self.black_level_bgr),
             "patch_means_bgr": {
                 name: [round(v, 2) for v in mean]
                 for name, mean in self.patch_means_bgr.items()
@@ -161,6 +176,17 @@ def apply_matrix_bgr(image: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     out = flat @ mat
     out = np.clip(out, 0.0, 255.0)
     return out.reshape(image.shape).astype(np.uint8)
+
+
+def apply_black_level_bgr(
+    image: np.ndarray, black_level_bgr: tuple[float, float, float] | np.ndarray
+) -> np.ndarray:
+    """Subtract per-channel black pedestal (BGR); clip to uint8."""
+    level = np.asarray(black_level_bgr, dtype=np.float32).reshape(3)
+    if float(np.max(level)) < 0.5:
+        return image
+    out = image.astype(np.float32) - level
+    return np.clip(out, 0.0, 255.0).astype(np.uint8)
 
 
 def solve_matrix(
@@ -249,10 +275,29 @@ def _estimate_gamma(
     return gamma, notes
 
 
+def _black_pedestal(cleaned: dict[str, np.ndarray]) -> tuple[np.ndarray, list[str]]:
+    """Per-channel black floor from the black patch, clamped for safety."""
+    notes: list[str] = []
+    black = cleaned.get("black")
+    if black is None:
+        return np.zeros(3, dtype=np.float64), notes
+    pedestal = np.clip(black, 0.0, _BLACK_PEDESTAL_MAX)
+    if float(black.mean()) > 40:
+        notes.append(
+            f"black patch is bright (mean {float(black.mean()):.0f}) — check ambient light / AE"
+        )
+    if float(pedestal.max()) > 0.5:
+        notes.append(
+            "black pedestal BGR "
+            f"({pedestal[0]:.1f}, {pedestal[1]:.1f}, {pedestal[2]:.1f})"
+        )
+    return pedestal, notes
+
+
 def solve_calibration(
     means_bgr: dict[str, np.ndarray | list[float]],
 ) -> CalibrationSolution:
-    """Fit 3×3 matrix + gamma from measured patch means."""
+    """Fit 3×3 matrix + gamma from measured patch means (after black pedestal)."""
     cleaned: dict[str, np.ndarray] = {
         name: np.asarray(mean, dtype=np.float64).reshape(3)
         for name, mean in means_bgr.items()
@@ -266,32 +311,39 @@ def solve_calibration(
             f"white patch too dark (luma {white_luma:.1f}) — is the TV patch page fullscreen on HDMI?"
         )
 
-    matrix, notes = solve_matrix(cleaned)
-    gamma, gamma_notes = _estimate_gamma(cleaned, matrix)
+    pedestal, notes = _black_pedestal(cleaned)
+    adjusted: dict[str, np.ndarray] = {}
+    for name, mean in cleaned.items():
+        if name == "black":
+            continue
+        adjusted[name] = np.maximum(mean - pedestal, 0.0)
+
+    matrix, matrix_notes = solve_matrix(adjusted)
+    notes.extend(matrix_notes)
+    gamma, gamma_notes = _estimate_gamma(adjusted, matrix)
     notes.extend(gamma_notes)
 
-    # Sanity on primaries / skin after correction.
+    # Sanity on primaries / skin after pedestal + matrix.
     targets = patch_targets_bgr()
     for name in ("skin_medium", "yellow", "red"):
-        if name not in cleaned or name not in targets:
+        if name not in adjusted or name not in targets:
             continue
-        corr = cleaned[name] @ matrix
+        corr = adjusted[name] @ matrix
         err = float(np.linalg.norm(corr - targets[name]))
         if err > 80:
             notes.append(f"{name} residual high ({err:.0f})")
 
-    black = cleaned.get("black")
-    if black is not None and float(black.mean()) > 40:
-        notes.append(
-            f"black patch is bright (mean {float(black.mean()):.0f}) — check ambient light / AE"
-        )
-
-    notes.append("3x3 matrix + gamma")
+    notes.append("3x3 matrix + gamma + black pedestal")
 
     return CalibrationSolution(
         gains_bgr=(1.0, 1.0, 1.0),
         gamma=gamma,
         matrix_bgr=matrix,
+        black_level_bgr=(
+            float(pedestal[0]),
+            float(pedestal[1]),
+            float(pedestal[2]),
+        ),
         patch_means_bgr={
             name: [float(v) for v in mean] for name, mean in cleaned.items()
         },
@@ -623,6 +675,7 @@ __all__ = [
     "CalibrationSolution",
     "ColorCalibrationSession",
     "Patch",
+    "apply_black_level_bgr",
     "apply_matrix_bgr",
     "flatten_matrix",
     "is_identity_matrix",
