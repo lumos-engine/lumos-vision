@@ -90,6 +90,15 @@ def test_solve_gains_alias_rejects_dark_white():
         solve_gains({"white": np.array([2.0, 2.0, 2.0])})
 
 
+def test_solve_rejects_white_barely_above_black():
+    means = patch_targets_bgr()
+    means = {k: v.copy() for k, v in means.items()}
+    means["black"] = np.array([40.0, 35.0, 45.0])
+    means["white"] = np.array([90.0, 85.0, 95.0])  # only ~50 above black
+    with pytest.raises(ValueError, match="barely brighter"):
+        solve_calibration(means)
+
+
 def _synthetic_solids(channel_cast: np.ndarray | None = None) -> dict[str, tuple[int, int, int]]:
     cast = channel_cast if channel_cast is not None else np.array([1.05, 1.12, 0.92])
     solids: dict[str, tuple[int, int, int]] = {}

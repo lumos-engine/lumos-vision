@@ -306,12 +306,21 @@ def solve_calibration(
     if white is None:
         raise ValueError("white patch measurement is required")
     white_luma = float(np.dot(white, _LUMA_BGR))
-    if white_luma < 8.0:
+    if white_luma < 40.0:
         raise ValueError(
-            f"white patch too dark (luma {white_luma:.1f}) — is the TV patch page fullscreen on HDMI?"
+            f"white patch too dark (luma {white_luma:.1f}) — camera is not seeing the white "
+            "screen (check perspective ROI / scrcpy / wait for AE, then re-capture white)"
         )
 
     pedestal, notes = _black_pedestal(cleaned)
+    # White must clearly sit above the black floor; otherwise AE/ROI sampled darkness.
+    white_above_black = float(np.min(white - pedestal))
+    if white_above_black < 80.0:
+        raise ValueError(
+            f"white is barely brighter than black (Δ {white_above_black:.1f}) — "
+            "re-capture white after the phone exposure settles; do not Apply this run"
+        )
+
     adjusted: dict[str, np.ndarray] = {}
     for name, mean in cleaned.items():
         if name == "black":

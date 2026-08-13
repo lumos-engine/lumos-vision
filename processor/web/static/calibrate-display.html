@@ -3,13 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="only light">
 <title>Screen Sight — Colour patches (TV)</title>
 <style>
+  :root { color-scheme: only light; }
   html, body {
     margin: 0;
     width: 100%;
     height: 100%;
-    background: #000;
+    background-color: #000;
     color: #666;
     font: 14px/1.4 ui-sans-serif, system-ui, sans-serif;
     overflow: hidden;
@@ -18,16 +20,18 @@
   #stage {
     position: fixed;
     inset: 0;
-    background: #000;
+    z-index: 0;
+    background-color: #000;
   }
   #hud {
     position: fixed;
     left: 12px;
     bottom: 12px;
+    z-index: 2;
     padding: 6px 10px;
     border-radius: 6px;
-    background: rgba(0,0,0,.35);
-    color: rgba(255,255,255,.55);
+    background: rgba(0,0,0,.45);
+    color: rgba(255,255,255,.7);
     font-size: 12px;
     letter-spacing: .04em;
     pointer-events: none;
@@ -36,16 +40,17 @@
   #hint {
     position: fixed;
     inset: 0;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: center;
     text-align: center;
     padding: 24px;
     color: #8a93a8;
-    background: #0b0e14;
+    background-color: #0b0e14;
   }
   #hint strong { color: #dde5f2; }
-  body.live #hint { display: none; }
+  body.live #hint { display: none !important; }
   body.live { cursor: none; }
 </style>
 </head>
@@ -65,10 +70,19 @@ const stage = document.getElementById('stage');
 const hud = document.getElementById('hud');
 let lastSeq = -1;
 
+function setFill(r, g, b) {
+  // Paint html + body + stage. Some browsers / TVs keep body #000 visible under
+  // a child fill in fullscreen; HUD text can look correct while the panel stays black.
+  const css = `rgb(${r | 0},${g | 0},${b | 0})`;
+  stage.style.backgroundColor = css;
+  document.body.style.backgroundColor = css;
+  document.documentElement.style.backgroundColor = css;
+}
+
 function applyPatch(data) {
   const rgb = data.display_rgb || [0, 0, 0];
   const [r, g, b] = rgb;
-  stage.style.background = `rgb(${r},${g},${b})`;
+  setFill(r, g, b);
   const live = data.state === 'running' || data.state === 'ready';
   document.body.classList.toggle('live', live);
   const bits = [
@@ -93,6 +107,7 @@ async function poll() {
   } catch (err) {
     hud.textContent = 'Disconnected — is Screen Sight running?';
     document.body.classList.remove('live');
+    setFill(0, 0, 0);
   }
 }
 

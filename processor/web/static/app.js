@@ -736,6 +736,18 @@ function renderColorCal(status) {
       sol.textContent = '';
     }
   }
+
+  // Warn when measured white is still near black (bad capture / AE / ROI).
+  const measured = cal.measurements || {};
+  if (measured.white && Array.isArray(measured.white)) {
+    const [wb, wg, wr] = measured.white.map(Number);
+    const whiteLuma = 0.114 * wb + 0.587 * wg + 0.299 * wr;
+    if (whiteLuma < 40 && sol && !cal.solution) {
+      sol.textContent = `White looks almost black (luma ${whiteLuma.toFixed(0)}) — `
+        + 're-capture white; check TV is showing the patch, perspective ROI is on-panel, '
+        + 'and phone AE has settled.';
+    }
+  }
 }
 
 async function buildColorCalPanel() {
