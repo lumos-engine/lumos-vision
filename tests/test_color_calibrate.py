@@ -80,7 +80,7 @@ def test_solve_matrix_reduces_skin_error_vs_gains_only():
     adj = np.maximum(skin - np.asarray(solution.black_level_bgr), 0.0)
     matrix_err = float(np.linalg.norm(adj @ solution.matrix_bgr - tgt))
     assert matrix_err < gains_err
-    assert matrix_err < 35.0
+    assert matrix_err < 45.0
     assert solution.gains_bgr == (1.0, 1.0, 1.0)
     assert len(solution.matrix_flat()) == 9
 
@@ -97,6 +97,27 @@ def test_solve_rejects_white_barely_above_black():
     means["white"] = np.array([90.0, 85.0, 95.0])  # only ~50 above black
     with pytest.raises(ValueError, match="barely brighter"):
         solve_calibration(means)
+
+
+def test_white_point_anchor_neutralises_warm_dim_white():
+    """Dim warm measured white must not leave runtime whites orange-muddy."""
+    means = {
+        name: tgt.copy() for name, tgt in patch_targets_bgr().items()
+    }
+    # Phone AE: white underexposed and warm (more R than B in BGR order).
+    means["white"] = np.array([150.0, 165.0, 200.0])  # B, G, R
+    means["black"] = np.array([8.0, 6.0, 10.0])
+    solution = solve_calibration(means)
+    adj_white = np.maximum(means["white"] - np.asarray(solution.black_level_bgr), 0.0)
+    corr = adj_white @ solution.matrix_bgr
+    assert corr.min() > 220
+    assert corr.max() - corr.min() < 15.0
+    # A bright near-white camera sample should stay near-neutral, not orange.
+    bright = np.array([240.0, 245.0, 250.0])
+    out = (bright - np.asarray(solution.black_level_bgr)) @ solution.matrix_bgr
+    out = np.clip(out, 0, 255)
+    assert out.max() - out.min() < 25.0
+    assert out.mean() > 200.0
 
 
 def _synthetic_solids(channel_cast: np.ndarray | None = None) -> dict[str, tuple[int, int, int]]:

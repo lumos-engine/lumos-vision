@@ -45,7 +45,7 @@ _GREY_LEVELS: dict[str, float] = {
 
 #: Per-patch weights for the matrix least-squares fit.
 _PATCH_WEIGHTS: dict[str, float] = {
-    "white": 2.0,
+    "white": 4.0,  # strong: phone AE often underexposes white vs chromatics
     "grey_light": 1.6,
     "grey": 1.8,
     "grey_dark": 1.2,
@@ -294,6 +294,37 @@ def _black_pedestal(cleaned: dict[str, np.ndarray]) -> tuple[np.ndarray, list[st
     return pedestal, notes
 
 
+def _anchor_white_point(
+    matrix: np.ndarray,
+    white_adjusted: np.ndarray,
+    *,
+    target: float = 255.0,
+    scale_min: float = 0.55,
+    scale_max: float = 2.2,
+) -> tuple[np.ndarray, list[str]]:
+    """Force ``white_adjusted @ matrix`` to neutral full-scale white.
+
+    Phone AE often captures white darker / warmer than chromatics. Pure LS then
+    leaves whites muddy (orange-brown) while skin/primaries still look fine.
+    """
+    notes: list[str] = []
+    out = white_adjusted @ matrix
+    safe = np.maximum(out, 1.0)
+    scale = np.clip(target / safe, scale_min, scale_max)
+    anchored = matrix @ np.diag(scale)
+    if float(np.max(np.abs(scale - 1.0))) > 0.04:
+        notes.append(
+            "white-point scale BGR "
+            f"({scale[0]:.2f}, {scale[1]:.2f}, {scale[2]:.2f})"
+        )
+    # Verify neutrality of the anchored white.
+    check = white_adjusted @ anchored
+    spread = float(check.max() - check.min())
+    if spread > 12.0:
+        notes.append(f"white still unbalanced after anchor (spread {spread:.0f})")
+    return anchored, notes
+
+
 def solve_calibration(
     means_bgr: dict[str, np.ndarray | list[float]],
 ) -> CalibrationSolution:
@@ -329,6 +360,8 @@ def solve_calibration(
 
     matrix, matrix_notes = solve_matrix(adjusted)
     notes.extend(matrix_notes)
+    matrix, white_notes = _anchor_white_point(matrix, adjusted["white"])
+    notes.extend(white_notes)
     gamma, gamma_notes = _estimate_gamma(adjusted, matrix)
     notes.extend(gamma_notes)
 
@@ -341,6 +374,12 @@ def solve_calibration(
         err = float(np.linalg.norm(corr - targets[name]))
         if err > 80:
             notes.append(f"{name} residual high ({err:.0f})")
+
+    corr_white = adjusted["white"] @ matrix
+    if float(corr_white.mean()) < 200:
+        notes.append(
+            f"anchored white still dim (mean {float(corr_white.mean()):.0f}) — re-capture white"
+        )
 
     notes.append("3x3 matrix + gamma + black pedestal")
 

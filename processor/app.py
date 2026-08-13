@@ -1031,6 +1031,8 @@ class Processor:
                 "color.black_level.g": bg,
                 "color.black_level.b": bb,
                 "color.gamma": solution.gamma,
+                # Saturation >1 turns a slightly warm camera white into orange-brown.
+                "color.saturation": 1.0,
                 "color.exposure.enabled": False,
                 "color.calibration.calibrated_at": iso_now(),
                 "color.calibration.patch_means_bgr": solution.patch_means_bgr,
