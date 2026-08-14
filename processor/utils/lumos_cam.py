@@ -528,16 +528,15 @@ class LumosCamManager:
         pkg = (cfg.package or PACKAGE).strip()
         activity = (cfg.activity or ACTIVITY).strip()
         component = f"{pkg}/{activity}"
-        # MIUI: `am start -n pkg/.MainActivity` can print Error type 3 even when
-        # dumpsys lists the activity; `am start -p` often fails to resolve too.
-        # monkey + --user 0 + FQCN are the reliable paths.
+        # MIUI ActivityStarterImpl: component-only `am start -n` logs
+        # "aInfo is null" / Error type 3 even when dumpsys lists the launcher.
+        # MAIN+LAUNCHER must be on the Intent so resolveActivity fills aInfo.
         attempts: tuple[tuple[str, ...], ...] = (
-            ("monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"),
-            ("am", "start", "--user", "0", "-W", "-n", component),
-            ("am", "start", "-W", "-n", f"{pkg}/.MainActivity"),
             (
                 "am",
                 "start",
+                "--user",
+                "0",
                 "-W",
                 "-a",
                 "android.intent.action.MAIN",
@@ -546,6 +545,8 @@ class LumosCamManager:
                 "-n",
                 component,
             ),
+            ("monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"),
+            ("am", "start", "--user", "0", "-W", "-n", f"{pkg}/.MainActivity"),
         )
         last_err = "launch failed"
         launched = False
@@ -638,7 +639,7 @@ class LumosCamManager:
         self._last_error = (
             f"{last} — nothing is listening on device port {int(cfg.control_device_port)}. "
             "Open Lumos Cam, grant camera, keep it on screen, then retry. "
-            "Rebuild/sideload ≥ 0.1.5 if this APK is older."
+            "Rebuild/sideload ≥ 0.1.6 if this APK is older."
         )
         return None
 
