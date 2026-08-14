@@ -84,7 +84,12 @@ def _is_output_loopback(info: dict[str, str], name: str) -> bool:
 
 
 def _is_loopback_driver(info: dict[str, str]) -> bool:
-    return "v4l2loopback" in (info.get("driver") or "").lower()
+    """True for v4l2loopback. Driver name is often ``v4l2 loopback`` (space)."""
+    blob = " ".join(
+        (info.get("driver") or "", info.get("card") or "", info.get("bus_info") or "")
+    ).lower()
+    compact = "".join(ch for ch in blob if ch.isalnum())
+    return "v4l2loopback" in compact or "androidcam" in compact
 
 
 def is_v4l2loopback(device: str) -> bool:

@@ -24,6 +24,12 @@ def test_is_v4l2loopback_uses_driver_name(monkeypatch):
     assert is_v4l2loopback("/dev/video11") is True
     assert is_v4l2loopback("/dev/video2") is False
 
+    monkeypatch.setattr(
+        "processor.camera.devices._read_v4l2_info",
+        lambda device: {"driver": "v4l2 loopback", "card": "Dummy video device"},
+    )
+    assert is_v4l2loopback("/dev/video11") is True
+
 
 def test_resolve_device_path_accepts_index_and_paths():
     assert resolve_device_path("2") == "/dev/video2"

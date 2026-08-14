@@ -237,6 +237,7 @@ class V4l2Source(FrameSource):
             str(opened_as) if not isinstance(opened_as, int) else f"/dev/video{opened_as}"
         )
         if loopback:
+            log.info("V4L2 loopback %s: capture YUYV (skip MJPEG)", opened_as)
             try:
                 capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
             except cv2.error:
@@ -259,7 +260,15 @@ class V4l2Source(FrameSource):
         got_w = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         got_h = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         got_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-        log.info("V4L2 mode: %dx%d @ %.1f fps", got_w, got_h, got_fps)
+        fourcc = int(capture.get(cv2.CAP_PROP_FOURCC) or 0)
+        fourcc_s = "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4))
+        log.info(
+            "V4L2 mode: %dx%d @ %.1f fps fourcc=%s",
+            got_w,
+            got_h,
+            got_fps,
+            fourcc_s.strip() or "?",
+        )
         if self.config.controls:
             self.apply_controls(dict(self.config.controls))
         return True
