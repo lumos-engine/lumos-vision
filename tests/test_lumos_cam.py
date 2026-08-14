@@ -15,6 +15,35 @@ from processor.utils.lumos_cam import (
 from processor.utils.scrcpy import ZOOM_STEP
 
 
+def test_adb_launch_error_detects_miui_type3():
+    from processor.utils.lumos_cam import _adb_launch_error
+
+    class Result:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    assert (
+        _adb_launch_error(
+            Result(
+                0,
+                "Starting: Intent { cmp=dev.lumos.cam/.MainActivity }\n"
+                "Error type 3\n"
+                "Error: Activity class {dev.lumos.cam/dev.lumos.cam.MainActivity} does not exist.\n",
+            )
+        )
+        is not None
+    )
+    assert (
+        _adb_launch_error(
+            Result(0, "Error: Activity not started, unable to resolve Intent\n")
+        )
+        is not None
+    )
+    assert _adb_launch_error(Result(0, "Events injected: 1\n")) is None
+
+
 def test_build_ffmpeg_command_h264():
     cfg = LumosCamConfig(
         codec="h264",

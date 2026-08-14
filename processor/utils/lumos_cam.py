@@ -96,6 +96,23 @@ def adb_argv(cfg: LumosCamConfig, *args: str) -> list[str]:
     return cmd
 
 
+def _adb_launch_error(result: subprocess.CompletedProcess[str]) -> str | None:
+    combined = f"{result.stdout or ''}\n{result.stderr or ''}".strip()
+    low = combined.lower()
+    failed = (
+        result.returncode != 0
+        or "error type" in low
+        or "does not exist" in low
+        or "unable to resolve" in low
+        or "activity not started" in low
+        or "no activities found" in low
+        or "monkey aborted" in low
+    )
+    if not failed:
+        return None
+    return combined or f"exit {result.returncode}"
+
+
 def package_installed(cfg: LumosCamConfig) -> bool:
     try:
         result = subprocess.run(
@@ -509,46 +526,48 @@ class LumosCamManager:
 
     def _launch_app(self, cfg: LumosCamConfig) -> dict[str, Any]:
         pkg = (cfg.package or PACKAGE).strip()
-        # Launcher intent: do not depend on a hard-coded activity class name.
-        # Xiaomi/MIUI often reports "Activity class does not exist" for -n pkg/.MainActivity
-        # even when the app is installed and has a MAIN/LAUNCHER filter.
-        try:
-            result = subprocess.run(
-                adb_argv(
-                    cfg,
-                    "shell",
-                    "am",
-                    "start",
-                    "-W",
-                    "-a",
-                    "android.intent.action.MAIN",
-                    "-c",
-                    "android.intent.category.LAUNCHER",
-                    "-p",
-                    pkg,
-                ),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=20.0,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return {"ok": False, "error": str(exc)}
-        if result.returncode != 0:
-            component = f"{pkg}/.MainActivity"
+        activity = (cfg.activity or ACTIVITY).strip()
+        component = f"{pkg}/{activity}"
+        # MIUI: `am start -n pkg/.MainActivity` can print Error type 3 even when
+        # dumpsys lists the activity; `am start -p` often fails to resolve too.
+        # monkey + --user 0 + FQCN are the reliable paths.
+        attempts: tuple[tuple[str, ...], ...] = (
+            ("monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"),
+            ("am", "start", "--user", "0", "-W", "-n", component),
+            ("am", "start", "-W", "-n", f"{pkg}/.MainActivity"),
+            (
+                "am",
+                "start",
+                "-W",
+                "-a",
+                "android.intent.action.MAIN",
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "-n",
+                component,
+            ),
+        )
+        last_err = "launch failed"
+        launched = False
+        for args in attempts:
             try:
                 result = subprocess.run(
-                    adb_argv(cfg, "shell", "am", "start", "-W", "-n", component),
+                    adb_argv(cfg, "shell", *args),
                     capture_output=True,
                     text=True,
                     check=False,
                     timeout=20.0,
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
-                return {"ok": False, "error": str(exc)}
-            if result.returncode != 0:
-                err = (result.stderr or result.stdout or "am start failed").strip()
-                return {"ok": False, "error": err}
+                last_err = str(exc)
+                continue
+            fail = _adb_launch_error(result)
+            if fail is None:
+                launched = True
+                break
+            last_err = fail
+        if not launched:
+            return {"ok": False, "error": last_err}
         try:
             subprocess.run(
                 adb_argv(cfg, "shell", "am", "start-foreground-service", "-n", f"{pkg}/.CaptureService"),
@@ -619,7 +638,7 @@ class LumosCamManager:
         self._last_error = (
             f"{last} — nothing is listening on device port {int(cfg.control_device_port)}. "
             "Open Lumos Cam, grant camera, keep it on screen, then retry. "
-            "Rebuild/sideload ≥ 0.1.1 if this APK is older."
+            "Rebuild/sideload ≥ 0.1.2 if this APK is older."
         )
         return None
 
