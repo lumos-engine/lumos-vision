@@ -638,7 +638,7 @@ class LumosCamManager:
         self._last_error = (
             f"{last} — nothing is listening on device port {int(cfg.control_device_port)}. "
             "Open Lumos Cam, grant camera, keep it on screen, then retry. "
-            "Rebuild/sideload ≥ 0.1.4 if this APK is older."
+            "Rebuild/sideload ≥ 0.1.5 if this APK is older."
         )
         return None
 
