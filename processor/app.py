@@ -469,6 +469,16 @@ class Processor:
         now = time.monotonic()
         if now < self._scrcpy_next_retry:
             return
+        sink = (cfg.v4l2_sink or "").strip()
+        if sink and not os.path.exists(sink):
+            # Missing loopback needs a human (modprobe); don't spam every 5s.
+            self._scrcpy_next_retry = now + max(30.0, float(cfg.restart_interval_sec or 5.0) * 6)
+            log.error(
+                "scrcpy sink %s is missing — create it with v4l2loopback "
+                "(devices=2 video_nr=10,11) then wait or restart Screen Sight",
+                sink,
+            )
+            return
         interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
         self._scrcpy_next_retry = now + interval
         if not adb_device_ready(cfg.serial):

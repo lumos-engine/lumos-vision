@@ -301,8 +301,14 @@ class ScrcpyManager:
 
         sink = (cfg.v4l2_sink or "").strip()
         if sink and not os.path.exists(sink):
-            self._last_error = f"v4l2 sink missing: {sink}"
-            log.error("scrcpy: %s", self._last_error)
+            self._last_error = (
+                f"v4l2 sink missing: {sink} — recreate Android Cam loopback, e.g.\n"
+                "  sudo modprobe -r v4l2loopback\n"
+                "  sudo modprobe v4l2loopback devices=2 video_nr=10,11 "
+                'card_label="Screen Sight","Android Cam" exclusive_caps=1\n'
+                "(stop Screen Sight / HyperHDR first; they use video10)"
+            )
+            log.error("scrcpy: %s", self._last_error.replace("\n", " | "))
             return {"ok": False, "error": self._last_error, "running": False}
 
         self._binary = resolve_scrcpy_binary(cfg.binary)
