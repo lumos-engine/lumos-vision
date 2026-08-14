@@ -509,10 +509,24 @@ class LumosCamManager:
 
     def _launch_app(self, cfg: LumosCamConfig) -> dict[str, Any]:
         pkg = (cfg.package or PACKAGE).strip()
-        component = f"{pkg}/.MainActivity"
+        # Launcher intent: do not depend on a hard-coded activity class name.
+        # Xiaomi/MIUI often reports "Activity class does not exist" for -n pkg/.MainActivity
+        # even when the app is installed and has a MAIN/LAUNCHER filter.
         try:
             result = subprocess.run(
-                adb_argv(cfg, "shell", "am", "start", "-W", "-n", component),
+                adb_argv(
+                    cfg,
+                    "shell",
+                    "am",
+                    "start",
+                    "-W",
+                    "-a",
+                    "android.intent.action.MAIN",
+                    "-c",
+                    "android.intent.category.LAUNCHER",
+                    "-p",
+                    pkg,
+                ),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -521,8 +535,20 @@ class LumosCamManager:
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "error": str(exc)}
         if result.returncode != 0:
-            err = (result.stderr or result.stdout or "am start failed").strip()
-            return {"ok": False, "error": err}
+            component = f"{pkg}/.MainActivity"
+            try:
+                result = subprocess.run(
+                    adb_argv(cfg, "shell", "am", "start", "-W", "-n", component),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=20.0,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return {"ok": False, "error": str(exc)}
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout or "am start failed").strip()
+                return {"ok": False, "error": err}
         try:
             subprocess.run(
                 adb_argv(cfg, "shell", "am", "start-foreground-service", "-n", f"{pkg}/.CaptureService"),
@@ -534,7 +560,7 @@ class LumosCamManager:
         except (OSError, subprocess.TimeoutExpired):
             pass
         time.sleep(0.4)
-        return {"ok": True, "component": component}
+        return {"ok": True, "package": pkg}
 
     def _setup_forwards(self, cfg: LumosCamConfig) -> bool:
         self._drop_forwards()
