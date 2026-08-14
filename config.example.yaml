@@ -116,9 +116,28 @@ logging:
   level: INFO
   stats_interval: 30                # seconds between throughput log lines
 
-# Optional: Screen Sight starts scrcpy and writes the phone camera to a
-# v4l2loopback node (Android Cam).  Wizard → "Android cam (scrcpy)" controls
-# zoom/size; absolute phone zoom briefly restarts scrcpy (no manual CLI).
+# Optional: Lumos Cam (preferred Android path). Needs Lumos Cam ≥ 0.1 on the
+# phone. Wizard → "Lumos Cam". Zoom/locks are live HTTP; ffmpeg → /dev/video11.
+# When lumos_cam.enabled, scrcpy is skipped even if scrcpy.enabled is true.
+# lumos_cam:
+#   enabled: true
+#   serial: ""
+#   camera_id: "0"
+#   camera_size: "1920x1080"
+#   camera_fps: 30
+#   codec: h264                     # h264 | mjpeg
+#   camera_zoom: 1.0
+#   pan_x: 0.0
+#   pan_y: 0.0
+#   af: auto                        # auto | locked
+#   ae: auto
+#   awb: auto
+#   v4l2_sink: /dev/video11
+#   bind_camera: true
+#   auto_restart: true
+
+# Optional: scrcpy fallback if Lumos Cam is not installed.
+# Wizard → "Android cam (scrcpy fallback)". Absolute phone zoom restarts scrcpy.
 # Requires: scrcpy ≥ 4.0, /dev/video11 from:
 #   sudo modprobe v4l2loopback devices=2 video_nr=10,11 \
 #     card_label="Screen Sight","Android Cam" exclusive_caps=1

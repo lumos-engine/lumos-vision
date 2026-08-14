@@ -461,6 +461,46 @@ class ScrcpyConfig:
 
 
 @dataclass
+class LumosCamConfig:
+    """Lumos Cam (Camera2 Android app) → v4l2loopback.
+
+    Preferred over scrcpy when ``enabled``. Zoom, pan, and AF/AE/AWB locks are
+    live HTTP; ffmpeg only restarts when codec/size/sink change. Needs Lumos
+    Cam ≥ 0.1.0 (``Lumos-Cam-Protocol: 1``).
+    """
+
+    enabled: bool = False
+    serial: str = ""
+    adb: str = "adb"
+    package: str = "dev.lumos.cam"
+    activity: str = "dev.lumos.cam.MainActivity"
+    camera_id: str = "0"
+    camera_size: str = "1920x1080"
+    camera_fps: int = 30
+    codec: str = "h264"
+    camera_zoom: float = 1.0
+    zoom_min: float = 1.0
+    zoom_max: float = 10.0
+    pan_x: float = 0.0
+    pan_y: float = 0.0
+    af: str = "auto"
+    ae: str = "auto"
+    awb: str = "auto"
+    v4l2_sink: str = "/dev/video11"
+    bind_camera: bool = True
+    control_device_port: int = 8765
+    video_device_port: int = 8766
+    control_host_port: int = 18765
+    video_host_port: int = 18766
+    ffmpeg: str = "ffmpeg"
+    startup_timeout_sec: float = 15.0
+    auto_restart: bool = True
+    restart_interval_sec: float = 5.0
+    #: When both this and scrcpy are enabled, Lumos Cam wins.
+    prefer_over_scrcpy: bool = True
+
+
+@dataclass
 class Config:
     camera: CameraConfig = field(default_factory=CameraConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
@@ -478,6 +518,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     power: PowerConfig = field(default_factory=PowerConfig)
     scrcpy: ScrcpyConfig = field(default_factory=ScrcpyConfig)
+    lumos_cam: LumosCamConfig = field(default_factory=LumosCamConfig)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "Config":

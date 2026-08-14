@@ -256,6 +256,314 @@ function applySourcePanelFromConfig(config) {
   syncSourceFieldsVisibility();
 }
 
+// ------------------------------------------------------------- Lumos Cam panel
+let lumosPanelState = {
+  enabled: false,
+  running: false,
+  serial: '',
+  camera_id: '0',
+  camera_size: '1920x1080',
+  camera_fps: 30,
+  codec: 'h264',
+  camera_zoom: 1,
+  pan_x: 0,
+  pan_y: 0,
+  af: 'auto',
+  ae: 'auto',
+  awb: 'auto',
+  cal_mode: false,
+  v4l2_sink: '/dev/video11',
+  last_error: '',
+  app_version: '',
+};
+
+let lumosFormDirty = false;
+let lumosBusy = false;
+
+const LUMOS_FIELD_IDS = [
+  'lumos-enabled',
+  'lumos-serial',
+  'lumos-camera-id',
+  'lumos-zoom',
+];
+
+function markLumosDirty() {
+  lumosFormDirty = true;
+}
+
+function applyLumosPanelFromConfig(config) {
+  const lc = config?.lumos_cam || {};
+  lumosPanelState = {
+    ...lumosPanelState,
+    enabled: Boolean(lc.enabled),
+    serial: lc.serial || '',
+    camera_id: lc.camera_id || '0',
+    camera_size: lc.camera_size || '1920x1080',
+    camera_fps: lc.camera_fps || 30,
+    codec: lc.codec || 'h264',
+    camera_zoom: Number(lc.camera_zoom || 1),
+    pan_x: Number(lc.pan_x || 0),
+    pan_y: Number(lc.pan_y || 0),
+    af: lc.af || 'auto',
+    ae: lc.ae || 'auto',
+    awb: lc.awb || 'auto',
+    v4l2_sink: lc.v4l2_sink || '/dev/video11',
+  };
+  lumosFormDirty = false;
+  syncLumosForm({ force: true });
+}
+
+function syncLumosMeta() {
+  const meta = $('lumos-meta');
+  if (!meta) return;
+  const bits = [
+    lumosPanelState.running ? 'running' : 'stopped',
+    `${Number(lumosPanelState.camera_zoom).toFixed(2)}×`,
+    `pan ${Number(lumosPanelState.pan_x).toFixed(2)},${Number(lumosPanelState.pan_y).toFixed(2)}`,
+    `AF ${lumosPanelState.af}`,
+    `AE ${lumosPanelState.ae}`,
+    `AWB ${lumosPanelState.awb}`,
+  ];
+  if (lumosPanelState.cal_mode) bits.push('cal mode');
+  if (lumosPanelState.app_version) bits.push(`app ${lumosPanelState.app_version}`);
+  if (lumosPanelState.last_error) bits.push(lumosPanelState.last_error);
+  if (lumosFormDirty) bits.push('unsaved edits');
+  meta.textContent = bits.join(' · ');
+}
+
+function syncLumosForm({ force = false } = {}) {
+  const active = document.activeElement;
+  const set = (id, value) => {
+    const el = $(id);
+    if (!el) return;
+    if (el.type === 'checkbox' || el.type === 'radio') el.checked = Boolean(value);
+    else el.value = value;
+  };
+  if (force || !lumosFormDirty) {
+    set('lumos-enabled', lumosPanelState.enabled);
+    set('lumos-serial', lumosPanelState.serial);
+    set('lumos-camera-id', lumosPanelState.camera_id);
+    set('lumos-zoom', lumosPanelState.camera_zoom);
+  }
+  const zoomLabel = $('lumos-zoom-label');
+  if (zoomLabel && (force || active !== $('lumos-zoom'))) {
+    zoomLabel.textContent = Number(
+      force || !lumosFormDirty
+        ? lumosPanelState.camera_zoom
+        : ($('lumos-zoom')?.value || lumosPanelState.camera_zoom)
+    ).toFixed(2);
+  }
+  const setLock = (id, value) => {
+    const el = $(id);
+    if (el) el.checked = value === 'locked';
+  };
+  if (force || !lumosFormDirty) {
+    setLock('lumos-af', lumosPanelState.af);
+    setLock('lumos-ae', lumosPanelState.ae);
+    setLock('lumos-awb', lumosPanelState.awb);
+    const cal = $('lumos-cal-mode');
+    if (cal) cal.checked = Boolean(lumosPanelState.cal_mode);
+  }
+  syncLumosMeta();
+}
+
+function readLumosFields() {
+  return {
+    enabled: Boolean($('lumos-enabled')?.checked),
+    serial: ($('lumos-serial')?.value || '').trim(),
+    camera_id: ($('lumos-camera-id')?.value || '0').trim(),
+    camera_zoom: Number($('lumos-zoom')?.value || 1),
+    pan_x: Number(lumosPanelState.pan_x || 0),
+    pan_y: Number(lumosPanelState.pan_y || 0),
+    af: $('lumos-af')?.checked ? 'locked' : 'auto',
+    ae: $('lumos-ae')?.checked ? 'locked' : 'auto',
+    awb: $('lumos-awb')?.checked ? 'locked' : 'auto',
+  };
+}
+
+async function postLumos(action, fields, { save = false } = {}) {
+  if (lumosBusy) throw new Error('Lumos Cam is busy — wait a moment');
+  lumosBusy = true;
+  const status = $('tune-status');
+  if (status) status.textContent = `Lumos Cam ${action}…`;
+  try {
+    const response = await fetch('/api/lumos-cam', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, fields, save }),
+    });
+    const result = await response.json();
+    if (result.lumos_cam) {
+      lumosPanelState.running = Boolean(result.lumos_cam.running);
+      lumosPanelState.last_error = result.lumos_cam.last_error || result.error || '';
+      lumosPanelState.camera_zoom = Number(result.lumos_cam.zoom || lumosPanelState.camera_zoom);
+      lumosPanelState.pan_x = Number(result.lumos_cam.pan_x ?? lumosPanelState.pan_x);
+      lumosPanelState.pan_y = Number(result.lumos_cam.pan_y ?? lumosPanelState.pan_y);
+      lumosPanelState.af = result.lumos_cam.af || lumosPanelState.af;
+      lumosPanelState.ae = result.lumos_cam.ae || lumosPanelState.ae;
+      lumosPanelState.awb = result.lumos_cam.awb || lumosPanelState.awb;
+      lumosPanelState.cal_mode = Boolean(result.lumos_cam.cal_mode);
+      lumosPanelState.app_version = result.lumos_cam.app_version || '';
+    }
+    if (result.config) {
+      applyLumosPanelFromConfig(result.config);
+      lumosFormDirty = false;
+    } else {
+      syncLumosForm({ force: true });
+    }
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.error || result.lumos_cam?.last_error || 'Lumos Cam action failed');
+    }
+    return result;
+  } finally {
+    lumosBusy = false;
+  }
+}
+
+async function buildLumosCamPanel() {
+  const root = $('lumos-cam-panel');
+  if (!root) return;
+  root.innerHTML = '';
+
+  const section = document.createElement('div');
+  section.className = 'control-group';
+  section.innerHTML = `
+    <h3>Lumos Cam</h3>
+    <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1). Live zoom,
+    pan, and AF/AE/AWB locks — no restart. Colour-cal Start turns on cal mode.</p>
+    <div class="control">
+      <label class="check"><input type="checkbox" id="lumos-enabled"> Use Lumos Cam</label>
+    </div>
+    <div class="control">
+      <label for="lumos-serial">ADB serial (optional)</label>
+      <input id="lumos-serial" type="text" spellcheck="false" placeholder="452ee42b0506">
+    </div>
+    <div class="control">
+      <label for="lumos-camera-id">Camera id</label>
+      <input id="lumos-camera-id" type="text" spellcheck="false" value="0">
+    </div>
+    <div class="control">
+      <label for="lumos-zoom">Zoom (<span id="lumos-zoom-label">1.00</span>×)</label>
+      <input id="lumos-zoom" type="range" min="1" max="10" step="0.0625" value="1">
+    </div>
+    <div class="control">
+      <label class="check"><input type="checkbox" id="lumos-af"> AF lock</label>
+    </div>
+    <div class="control">
+      <label class="check"><input type="checkbox" id="lumos-ae"> AE lock</label>
+    </div>
+    <div class="control">
+      <label class="check"><input type="checkbox" id="lumos-awb"> AWB lock</label>
+    </div>
+    <div class="control">
+      <label class="check"><input type="checkbox" id="lumos-cal-mode"> Cal mode</label>
+    </div>
+    <p class="source-meta" id="lumos-meta"></p>
+    <div class="source-actions">
+      <button type="button" class="btn" id="btn-lumos-zoom-out">Zoom −</button>
+      <button type="button" class="btn" id="btn-lumos-zoom-in">Zoom +</button>
+      <button type="button" class="btn" id="btn-lumos-pan-left" title="Pan left">←</button>
+      <button type="button" class="btn" id="btn-lumos-pan-right" title="Pan right">→</button>
+      <button type="button" class="btn" id="btn-lumos-pan-up" title="Pan up">↑</button>
+      <button type="button" class="btn" id="btn-lumos-pan-down" title="Pan down">↓</button>
+      <button type="button" class="btn" id="btn-lumos-pan-center">Center</button>
+      <button type="button" class="btn btn-primary" id="btn-lumos-apply">Apply</button>
+      <button type="button" class="btn" id="btn-lumos-save">Apply &amp; Save</button>
+    </div>`;
+  root.append(section);
+
+  for (const id of LUMOS_FIELD_IDS) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener('input', markLumosDirty);
+    el.addEventListener('change', markLumosDirty);
+  }
+  $('lumos-zoom')?.addEventListener('input', () => {
+    const label = $('lumos-zoom-label');
+    if (label) label.textContent = Number($('lumos-zoom').value).toFixed(2);
+    syncLumosMeta();
+  });
+
+  $('lumos-enabled')?.addEventListener('change', async () => {
+    markLumosDirty();
+    try {
+      await postLumos('apply', readLumosFields(), { save: false });
+      toast(lumosPanelState.enabled ? 'Lumos Cam enabled' : 'Lumos Cam disabled');
+      await loadCaptureDevices();
+      fillDeviceSelect(sourcePanelState.device || lumosPanelState.v4l2_sink);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
+  const liveLock = (id, actionOn, actionOff) => {
+    $(id)?.addEventListener('change', async (ev) => {
+      try {
+        await postLumos(ev.target.checked ? actionOn : actionOff, {});
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  };
+  liveLock('lumos-af', 'lock_af', 'unlock_af');
+  liveLock('lumos-ae', 'lock_ae', 'unlock_ae');
+  liveLock('lumos-awb', 'lock_awb', 'unlock_awb');
+  $('lumos-cal-mode')?.addEventListener('change', async (ev) => {
+    try {
+      await postLumos(ev.target.checked ? 'cal_mode_on' : 'cal_mode_off', {});
+      toast(ev.target.checked ? 'Cal mode on' : 'Cal mode off');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
+  $('btn-lumos-zoom-in')?.addEventListener('click', async () => {
+    try {
+      await postLumos('zoom_in', {});
+      toast(`Zoom ${Number(lumosPanelState.camera_zoom).toFixed(2)}×`);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-lumos-zoom-out')?.addEventListener('click', async () => {
+    try {
+      await postLumos('zoom_out', {});
+      toast(`Zoom ${Number(lumosPanelState.camera_zoom).toFixed(2)}×`);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  const pan = (action) => async () => {
+    try {
+      await postLumos(action, {});
+      toast(`Pan ${Number(lumosPanelState.pan_x).toFixed(2)}, ${Number(lumosPanelState.pan_y).toFixed(2)}`);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+  $('btn-lumos-pan-left')?.addEventListener('click', pan('pan_left'));
+  $('btn-lumos-pan-right')?.addEventListener('click', pan('pan_right'));
+  $('btn-lumos-pan-up')?.addEventListener('click', pan('pan_up'));
+  $('btn-lumos-pan-down')?.addEventListener('click', pan('pan_down'));
+  $('btn-lumos-pan-center')?.addEventListener('click', pan('pan_center'));
+  $('btn-lumos-apply')?.addEventListener('click', async () => {
+    try {
+      await postLumos('apply', readLumosFields());
+      toast('Lumos Cam applied');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  $('btn-lumos-save')?.addEventListener('click', async () => {
+    try {
+      await postLumos('apply', readLumosFields(), { save: true });
+      toast('Lumos Cam saved');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+}
+
 // ------------------------------------------------------------- scrcpy panel
 let scrcpyPanelState = {
   enabled: false,
@@ -446,11 +754,10 @@ async function buildScrcpyPanel() {
   const section = document.createElement('div');
   section.className = 'control-group';
   section.innerHTML = `
-    <h3>Android cam (scrcpy)</h3>
-    <p class="hint">Screen Sight starts scrcpy → loopback. <strong>Phone zoom</strong>
-    is Camera2 (better colour). <strong>Frame zoom + pan</strong> uses scrcpy
-    <code>--crop</code> so you can shift left/right/up/down. Changes briefly
-    reconnect scrcpy.</p>
+    <h3>Android cam (scrcpy fallback)</h3>
+    <p class="hint">Legacy path. Prefer <strong>Lumos Cam</strong> above when the
+    APK is installed — it locks AF/AE/AWB and zooms live. Scrcpy still restarts
+    the child for zoom/crop.</p>
     <div class="control">
       <label class="check"><input type="checkbox" id="scrcpy-enabled"> Manage scrcpy</label>
     </div>
@@ -759,13 +1066,10 @@ async function buildColorCalPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Colour calibrate</h3>
-    <p class="hint">Open the patch page fullscreen on the HDMI TV (room lights
-    off helps). In <strong>Manual</strong> mode, wait until focus/AE settle,
-    then <strong>Capture</strong> (replaces that colour in place — redo anytime).
-    Capture <strong>black</strong> carefully: the phone often exaggerates
-    top/bottom backlight glow; that becomes the black floor. Turn on
-    <strong>Advance after capture</strong> to step forward automatically.
-    Click a swatch to jump. <strong>Solve</strong>, then Apply &amp; Save.</p>
+    <p class="hint">Open the patch page fullscreen on the HDMI TV. <strong>Start</strong>
+    turns on Lumos Cam cal mode (AF/AE/AWB locked) when that path is running.
+    <strong>Capture</strong> replaces a colour in place. Solve, then Apply &amp; Save.
+    Abort/Apply restore phone auto.</p>
     <div class="control">
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-manual" value="manual" checked> Manual capture</label>
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-auto" value="auto"> Auto-run (timed settle)</label>
@@ -809,7 +1113,9 @@ async function buildColorCalPanel() {
       });
       if (!result.ok) throw new Error(result.error || 'start failed');
       toast(result.mode === 'manual'
-        ? 'Manual calibration — Capture when focus looks good'
+        ? (result.lumos_cal_mode
+          ? 'Manual calibration — camera locked, Capture when ready'
+          : 'Manual calibration — Capture when focus looks good')
         : `Auto calibration (settle ${Number(result.settle_sec).toFixed(1)}s)`);
       renderColorCal(result);
     } catch (err) {
@@ -1499,6 +1805,28 @@ async function refresh() {
   if (!suppressEcho && !Object.keys(pendingUpdates).length && pushTimer == null) {
     applyConfig(status.config, { skipFocused: true });
   }
+  if (status.lumos_cam) {
+    lumosPanelState.running = Boolean(status.lumos_cam.running);
+    lumosPanelState.last_error = status.lumos_cam.last_error || '';
+    lumosPanelState.cal_mode = Boolean(status.lumos_cam.cal_mode);
+    lumosPanelState.app_version = status.lumos_cam.app_version || '';
+    if (!lumosFormDirty && !lumosBusy) {
+      if (status.lumos_cam.zoom != null) lumosPanelState.camera_zoom = Number(status.lumos_cam.zoom);
+      if (status.lumos_cam.pan_x != null) lumosPanelState.pan_x = Number(status.lumos_cam.pan_x);
+      if (status.lumos_cam.pan_y != null) lumosPanelState.pan_y = Number(status.lumos_cam.pan_y);
+      if (status.lumos_cam.af) lumosPanelState.af = status.lumos_cam.af;
+      if (status.lumos_cam.ae) lumosPanelState.ae = status.lumos_cam.ae;
+      if (status.lumos_cam.awb) lumosPanelState.awb = status.lumos_cam.awb;
+      if (status.config?.lumos_cam) {
+        lumosPanelState.enabled = Boolean(status.config.lumos_cam.enabled);
+      } else if (status.lumos_cam.enabled != null) {
+        lumosPanelState.enabled = Boolean(status.lumos_cam.enabled);
+      }
+      syncLumosForm();
+    } else {
+      syncLumosMeta();
+    }
+  }
   if (status.scrcpy) {
     scrcpyPanelState.running = Boolean(status.scrcpy.running);
     scrcpyPanelState.last_error = status.scrcpy.last_error || '';
@@ -1589,6 +1917,7 @@ function wireButtons() {
 async function init() {
   buildControls();
   await buildSourcePanel();
+  await buildLumosCamPanel();
   await buildScrcpyPanel();
   await buildColorCalPanel();
   await buildCameraControls();
@@ -1598,6 +1927,7 @@ async function init() {
     const config = await api('/api/config');
     applyConfig(config);
     applySourcePanelFromConfig(config);
+    applyLumosPanelFromConfig(config);
     applyScrcpyPanelFromConfig(config);
     fillDeviceSelect(config.camera?.device || '');
   } catch (err) {

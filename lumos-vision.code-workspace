@@ -1,0 +1,7 @@
+{
+  "folders": [
+    { "name": "Lumos Vision", "path": "." },
+    { "name": "Lumos Cam", "path": "../lumos-cam" }
+  ],
+  "settings": {}
+}

@@ -416,7 +416,7 @@ class ScrcpyManager:
         while time.monotonic() < deadline:
             if not self.running:
                 return False
-            if sink and os.path.exists(sink) and _sink_has_capture(sink):
+            if sink and os.path.exists(sink) and sink_has_capture(sink):
                 return True
             if not sink:
                 time.sleep(0.4)
@@ -438,7 +438,7 @@ class ScrcpyManager:
             return ""
 
 
-def _sink_has_capture(device: str) -> bool:
+def sink_has_capture(device: str) -> bool:
     """Best-effort: device exists and (optionally) advertises capture."""
     if not os.path.exists(device):
         return False
@@ -474,6 +474,7 @@ __all__ = [
     "clamp_zoom",
     "parse_camera_size",
     "resolve_scrcpy_binary",
+    "sink_has_capture",
     "step_pan",
     "step_zoom",
 ]

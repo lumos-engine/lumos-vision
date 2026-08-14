@@ -136,7 +136,7 @@ def test_manager_start_stop_with_fake_popen(monkeypatch, tmp_path):
         return FakeProc()
 
     monkeypatch.setattr("processor.utils.scrcpy.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("processor.utils.scrcpy._sink_has_capture", lambda device: True)
+    monkeypatch.setattr("processor.utils.scrcpy.sink_has_capture", lambda device: True)
     monkeypatch.setattr("processor.utils.scrcpy.os.killpg", lambda *a, **k: None)
 
     mgr = ScrcpyManager()

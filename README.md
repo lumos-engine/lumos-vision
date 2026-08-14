@@ -68,13 +68,15 @@ camera from the by-id list. Then use **Camera hardware** (exposure / gain /
 white balance on the UVC sensor). The **Colour (software)** sliders only
 post-process frames after capture.
 
-For an **Android phone camera over USB**, enable the **Android cam (scrcpy)**
-panel (or `scrcpy.enabled` in YAML). Screen Sight starts scrcpy →
-`/dev/video11`, binds the capture source, and exposes phone zoom (+/−) plus
-frame pan (← → ↑ ↓) via scrcpy `--crop`. Scrcpy applies zoom/crop at process
-start, so those changes briefly restart the child while the pipeline
-reconnects — you do not manage scrcpy on the CLI. Needs scrcpy ≥ 4.0 and a
-second v4l2loopback node (see `config.example.yaml`).
+For an **Android phone camera over USB**, prefer **Lumos Cam** (sibling repo
+`lumos-cam`, needs app ≥ 0.1). Enable the wizard **Lumos Cam** panel or
+`lumos_cam.enabled` in YAML. Lumos Vision launches the APK over adb, forwards
+control/video ports, and writes H.264 into `/dev/video11`. Zoom, pan, and
+AF/AE/AWB locks are live (no process restart). Colour-cal **Start** turns on
+cal mode; **Abort** / **Apply** restore auto. Scrcpy remains a fallback panel
+(`scrcpy.enabled`) if the APK is not installed. Needs a second v4l2loopback
+node (see `config.example.yaml`) and the protocol in
+[docs/lumos-cam-api.md](docs/lumos-cam-api.md).
 
 For **cinema / letterboxed** content: enable **Black bars**, raise **Darkness
 threshold** to ~50–70 until **Result → output** has no bars, then point

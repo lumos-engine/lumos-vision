@@ -108,7 +108,18 @@ def test_status_reports_the_running_pipeline(server):
     assert status == 200
     assert data["frames_out"] > 0
     assert "boundary" in data["views"]
+    assert "lumos_cam" in data
+    assert "scrcpy" in data
     assert {s["name"] for s in data["pipeline"]["stages"]} >= {"boundary", "color"}
+
+
+def test_lumos_cam_status_endpoint(server):
+    status, body, _ = get(server, "/api/lumos-cam")
+    data = json.loads(body)
+    assert status == 200
+    assert data["ok"] is True
+    assert data["lumos_cam"]["enabled"] is False
+    assert data["lumos_cam"]["min_app_version"] == "0.1.0"
 
 
 def test_camera_credentials_are_never_sent_to_the_browser(server, processor):

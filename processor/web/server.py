@@ -113,6 +113,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(
                     {"ok": True, "scrcpy": self.processor.scrcpy_status()}
                 )
+            if route == "/api/lumos-cam":
+                return self._send_json(
+                    {"ok": True, "lumos_cam": self.processor.lumos_cam_status()}
+                )
             if route in (
                 "/api/calibrate/color",
                 "/api/calibrate/color/status",
@@ -163,6 +167,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._apply_camera_source(body)
             if route == "/api/scrcpy":
                 return self._apply_scrcpy(body)
+            if route == "/api/lumos-cam":
+                return self._apply_lumos_cam(body)
             if route == "/api/calibrate/color/start":
                 settle = body.get("settle_sec", None)
                 try:
@@ -292,6 +298,48 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": False, "error": str(exc)}, status=400)
         # Always 200 when the config mutation ran: a scrcpy spawn failure should
         # still leave enabled/zoom/pan reflected in the wizard, not roll the UI back.
+        self._send_json(result, status=200)
+
+    def _apply_lumos_cam(self, body: dict[str, Any]) -> None:
+        action = str(body.get("action") or "apply")
+        save = bool(body.get("save"))
+        fields = body.get("fields")
+        if fields is None:
+            fields = {
+                key: body[key]
+                for key in (
+                    "enabled",
+                    "serial",
+                    "adb",
+                    "package",
+                    "camera_id",
+                    "camera_size",
+                    "camera_fps",
+                    "codec",
+                    "camera_zoom",
+                    "zoom_min",
+                    "zoom_max",
+                    "pan_x",
+                    "pan_y",
+                    "af",
+                    "ae",
+                    "awb",
+                    "v4l2_sink",
+                    "bind_camera",
+                    "ffmpeg",
+                    "startup_timeout_sec",
+                    "prefer_over_scrcpy",
+                )
+                if key in body
+            }
+        if not isinstance(fields, dict):
+            return self._send_json(
+                {"ok": False, "error": "fields must be an object"}, status=400
+            )
+        try:
+            result = self.processor.apply_lumos_cam(fields, action=action, save=save)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, status=400)
         self._send_json(result, status=200)
 
     def _apply_camera_source(self, body: dict[str, Any]) -> None:
