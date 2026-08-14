@@ -1189,7 +1189,7 @@ class Processor:
                 "error": lumos_result.get("error"),
             }
 
-        return self.call(run)
+        return self.call(run, timeout=30.0)
 
     def _set_lumos_cal_mode(self, enabled: bool) -> dict[str, Any]:
         if not self.config.lumos_cam.enabled:

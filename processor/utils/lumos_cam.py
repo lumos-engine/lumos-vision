@@ -6,6 +6,7 @@ ffmpeg is only restarted when the stream itself changes (codec, size, sink).
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import os
@@ -13,8 +14,6 @@ import shutil
 import signal
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -188,32 +187,35 @@ class LumosCamClient:
         *,
         timeout: float = 3.0,
     ) -> dict[str, Any]:
-        url = f"http://127.0.0.1:{self.host_port}{path}"
         data = None if body is None else json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(url, data=data, method=method.upper())
-        req.add_header(PROTOCOL_HEADER, str(PROTOCOL_VERSION))
+        headers = {
+            PROTOCOL_HEADER: str(PROTOCOL_VERSION),
+            "Connection": "close",
+            "Accept": "application/json",
+        }
         if data is not None:
-            req.add_header("Content-Type", "application/json")
+            headers["Content-Type"] = "application/json"
+        conn = http.client.HTTPConnection("127.0.0.1", int(self.host_port), timeout=timeout)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-        except urllib.error.HTTPError as exc:
-            raw = exc.read()
-            try:
-                parsed = json.loads(raw.decode("utf-8"))
-            except Exception:
-                raise RuntimeError(exc.reason or str(exc)) from exc
-            if not parsed.get("ok", False):
-                raise RuntimeError(parsed.get("error") or exc.reason) from exc
-            return parsed
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            conn.request(method.upper(), path, body=data, headers=headers)
+            resp = conn.getresponse()
+            raw = resp.read()
+            status = resp.status
+        except (OSError, TimeoutError, http.client.HTTPException) as exc:
             raise RuntimeError(f"Lumos Cam control failed: {exc}") from exc
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
         try:
-            parsed = json.loads(raw.decode("utf-8"))
+            parsed = json.loads(raw.decode("utf-8") or "{}")
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"invalid JSON from Lumos Cam: {exc}") from exc
         if not isinstance(parsed, dict):
             raise RuntimeError("Lumos Cam returned a non-object")
+        if status >= 400 and not parsed.get("ok", False):
+            raise RuntimeError(parsed.get("error") or f"HTTP {status}")
         return parsed
 
     def status(self) -> dict[str, Any]:
@@ -510,11 +512,11 @@ class LumosCamManager:
         component = f"{pkg}/.MainActivity"
         try:
             result = subprocess.run(
-                adb_argv(cfg, "shell", "am", "start", "-n", component),
+                adb_argv(cfg, "shell", "am", "start", "-W", "-n", component),
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=8.0,
+                timeout=20.0,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "error": str(exc)}
@@ -531,6 +533,7 @@ class LumosCamManager:
             )
         except (OSError, subprocess.TimeoutExpired):
             pass
+        time.sleep(0.4)
         return {"ok": True, "component": component}
 
     def _setup_forwards(self, cfg: LumosCamConfig) -> bool:
@@ -587,7 +590,11 @@ class LumosCamManager:
             except RuntimeError as exc:
                 last = str(exc)
             time.sleep(0.35)
-        self._last_error = last
+        self._last_error = (
+            f"{last} — nothing is listening on device port {int(cfg.control_device_port)}. "
+            "Open Lumos Cam, grant camera, keep it on screen, then retry. "
+            "Rebuild/sideload ≥ 0.1.1 if this APK is older."
+        )
         return None
 
     def _wait_until_ready(self, cfg: LumosCamConfig) -> bool:
