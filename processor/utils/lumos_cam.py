@@ -135,12 +135,14 @@ def resolve_ffmpeg(configured: str) -> str:
     return found or text
 
 
-def build_ffmpeg_command(cfg: LumosCamConfig, *, binary: str | None = None) -> list[str]:
+def build_ffmpeg_command(
+    cfg: LumosCamConfig, *, binary: str | None = None, rotation: int = 0
+) -> list[str]:
     exe = binary or resolve_ffmpeg(cfg.ffmpeg)
     codec = (cfg.codec or "h264").strip().lower()
     demux = "mjpeg" if codec == "mjpeg" else "h264"
     url = f"tcp://127.0.0.1:{int(cfg.video_host_port)}"
-    return [
+    cmd = [
         exe,
         "-hide_banner",
         "-loglevel",
@@ -153,12 +155,31 @@ def build_ffmpeg_command(cfg: LumosCamConfig, *, binary: str | None = None) -> l
         demux,
         "-i",
         url,
-        "-pix_fmt",
-        "yuyv422",
-        "-f",
-        "v4l2",
-        str(cfg.v4l2_sink),
     ]
+    vf = _rotation_filter(rotation)
+    if vf:
+        cmd.extend(["-vf", vf])
+    cmd.extend(
+        [
+            "-pix_fmt",
+            "yuyv422",
+            "-f",
+            "v4l2",
+            str(cfg.v4l2_sink),
+        ]
+    )
+    return cmd
+
+
+def _rotation_filter(degrees: int) -> str:
+    turn = int(degrees) % 360
+    if turn == 90:
+        return "transpose=1"
+    if turn == 180:
+        return "transpose=1,transpose=1"
+    if turn == 270:
+        return "transpose=2"
+    return ""
 
 
 def step_lumos_zoom(current: float, *, inward: bool, cfg: LumosCamConfig) -> float:
@@ -380,8 +401,10 @@ class LumosCamManager:
         self._cfg = cfg
         launch = self._launch_app(cfg)
         if not launch.get("ok"):
-            self._last_error = str(launch.get("error") or "failed to launch Lumos Cam")
-            return {"ok": False, "error": self._last_error, "running": False}
+            log.warning(
+                "Lumos Cam launch: %s — continuing if the app is already open",
+                launch.get("error"),
+            )
 
         if not self._setup_forwards(cfg):
             return {"ok": False, "error": self._last_error, "running": False}
@@ -389,6 +412,10 @@ class LumosCamManager:
         self.client.configure(cfg)
         phone = self._wait_for_control(cfg)
         if phone is None:
+            extra = ""
+            if not launch.get("ok"):
+                extra = f" Launch: {launch.get('error')}"
+            self._last_error = (self._last_error or "control not responding") + extra
             return {"ok": False, "error": self._last_error, "running": False}
         self._phone = phone
         self._phone["package_installed"] = True
@@ -399,13 +426,15 @@ class LumosCamManager:
             self.client.set_pan(clamp_pan(cfg.pan_x), clamp_pan(cfg.pan_y))
             self.client.set_locks(af=cfg.af, ae=cfg.ae, awb=cfg.awb)
             self.client.set_stream(cfg, enabled=True)
+            phone = {**phone, **self.client.status()}
         except RuntimeError as exc:
             self._last_error = str(exc)
             log.error("lumos-cam control: %s", exc)
             return {"ok": False, "error": self._last_error, "running": False}
 
         self._ffmpeg = resolve_ffmpeg(cfg.ffmpeg)
-        cmd = build_ffmpeg_command(cfg, binary=self._ffmpeg)
+        rotation = int(phone.get("orientation") or 0)
+        cmd = build_ffmpeg_command(cfg, binary=self._ffmpeg, rotation=rotation)
         self._command = cmd
         log.info("Starting Lumos Cam receiver: %s", " ".join(cmd))
         try:
@@ -639,7 +668,7 @@ class LumosCamManager:
         self._last_error = (
             f"{last} — nothing is listening on device port {int(cfg.control_device_port)}. "
             "Open Lumos Cam, grant camera, keep it on screen, then retry. "
-            "Rebuild/sideload ≥ 0.1.8 if this APK is older."
+            "Rebuild/sideload ≥ 0.1.9 if this APK is older."
         )
         return None
 

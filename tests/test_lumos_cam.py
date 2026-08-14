@@ -44,6 +44,12 @@ def test_adb_launch_error_detects_miui_type3():
     assert _adb_launch_error(Result(0, "Events injected: 1\n")) is None
 
 
+def test_build_ffmpeg_command_rotates():
+    cfg = LumosCamConfig(ffmpeg="/usr/bin/ffmpeg", v4l2_sink="/dev/video11")
+    cmd = build_ffmpeg_command(cfg, binary="/usr/bin/ffmpeg", rotation=90)
+    assert "-vf" in cmd and "transpose=1" in cmd
+
+
 def test_build_ffmpeg_command_h264():
     cfg = LumosCamConfig(
         codec="h264",
