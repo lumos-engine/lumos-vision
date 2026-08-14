@@ -7,7 +7,6 @@ Decoded frames go to stdout as raw BGR — v4l2loopback is not used for capture.
 
 from __future__ import annotations
 
-import fcntl
 import http.client
 import json
 import math
@@ -196,9 +195,11 @@ def build_ffmpeg_command(
         "-loglevel",
         "warning",
         "-fflags",
-        "nobuffer",
+        "nobuffer+flush_packets",
         "-flags",
         "low_delay",
+        "-flush_packets",
+        "1",
         "-timeout",
         str(timeout_us),
         "-f",
@@ -369,8 +370,10 @@ class LumosCamManager:
         self._cfg: LumosCamConfig | None = None
         self._frame_wh: tuple[int, int] = (1920, 1080)
         self._pending = b""
+        self._held_frame: np.ndarray | None = None
         self._stderr_thread: threading.Thread | None = None
         self._stderr_tail: list[str] = []
+        self._logged_first = False
 
     @property
     def running(self) -> bool:
@@ -494,6 +497,8 @@ class LumosCamManager:
         rotation = int(phone.get("orientation") or 0)
         self._frame_wh = output_frame_size(cfg, rotation)
         self._pending = b""
+        self._held_frame = None
+        self._logged_first = False
         cmd = build_ffmpeg_command(cfg, binary=self._ffmpeg, rotation=rotation)
         self._command = cmd
         log.info(
@@ -522,6 +527,11 @@ class LumosCamManager:
             return {"ok": False, "error": self._last_error, "running": False}
 
         self._start_stderr_drain(self._proc)
+        if self._proc.stdout is not None:
+            try:
+                os.set_blocking(self._proc.stdout.fileno(), False)
+            except OSError:
+                pass
         ready = self._wait_until_ready(cfg)
         proc = self._proc
         if proc is not None and proc.poll() is not None:
@@ -576,6 +586,7 @@ class LumosCamManager:
         proc = self._proc
         self._proc = None
         self._pending = b""
+        self._held_frame = None
         self._drop_forwards()
         if proc is None:
             return {"ok": True, "running": False}
@@ -762,7 +773,15 @@ class LumosCamManager:
         return self._frame_wh
 
     def read_bgr(self, timeout: float = 0.25) -> np.ndarray | None:
-        """Read the newest decoded BGR frame from ffmpeg stdout."""
+        """Read the newest decoded BGR frame from ffmpeg stdout.
+
+        Never ``read(frame_bytes)`` in one call: a typical pipe buffer is
+        64KiB and ffmpeg will block once it is full, while we wait for a
+        6MiB 1080p frame — deadlock, ``in 0.0 fps``.
+        """
+        if self._held_frame is not None:
+            frame, self._held_frame = self._held_frame, None
+            return frame
         proc = self._proc
         stdout = None if proc is None else proc.stdout
         if proc is None or stdout is None or proc.poll() is not None:
@@ -771,7 +790,10 @@ class LumosCamManager:
         nbytes = width * height * 3
         if nbytes <= 0:
             return None
-        fd = stdout.fileno()
+        try:
+            fd = stdout.fileno()
+        except Exception:
+            return None
         deadline = time.monotonic() + max(0.0, timeout)
         buf = self._pending
         self._pending = b""
@@ -783,37 +805,39 @@ class LumosCamManager:
             try:
                 ready, _, _ = select.select([fd], [], [], remaining)
             except (OSError, ValueError):
+                self._pending = buf
                 return None
             if not ready:
                 self._pending = buf
                 return None
-            chunk = stdout.read(nbytes - len(buf))
+            try:
+                chunk = os.read(fd, min(65536, nbytes - len(buf)))
+            except BlockingIOError:
+                continue
+            except OSError:
+                return None
             if not chunk:
                 return None
             buf += chunk
         frame = buf[:nbytes]
         leftover = buf[nbytes:]
-        # Drop-old: consume any extra complete frames already in the pipe.
-        try:
-            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        while True:
             try:
-                while True:
-                    extra = stdout.read(nbytes - len(leftover) if leftover else nbytes)
-                    if not extra:
-                        break
-                    leftover += extra
-                    while len(leftover) >= nbytes:
-                        frame = leftover[:nbytes]
-                        leftover = leftover[nbytes:]
-            except (BlockingIOError, InterruptedError):
-                pass
-            finally:
-                fcntl.fcntl(fd, fcntl.F_SETFL, flags)
-        except OSError:
-            pass
+                extra = os.read(fd, 65536)
+            except (BlockingIOError, OSError):
+                break
+            if not extra:
+                break
+            leftover += extra
+            while len(leftover) >= nbytes:
+                frame = leftover[:nbytes]
+                leftover = leftover[nbytes:]
         self._pending = leftover
-        return np.frombuffer(frame, dtype=np.uint8).reshape((height, width, 3)).copy()
+        image = np.frombuffer(frame, dtype=np.uint8).reshape((height, width, 3)).copy()
+        if not self._logged_first:
+            self._logged_first = True
+            log.info("Lumos Cam first frame %dx%d", width, height)
+        return image
 
     def _start_stderr_drain(self, proc: subprocess.Popen[bytes]) -> None:
         err = proc.stderr
@@ -838,6 +862,7 @@ class LumosCamManager:
 
     def _wait_until_ready(self, cfg: LumosCamConfig) -> bool:
         deadline = time.monotonic() + max(0.5, float(cfg.startup_timeout_sec))
+        last_log = 0.0
         while time.monotonic() < deadline:
             if not self.running:
                 return False
@@ -846,22 +871,24 @@ class LumosCamManager:
                 self._phone = {**self._phone, **st}
             except RuntimeError:
                 st = {}
-            if "bytes_sent" in st:
-                try:
-                    if int(st.get("bytes_sent") or 0) <= 0:
-                        time.sleep(0.25)
-                        continue
-                except (TypeError, ValueError):
-                    pass
             stdout = None if self._proc is None else self._proc.stdout
             if stdout is None:
                 return True
-            try:
-                ready, _, _ = select.select([stdout], [], [], 0.25)
-            except (OSError, TypeError, ValueError):
+            # Drain from the first select: waiting on phone bytes_sent while
+            # ffmpeg's 64KiB stdout pipe is full deadlocks the decoder.
+            frame = self.read_bgr(timeout=0.4)
+            if frame is not None:
+                self._held_frame = frame
                 return True
-            if ready:
-                return True
+            now = time.monotonic()
+            if now - last_log > 2.0:
+                last_log = now
+                log.info(
+                    "Lumos Cam waiting for ffmpeg frame (%d/%d bytes, phone bytes_sent=%s)",
+                    len(self._pending),
+                    self._frame_wh[0] * self._frame_wh[1] * 3,
+                    st.get("bytes_sent", "?"),
+                )
         return False
 
     @staticmethod

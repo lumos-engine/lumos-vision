@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import threading
+import time
+
 from processor.config.loader import apply_updates, config_to_dict
 from processor.config.schema import Config, LumosCamConfig
 from processor.utils.lumos_cam import (
@@ -13,6 +17,46 @@ from processor.utils.lumos_cam import (
     step_lumos_zoom,
 )
 from processor.utils.scrcpy import ZOOM_STEP
+
+
+class _AliveEmptyFfmpeg:
+    """ffmpeg still running; stdout never yields a full BGR frame."""
+
+    def __init__(self, pid: int = 5151) -> None:
+        self.pid = pid
+        self.returncode = None
+        self._r, self._w = os.pipe()
+        os.set_blocking(self._r, False)
+        self.stdout = os.fdopen(self._r, "rb", buffering=0)
+        self.stderr = None
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = 0
+        self._close_write()
+
+    def kill(self):
+        self.returncode = -9
+        self._close_write()
+
+    def wait(self, timeout=None):
+        self.returncode = self.returncode if self.returncode is not None else 0
+        self._close_write()
+        return self.returncode
+
+    def communicate(self, timeout=None):
+        self._close_write()
+        return ("", None)
+
+    def _close_write(self) -> None:
+        w, self._w = self._w, None
+        if w is not None:
+            try:
+                os.close(w)
+            except OSError:
+                pass
 
 
 def test_resolve_adb_serial_follows_wireless_port(monkeypatch):
@@ -81,6 +125,8 @@ def test_build_ffmpeg_command_h264():
     assert "rawvideo" in cmd
     assert "pipe:1" in cmd
     assert "bgr24" in cmd
+    assert "nobuffer+flush_packets" in cmd
+    assert "-flush_packets" in cmd
     assert "/dev/video11" not in cmd
     assert "-timeout" in cmd
     assert "15000000" in cmd
@@ -211,29 +257,6 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
     sink = tmp_path / "video11"
     sink.write_text("")
 
-    class FakeProc:
-        def __init__(self):
-            self.pid = 5151
-            self.returncode = None
-            self.stdout = None
-            self.stderr = None
-
-        def poll(self):
-            return self.returncode
-
-        def terminate(self):
-            self.returncode = 0
-
-        def kill(self):
-            self.returncode = -9
-
-        def wait(self, timeout=None):
-            self.returncode = self.returncode if self.returncode is not None else 0
-            return self.returncode
-
-        def communicate(self, timeout=None):
-            return ("", None)
-
     def fake_run(cmd, **kwargs):
         class Result:
             returncode = 0
@@ -245,7 +268,9 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
             Result.stdout = "List of devices attached\nphone\tdevice\n"
         return Result()
 
-    monkeypatch.setattr("processor.utils.lumos_cam.subprocess.Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(
+        "processor.utils.lumos_cam.subprocess.Popen", lambda *a, **k: _AliveEmptyFfmpeg()
+    )
     monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
     monkeypatch.setattr("processor.utils.lumos_cam.os.killpg", lambda *a, **k: None)
     monkeypatch.setattr("processor.utils.lumos_cam.adb_device_ready", lambda *a, **k: True)
@@ -288,29 +313,6 @@ def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
     sink = tmp_path / "video11"
     sink.write_text("")
 
-    class FakeProc:
-        def __init__(self):
-            self.pid = 2_147_483_646
-            self.returncode = None
-            self.stdout = None
-            self.stderr = None
-
-        def poll(self):
-            return self.returncode
-
-        def terminate(self):
-            self.returncode = 0
-
-        def kill(self):
-            self.returncode = -9
-
-        def wait(self, timeout=None):
-            self.returncode = self.returncode if self.returncode is not None else 0
-            return self.returncode
-
-        def communicate(self, timeout=None):
-            return ("", None)
-
     def fake_run(cmd, **kwargs):
         class Result:
             returncode = 0
@@ -322,7 +324,10 @@ def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
             Result.stdout = "List of devices attached\nphone\tdevice\n"
         return Result()
 
-    monkeypatch.setattr("processor.utils.lumos_cam.subprocess.Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(
+        "processor.utils.lumos_cam.subprocess.Popen",
+        lambda *a, **k: _AliveEmptyFfmpeg(pid=2_147_483_646),
+    )
     monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
     monkeypatch.setattr("processor.utils.lumos_cam.os.killpg", lambda *a, **k: None)
     monkeypatch.setattr("processor.utils.lumos_cam.adb_device_ready", lambda *a, **k: True)
@@ -712,3 +717,83 @@ def test_color_cal_toggles_lumos_cal_mode(monkeypatch, tmp_path):
         assert calls == [True, False]
     finally:
         app.shutdown()
+
+
+def test_read_bgr_assembles_chunked_pipe():
+    mgr = LumosCamManager()
+    width, height = 64, 48
+    nbytes = width * height * 3
+    payload = bytes((i * 17) % 256 for i in range(nbytes))
+    r, w = os.pipe()
+    os.set_blocking(r, False)
+
+    class Proc:
+        pid = 99
+        returncode = None
+        stdout = os.fdopen(r, "rb", buffering=0)
+        stderr = None
+
+        def poll(self):
+            return None
+
+    mgr._proc = Proc()
+    mgr._frame_wh = (width, height)
+
+    def writer() -> None:
+        view = memoryview(payload)
+        off = 0
+        while off < len(view):
+            n = os.write(w, view[off : off + 64])
+            off += n
+            time.sleep(0.0005)
+        os.close(w)
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+    try:
+        image = mgr.read_bgr(timeout=2.0)
+        assert image is not None
+        assert image.shape == (height, width, 3)
+        assert image.tobytes() == payload
+    finally:
+        thread.join(timeout=2.0)
+        try:
+            mgr._proc.stdout.close()
+        except OSError:
+            pass
+
+
+def test_read_bgr_keeps_newest_queued_frame():
+    import numpy as np
+
+    mgr = LumosCamManager()
+    width, height = 8, 4
+    nbytes = width * height * 3
+    older = bytes([1]) * nbytes
+    newer = bytes([9]) * nbytes
+    r, w = os.pipe()
+    os.set_blocking(r, False)
+    os.write(w, older + newer)
+
+    class Proc:
+        pid = 100
+        returncode = None
+        stdout = os.fdopen(r, "rb", buffering=0)
+        stderr = None
+
+        def poll(self):
+            return None
+
+    mgr._proc = Proc()
+    mgr._frame_wh = (width, height)
+    try:
+        image = mgr.read_bgr(timeout=1.0)
+        assert image is not None
+        assert image.tobytes() == newer
+        assert np.all(image == 9)
+    finally:
+        os.close(w)
+        try:
+            mgr._proc.stdout.close()
+        except OSError:
+            pass
