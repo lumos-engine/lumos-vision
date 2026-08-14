@@ -20,6 +20,7 @@ from typing import Any, Callable
 import numpy as np
 
 from processor.camera.base import Frame, FrameSource
+from processor.camera.lumos import LumosPipeSource
 from processor.camera.factory import create_source
 from processor.config.loader import apply_updates, config_to_dict, save_config
 from processor.config.schema import Config
@@ -213,7 +214,7 @@ class Processor:
         else:
             self._presence.reset(online=True)
             self._start_phone_capture_unlocked()
-            self.source = create_source(self.config.camera).start()
+            self.source = self._make_source_unlocked().start()
             self._set_leds_unlocked(True)
             log.info(
                 "Pipeline: %s -> %dx%d @ %.0f fps",
@@ -761,17 +762,27 @@ class Processor:
         self.source = None
         self._last_source = None
         self._last_ctx = None
-        self.source = create_source(self.config.camera).start()
+        self.source = self._make_source_unlocked().start()
         log.info(
             "Capture source recreated: %s (%s)",
-            self.config.camera.source,
             self.source.name,
+            self.config.camera.source,
         )
         return {
             "ok": True,
-            "source": self.config.camera.source,
+            "source": self.source.name,
             "stats": dict(self.source.stats),
         }
+
+    def _make_source_unlocked(self) -> FrameSource:
+        if (
+            self.config.lumos_cam.enabled
+            and self.config.lumos_cam.bind_camera
+            and self._lumos.running
+            and hasattr(self._lumos, "read_bgr")
+        ):
+            return LumosPipeSource(self._lumos, self.config.camera)
+        return create_source(self.config.camera)
 
     def apply_camera_source(
         self, fields: dict[str, Any], *, save: bool = False

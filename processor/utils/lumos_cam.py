@@ -1,21 +1,27 @@
-"""Manage Lumos Cam (Camera2 Android app) → v4l2loopback for phone capture.
+"""Manage Lumos Cam (Camera2 Android app) → ffmpeg pipe for phone capture.
 
 Unlike scrcpy, zoom / pan / AF-AE-AWB locks are live HTTP to the phone.
 ffmpeg is only restarted when the stream itself changes (codec, size, sink).
+Decoded frames go to stdout as raw BGR — v4l2loopback is not used for capture.
 """
 
 from __future__ import annotations
 
+import fcntl
 import http.client
 import json
 import math
 import os
+import select
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, replace
 from typing import Any
+
+import numpy as np
 
 from processor.config.schema import LumosCamConfig
 from processor.utils.logging import get_logger
@@ -26,7 +32,6 @@ from processor.utils.scrcpy import (
     clamp_pan,
     clamp_zoom,
     parse_camera_size,
-    sink_has_capture,
 )
 
 log = get_logger(__name__)
@@ -206,14 +211,22 @@ def build_ffmpeg_command(
         cmd.extend(["-vf", vf])
     cmd.extend(
         [
+            "-an",
             "-pix_fmt",
-            "yuyv422",
+            "bgr24",
             "-f",
-            "v4l2",
-            str(cfg.v4l2_sink),
+            "rawvideo",
+            "pipe:1",
         ]
     )
     return cmd
+
+
+def output_frame_size(cfg: LumosCamConfig, rotation: int = 0) -> tuple[int, int]:
+    width, height = parse_camera_size(cfg.camera_size or "1920x1080")
+    if int(rotation) % 180 == 90:
+        return height, width
+    return width, height
 
 
 def _rotation_filter(degrees: int) -> str:
@@ -346,7 +359,7 @@ class LumosCamManager:
     """Own adb forwards + ffmpeg receiver + HTTP control for Lumos Cam."""
 
     def __init__(self) -> None:
-        self._proc: subprocess.Popen[str] | None = None
+        self._proc: subprocess.Popen[bytes] | None = None
         self._command: list[str] = []
         self._last_error = ""
         self._ffmpeg = "ffmpeg"
@@ -354,6 +367,10 @@ class LumosCamManager:
         self.client = LumosCamClient()
         self._forwards_up = False
         self._cfg: LumosCamConfig | None = None
+        self._frame_wh: tuple[int, int] = (1920, 1080)
+        self._pending = b""
+        self._stderr_thread: threading.Thread | None = None
+        self._stderr_tail: list[str] = []
 
     @property
     def running(self) -> bool:
@@ -420,15 +437,10 @@ class LumosCamManager:
 
         sink = (cfg.v4l2_sink or "").strip()
         if sink and not os.path.exists(sink):
-            self._last_error = (
-                f"v4l2 sink missing: {sink} — recreate Android Cam loopback, e.g.\n"
-                "  sudo modprobe -r v4l2loopback\n"
-                "  sudo modprobe v4l2loopback devices=2 video_nr=10,11 "
-                'card_label="Screen Sight","Android Cam" exclusive_caps=1\n'
-                "(stop Screen Sight / HyperHDR first; they use video10)"
+            log.warning(
+                "lumos-cam: %s missing — capturing via ffmpeg pipe (loopback not required)",
+                sink,
             )
-            log.error("lumos-cam: %s", self._last_error.replace("\n", " | "))
-            return {"ok": False, "error": self._last_error, "running": False}
 
         cfg = replace(cfg, serial=resolve_adb_serial(cfg))
         if not adb_device_ready(cfg.serial, adb=(cfg.adb or "adb")):
@@ -480,16 +492,24 @@ class LumosCamManager:
 
         self._ffmpeg = resolve_ffmpeg(cfg.ffmpeg)
         rotation = int(phone.get("orientation") or 0)
+        self._frame_wh = output_frame_size(cfg, rotation)
+        self._pending = b""
         cmd = build_ffmpeg_command(cfg, binary=self._ffmpeg, rotation=rotation)
         self._command = cmd
-        log.info("Starting Lumos Cam receiver: %s", " ".join(cmd))
+        log.info(
+            "Starting Lumos Cam receiver %dx%d: %s",
+            self._frame_wh[0],
+            self._frame_wh[1],
+            " ".join(cmd),
+        )
         try:
             self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 start_new_session=True,
+                bufsize=0,
             )
         except FileNotFoundError:
             self._last_error = f"ffmpeg binary not found: {self._ffmpeg}"
@@ -501,6 +521,7 @@ class LumosCamManager:
             self._proc = None
             return {"ok": False, "error": self._last_error, "running": False}
 
+        self._start_stderr_drain(self._proc)
         ready = self._wait_until_ready(cfg)
         proc = self._proc
         if proc is not None and proc.poll() is not None:
@@ -522,7 +543,7 @@ class LumosCamManager:
         if not ready:
             phone = self._phone or {}
             self._last_error = (
-                f"no frames on {sink or '(no sink)'} after {float(cfg.startup_timeout_sec):.0f}s "
+                f"no decoded frames from ffmpeg after {float(cfg.startup_timeout_sec):.0f}s "
                 f"(phone streaming={phone.get('streaming')!r} "
                 f"video_clients={phone.get('video_clients', 0)} "
                 f"bytes_sent={phone.get('bytes_sent', 0)} "
@@ -554,9 +575,16 @@ class LumosCamManager:
                 pass
         proc = self._proc
         self._proc = None
+        self._pending = b""
         self._drop_forwards()
         if proc is None:
             return {"ok": True, "running": False}
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
         if proc.poll() is not None:
             return {"ok": True, "running": False}
         log.info("Stopping Lumos Cam ffmpeg (pid %s)", proc.pid)
@@ -730,82 +758,129 @@ class LumosCamManager:
         )
         return None
 
+    def frame_size(self) -> tuple[int, int]:
+        return self._frame_wh
+
+    def read_bgr(self, timeout: float = 0.25) -> np.ndarray | None:
+        """Read the newest decoded BGR frame from ffmpeg stdout."""
+        proc = self._proc
+        stdout = None if proc is None else proc.stdout
+        if proc is None or stdout is None or proc.poll() is not None:
+            return None
+        width, height = self._frame_wh
+        nbytes = width * height * 3
+        if nbytes <= 0:
+            return None
+        fd = stdout.fileno()
+        deadline = time.monotonic() + max(0.0, timeout)
+        buf = self._pending
+        self._pending = b""
+        while len(buf) < nbytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._pending = buf
+                return None
+            try:
+                ready, _, _ = select.select([fd], [], [], remaining)
+            except (OSError, ValueError):
+                return None
+            if not ready:
+                self._pending = buf
+                return None
+            chunk = stdout.read(nbytes - len(buf))
+            if not chunk:
+                return None
+            buf += chunk
+        frame = buf[:nbytes]
+        leftover = buf[nbytes:]
+        # Drop-old: consume any extra complete frames already in the pipe.
+        try:
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            try:
+                while True:
+                    extra = stdout.read(nbytes - len(leftover) if leftover else nbytes)
+                    if not extra:
+                        break
+                    leftover += extra
+                    while len(leftover) >= nbytes:
+                        frame = leftover[:nbytes]
+                        leftover = leftover[nbytes:]
+            except (BlockingIOError, InterruptedError):
+                pass
+            finally:
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+        except OSError:
+            pass
+        self._pending = leftover
+        return np.frombuffer(frame, dtype=np.uint8).reshape((height, width, 3)).copy()
+
+    def _start_stderr_drain(self, proc: subprocess.Popen[bytes]) -> None:
+        err = proc.stderr
+        if err is None:
+            return
+
+        def drain() -> None:
+            try:
+                for raw in iter(err.readline, b""):
+                    line = raw.decode("utf-8", "replace").rstrip()
+                    if not line:
+                        continue
+                    self._stderr_tail.append(line)
+                    if len(self._stderr_tail) > 40:
+                        del self._stderr_tail[:10]
+                    log.warning("lumos ffmpeg: %s", line)
+            except Exception:
+                return
+
+        self._stderr_thread = threading.Thread(target=drain, name="lumos-ffmpeg-err", daemon=True)
+        self._stderr_thread.start()
+
     def _wait_until_ready(self, cfg: LumosCamConfig) -> bool:
-        sink = (cfg.v4l2_sink or "").strip()
         deadline = time.monotonic() + max(0.5, float(cfg.startup_timeout_sec))
         while time.monotonic() < deadline:
             if not self.running:
                 return False
-            st: dict[str, Any] = {}
             try:
                 st = self.client.status()
                 self._phone = {**self._phone, **st}
             except RuntimeError:
                 st = {}
-            if not self._stream_is_flowing(st):
-                time.sleep(0.25)
-                continue
-            if not sink:
-                return True
-            held = self._ffmpeg_holds_sink(sink)
-            if held is True:
-                return True
-            # No /proc (macOS / tests): node existence is the fallback.
-            if held is None and os.path.exists(sink):
-                return True
-            time.sleep(0.25)
-        return False
-
-    def _stream_is_flowing(self, st: dict[str, Any]) -> bool:
-        """True when the phone is actually sending video, not just TCP-connected."""
-        if "bytes_sent" in st:
-            try:
-                return int(st.get("bytes_sent") or 0) > 0
-            except (TypeError, ValueError):
-                return False
-        if "video_clients" in st:
-            try:
-                return int(st.get("video_clients") or 0) >= 1
-            except (TypeError, ValueError):
-                return False
-        sink = ""
-        if self._cfg is not None:
-            sink = (self._cfg.v4l2_sink or "").strip()
-        return bool(sink and os.path.exists(sink) and sink_has_capture(sink))
-
-    def _ffmpeg_holds_sink(self, sink: str) -> bool | None:
-        """Whether ffmpeg has /dev/videoN open. None if we cannot tell."""
-        proc = self._proc
-        if proc is None or proc.poll() is not None:
-            return False
-        fd_dir = f"/proc/{proc.pid}/fd"
-        if not os.path.isdir(fd_dir):
-            return None
-        try:
-            real_sink = os.path.realpath(sink)
-            for name in os.listdir(fd_dir):
+            if "bytes_sent" in st:
                 try:
-                    target = os.readlink(os.path.join(fd_dir, name))
-                except OSError:
-                    continue
-                if target == sink or os.path.realpath(target) == real_sink:
-                    return True
-        except OSError:
-            return None
+                    if int(st.get("bytes_sent") or 0) <= 0:
+                        time.sleep(0.25)
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            stdout = None if self._proc is None else self._proc.stdout
+            if stdout is None:
+                return True
+            try:
+                ready, _, _ = select.select([stdout], [], [], 0.25)
+            except (OSError, TypeError, ValueError):
+                return True
+            if ready:
+                return True
         return False
 
     @staticmethod
-    def _read_process_output(proc: subprocess.Popen[str]) -> str:
+    def _read_process_output(proc: subprocess.Popen[bytes]) -> str:
+        chunks: list[str] = []
         try:
-            out, _ = proc.communicate(timeout=0.5)
-            return out or ""
+            out, err = proc.communicate(timeout=0.5)
         except Exception:
+            out, err = b"", b""
             try:
-                if proc.stdout:
-                    return proc.stdout.read() or ""
+                if proc.stderr:
+                    err = proc.stderr.read() or b""
             except Exception:
-                return ""
-            return ""
+                pass
+        for blob in (err, out):
+            if not blob:
+                continue
+            chunks.append(blob.decode("utf-8", "replace") if isinstance(blob, bytes) else str(blob))
+        return "\n".join(chunks).strip()
 
 
 __all__ = [
@@ -815,6 +890,7 @@ __all__ = [
     "LumosCamManager",
     "LumosCamStatus",
     "build_ffmpeg_command",
+    "output_frame_size",
     "package_installed",
     "step_lumos_pan",
     "step_lumos_zoom",

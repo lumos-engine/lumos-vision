@@ -60,6 +60,10 @@ def test_build_ffmpeg_command_rotates():
     cfg = LumosCamConfig(ffmpeg="/usr/bin/ffmpeg", v4l2_sink="/dev/video11")
     cmd = build_ffmpeg_command(cfg, binary="/usr/bin/ffmpeg", rotation=90)
     assert "-vf" in cmd and "transpose=1" in cmd
+    from processor.utils.lumos_cam import output_frame_size
+
+    assert output_frame_size(cfg, 90) == (1080, 1920)
+    assert output_frame_size(cfg, 0) == (1920, 1080)
 
 
 def test_build_ffmpeg_command_h264():
@@ -74,7 +78,10 @@ def test_build_ffmpeg_command_h264():
     assert cmd[0] == "/usr/bin/ffmpeg"
     assert "-f" in cmd and "h264" in cmd
     assert "tcp://127.0.0.1:18766" in cmd
-    assert "/dev/video11" in cmd
+    assert "rawvideo" in cmd
+    assert "pipe:1" in cmd
+    assert "bgr24" in cmd
+    assert "/dev/video11" not in cmd
     assert "-timeout" in cmd
     assert "15000000" in cmd
 
@@ -126,6 +133,7 @@ def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
             self.pid = 2_147_483_647
             self.returncode = None
             self.stdout = None
+            self.stderr = None
 
         def poll(self):
             return self.returncode
@@ -162,7 +170,6 @@ def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
 
     monkeypatch.setattr("processor.utils.lumos_cam.subprocess.Popen", fake_popen)
     monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
-    monkeypatch.setattr("processor.utils.lumos_cam.sink_has_capture", lambda device: True)
     monkeypatch.setattr("processor.utils.lumos_cam.os.killpg", lambda *a, **k: None)
     monkeypatch.setattr("processor.utils.lumos_cam.adb_device_ready", lambda *a, **k: True)
     monkeypatch.setattr("processor.utils.lumos_cam.package_installed", lambda cfg: True)
@@ -209,6 +216,7 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
             self.pid = 5151
             self.returncode = None
             self.stdout = None
+            self.stderr = None
 
         def poll(self):
             return self.returncode
@@ -239,7 +247,6 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
 
     monkeypatch.setattr("processor.utils.lumos_cam.subprocess.Popen", lambda *a, **k: FakeProc())
     monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
-    monkeypatch.setattr("processor.utils.lumos_cam.sink_has_capture", lambda device: False)
     monkeypatch.setattr("processor.utils.lumos_cam.os.killpg", lambda *a, **k: None)
     monkeypatch.setattr("processor.utils.lumos_cam.adb_device_ready", lambda *a, **k: True)
     monkeypatch.setattr("processor.utils.lumos_cam.package_installed", lambda cfg: True)
@@ -253,6 +260,7 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
             "app_version": "0.1.0",
             "streaming": True,
             "video_clients": 0,
+            "bytes_sent": 0,
         }
 
     mgr.client.status = fake_status
@@ -273,7 +281,7 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
     assert result["ok"] is False
     assert result["running"] is False
     assert result["ready"] is False
-    assert "no frames" in (result.get("error") or "")
+    assert "no decoded frames" in (result.get("error") or "")
 
 
 def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
@@ -285,6 +293,7 @@ def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
             self.pid = 2_147_483_646
             self.returncode = None
             self.stdout = None
+            self.stderr = None
 
         def poll(self):
             return self.returncode
@@ -315,7 +324,6 @@ def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
 
     monkeypatch.setattr("processor.utils.lumos_cam.subprocess.Popen", lambda *a, **k: FakeProc())
     monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
-    monkeypatch.setattr("processor.utils.lumos_cam.sink_has_capture", lambda device: True)
     monkeypatch.setattr("processor.utils.lumos_cam.os.killpg", lambda *a, **k: None)
     monkeypatch.setattr("processor.utils.lumos_cam.adb_device_ready", lambda *a, **k: True)
     monkeypatch.setattr("processor.utils.lumos_cam.package_installed", lambda cfg: True)
