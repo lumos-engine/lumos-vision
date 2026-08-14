@@ -14,7 +14,7 @@ import shutil
 import signal
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from processor.config.schema import LumosCamConfig
@@ -85,6 +85,48 @@ class LumosCamStatus:
             "command": list(self.command),
             "min_app_version": MIN_APP_VERSION,
         }
+
+
+def list_adb_serials(*, adb: str = "adb") -> list[str]:
+    try:
+        result = subprocess.run(
+            [adb, "devices"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    found: list[str] = []
+    for line in (result.stdout or "").splitlines():
+        text = line.strip()
+        if not text or text.startswith("List of devices"):
+            continue
+        parts = text.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            found.append(parts[0])
+    return found
+
+
+def resolve_adb_serial(cfg: LumosCamConfig) -> str:
+    """Wireless debugging changes the TCP port; keep the same IP if possible."""
+    wanted = (cfg.serial or "").strip()
+    adb = (cfg.adb or "adb").strip() or "adb"
+    devices = list_adb_serials(adb=adb)
+    if wanted and wanted in devices:
+        return wanted
+    if wanted and ":" in wanted:
+        host = wanted.rsplit(":", 1)[0]
+        matches = [serial for serial in devices if serial.startswith(f"{host}:")]
+        if len(matches) == 1:
+            log.info("adb serial %s not connected; using %s", wanted, matches[0])
+            return matches[0]
+    if len(devices) == 1:
+        if wanted and wanted != devices[0]:
+            log.info("adb serial %s not connected; using %s", wanted, devices[0])
+        return devices[0]
+    return wanted
 
 
 def adb_argv(cfg: LumosCamConfig, *args: str) -> list[str]:
@@ -385,6 +427,7 @@ class LumosCamManager:
             log.error("lumos-cam: %s", self._last_error.replace("\n", " | "))
             return {"ok": False, "error": self._last_error, "running": False}
 
+        cfg = replace(cfg, serial=resolve_adb_serial(cfg))
         if not adb_device_ready(cfg.serial, adb=(cfg.adb or "adb")):
             self._last_error = "no authorized adb device"
             return {"ok": False, "error": self._last_error, "running": False}
@@ -668,7 +711,7 @@ class LumosCamManager:
         self._last_error = (
             f"{last} — nothing is listening on device port {int(cfg.control_device_port)}. "
             "Open Lumos Cam, grant camera, keep it on screen, then retry. "
-            "Rebuild/sideload ≥ 0.1.9 if this APK is older."
+            "Rebuild/sideload ≥ 0.1.10 if this APK is older."
         )
         return None
 

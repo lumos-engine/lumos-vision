@@ -431,7 +431,7 @@ async function buildLumosCamPanel() {
     <h3>Lumos Cam</h3>
     <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1). Leave the
     app open on the phone, then enable here. Wireless adb serial looks like
-    <code>192.168.1.243:40189</code>. Live zoom, pan, and AF/AE/AWB locks —
+    <code>192.168.1.243:37847</code> (the port changes). Live zoom, pan, and AF/AE/AWB locks —
     no restart. Colour-cal Start turns on cal mode.</p>
     <div class="control">
       <label class="check"><input type="checkbox" id="lumos-enabled"> Use Lumos Cam</label>

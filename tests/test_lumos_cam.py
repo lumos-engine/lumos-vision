@@ -15,6 +15,18 @@ from processor.utils.lumos_cam import (
 from processor.utils.scrcpy import ZOOM_STEP
 
 
+def test_resolve_adb_serial_follows_wireless_port(monkeypatch):
+    from processor.utils import lumos_cam as mod
+
+    monkeypatch.setattr(
+        mod,
+        "list_adb_serials",
+        lambda adb="adb": ["192.168.1.243:37847"],
+    )
+    cfg = LumosCamConfig(serial="192.168.1.243:40189")
+    assert mod.resolve_adb_serial(cfg) == "192.168.1.243:37847"
+
+
 def test_adb_launch_error_detects_miui_type3():
     from processor.utils.lumos_cam import _adb_launch_error
 
