@@ -91,7 +91,7 @@ class LumosPipeSource(FrameSource):
                 self._stop.wait(0.2)
                 continue
             self._connected = True
-            image = self._manager.read_bgr(timeout=0.25)
+            image = self._manager.read_bgr(timeout=1.0)
             if image is None:
                 continue
             now = time.monotonic()

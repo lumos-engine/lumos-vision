@@ -7,6 +7,7 @@ Decoded frames go to stdout as raw BGR — v4l2loopback is not used for capture.
 
 from __future__ import annotations
 
+import fcntl
 import http.client
 import json
 import math
@@ -221,6 +222,16 @@ def build_ffmpeg_command(
         ]
     )
     return cmd
+
+
+def _enlarge_pipe(fd: int) -> None:
+    """Grow the kernel pipe so ffmpeg can write more than 64KiB per wakeup."""
+    for size in (8 << 20, 1 << 20, 256 << 10):
+        try:
+            fcntl.fcntl(fd, getattr(fcntl, "F_SETPIPE_SZ", 1031), size)
+            return
+        except (OSError, ValueError, AttributeError):
+            continue
 
 
 def output_frame_size(cfg: LumosCamConfig, rotation: int = 0) -> tuple[int, int]:
@@ -529,7 +540,9 @@ class LumosCamManager:
         self._start_stderr_drain(self._proc)
         if self._proc.stdout is not None:
             try:
-                os.set_blocking(self._proc.stdout.fileno(), False)
+                fd = self._proc.stdout.fileno()
+                os.set_blocking(fd, False)
+                _enlarge_pipe(fd)
             except OSError:
                 pass
         ready = self._wait_until_ready(cfg)
@@ -775,9 +788,8 @@ class LumosCamManager:
     def read_bgr(self, timeout: float = 0.25) -> np.ndarray | None:
         """Read the newest decoded BGR frame from ffmpeg stdout.
 
-        Never ``read(frame_bytes)`` in one call: a typical pipe buffer is
-        64KiB and ffmpeg will block once it is full, while we wait for a
-        6MiB 1080p frame — deadlock, ``in 0.0 fps``.
+        Drain whatever is already in the pipe without ``select()`` between
+        chunks. A ``select()`` per 64KiB turn of a 6MiB frame is ~0.1 fps.
         """
         if self._held_frame is not None:
             frame, self._held_frame = self._held_frame, None
@@ -795,32 +807,32 @@ class LumosCamManager:
         except Exception:
             return None
         deadline = time.monotonic() + max(0.0, timeout)
-        buf = self._pending
+        buf = bytearray(self._pending)
         self._pending = b""
         while len(buf) < nbytes:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self._pending = buf
+                self._pending = bytes(buf)
                 return None
             try:
-                ready, _, _ = select.select([fd], [], [], remaining)
-            except (OSError, ValueError):
-                self._pending = buf
-                return None
-            if not ready:
-                self._pending = buf
-                return None
-            try:
-                chunk = os.read(fd, min(65536, nbytes - len(buf)))
+                chunk = os.read(fd, nbytes - len(buf))
             except BlockingIOError:
+                try:
+                    ready, _, _ = select.select([fd], [], [], remaining)
+                except (OSError, ValueError):
+                    self._pending = bytes(buf)
+                    return None
+                if not ready:
+                    self._pending = bytes(buf)
+                    return None
                 continue
             except OSError:
                 return None
             if not chunk:
                 return None
             buf += chunk
-        frame = buf[:nbytes]
-        leftover = buf[nbytes:]
+        frame = bytes(buf[:nbytes])
+        leftover = bytearray(buf[nbytes:])
         while True:
             try:
                 extra = os.read(fd, 65536)
@@ -830,9 +842,9 @@ class LumosCamManager:
                 break
             leftover += extra
             while len(leftover) >= nbytes:
-                frame = leftover[:nbytes]
-                leftover = leftover[nbytes:]
-        self._pending = leftover
+                frame = bytes(leftover[:nbytes])
+                del leftover[:nbytes]
+        self._pending = bytes(leftover)
         image = np.frombuffer(frame, dtype=np.uint8).reshape((height, width, 3)).copy()
         if not self._logged_first:
             self._logged_first = True

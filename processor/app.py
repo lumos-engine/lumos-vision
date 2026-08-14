@@ -23,7 +23,7 @@ from processor.camera.base import Frame, FrameSource
 from processor.camera.lumos import LumosPipeSource
 from processor.camera.factory import create_source
 from processor.config.loader import apply_updates, config_to_dict, save_config
-from processor.config.schema import Config
+from processor.config.schema import Config, LumosCamConfig
 from processor.output.base import SinkGroup
 from processor.output.broker import BrokerHub
 from processor.output.factory import create_sinks
@@ -131,6 +131,16 @@ _LUMOS_LIVE_KEYS = frozenset(
         "lumos_cam.awb",
     }
 )
+_LUMOS_STREAM_ATTRS = tuple(
+    key.split(".", 1)[1]
+    for key in _LUMOS_RESTART_KEYS
+    if key.split(".", 1)[1] not in {"enabled", "v4l2_sink"}
+)
+
+
+def _lumos_stream_changed(old: LumosCamConfig, new: LumosCamConfig) -> bool:
+    """True when ffmpeg/adb must restart (ignore live keys and unused sink)."""
+    return any(getattr(old, name) != getattr(new, name) for name in _LUMOS_STREAM_ATTRS)
 
 
 def _updates_require_source_recreate(updates: dict[str, Any]) -> bool:
@@ -530,12 +540,8 @@ class Processor:
         if not cfg.enabled:
             self._lumos.stop()
             return {"ok": True, "running": False, "skipped": True}
-        if cfg.bind_camera:
-            self._bind_camera_to_sink(cfg.v4l2_sink)
         if restart or not self._lumos.running:
-            self._release_loopback_reader_unlocked(
-                cfg.v4l2_sink, bind_camera=cfg.bind_camera, label="Lumos Cam"
-            )
+            self._release_lumos_reader_unlocked()
         if restart:
             result = self._lumos.restart(cfg)
         else:
@@ -543,6 +549,21 @@ class Processor:
         if not result.get("ok"):
             log.warning("Lumos Cam start incomplete: %s", result.get("error"))
         return result
+
+    def _release_lumos_reader_unlocked(self) -> None:
+        """Stop the pipe reader so ffmpeg can be replaced."""
+        if self.source is None:
+            return
+        if getattr(self.source, "name", "") != "lumos" and not self.config.lumos_cam.bind_camera:
+            return
+        log.info("Stopping Lumos Cam capture while ffmpeg restarts")
+        try:
+            self.source.stop()
+        except Exception:
+            log.exception("Failed to stop capture source before Lumos Cam start")
+        self.source = None
+        self._last_source = None
+        self._last_ctx = None
 
     def _tick_scrcpy_watchdog(self) -> None:
         """Restart scrcpy after phone unplug/replug when auto_restart is on."""
@@ -584,15 +605,6 @@ class Processor:
             return
         now = time.monotonic()
         if now < self._lumos_next_retry:
-            return
-        sink = (cfg.v4l2_sink or "").strip()
-        if sink and not os.path.exists(sink):
-            self._lumos_next_retry = now + max(30.0, float(cfg.restart_interval_sec or 5.0) * 6)
-            log.error(
-                "Lumos Cam sink %s is missing — create it with v4l2loopback "
-                "(devices=2 video_nr=10,11) then wait or restart Screen Sight",
-                sink,
-            )
             return
         interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
         self._lumos_next_retry = now + interval
@@ -703,6 +715,7 @@ class Processor:
 
         def apply() -> dict[str, Any]:
             new_config = apply_updates(self.config, updates)
+            old_lumos = self.config.lumos_cam
             self.config = new_config
             apply_pipeline_config(self.pipeline, new_config)
             if any(key == "power" or key.startswith("power.") for key in updates):
@@ -714,10 +727,11 @@ class Processor:
                 key in _SCRCPY_RESTART_KEYS or key.startswith("scrcpy.")
                 for key in updates
             )
-            lumos_restart = any(key in _LUMOS_RESTART_KEYS for key in updates)
+            lumos_restart = _lumos_stream_changed(old_lumos, new_config.lumos_cam) or (
+                old_lumos.enabled != new_config.lumos_cam.enabled
+            )
             lumos_live = any(key in _LUMOS_LIVE_KEYS for key in updates)
-            lumos_any = any(key.startswith("lumos_cam.") for key in updates)
-            if lumos_restart or (lumos_any and not lumos_live and not lumos_restart and "lumos_cam.enabled" in updates):
+            if lumos_restart:
                 if self._idle:
                     log.info("Skipping Lumos Cam restart while idle")
                 else:
@@ -1076,19 +1090,16 @@ class Processor:
             if "lumos_cam.pan_y" in updates:
                 updates["lumos_cam.pan_y"] = clamp_pan(float(updates["lumos_cam.pan_y"]))
 
-            live = False
             if action_name == "zoom_in":
                 updates["lumos_cam.camera_zoom"] = step_lumos_zoom(
                     self.config.lumos_cam.camera_zoom, inward=True, cfg=self.config.lumos_cam
                 )
                 updates.setdefault("lumos_cam.enabled", True)
-                live = True
             elif action_name == "zoom_out":
                 updates["lumos_cam.camera_zoom"] = step_lumos_zoom(
                     self.config.lumos_cam.camera_zoom, inward=False, cfg=self.config.lumos_cam
                 )
                 updates.setdefault("lumos_cam.enabled", True)
-                live = True
             elif action_name == "set_zoom":
                 if "lumos_cam.camera_zoom" not in updates:
                     raise ValueError("camera_zoom required for set_zoom")
@@ -1096,7 +1107,6 @@ class Processor:
                     float(updates["lumos_cam.camera_zoom"]), self.config.lumos_cam
                 )
                 updates.setdefault("lumos_cam.enabled", True)
-                live = True
             elif action_name.startswith("pan_"):
                 pan_x, pan_y = step_lumos_pan(
                     self.config.lumos_cam, direction=action_name[len("pan_") :]
@@ -1104,16 +1114,12 @@ class Processor:
                 updates["lumos_cam.pan_x"] = pan_x
                 updates["lumos_cam.pan_y"] = pan_y
                 updates.setdefault("lumos_cam.enabled", True)
-                live = True
             elif action_name in {"lock_af", "unlock_af"}:
                 updates["lumos_cam.af"] = "locked" if action_name == "lock_af" else "auto"
-                live = True
             elif action_name in {"lock_ae", "unlock_ae"}:
                 updates["lumos_cam.ae"] = "locked" if action_name == "lock_ae" else "auto"
-                live = True
             elif action_name in {"lock_awb", "unlock_awb"}:
                 updates["lumos_cam.awb"] = "locked" if action_name == "lock_awb" else "auto"
-                live = True
             elif action_name == "cal_mode_on":
                 if updates:
                     self.config = apply_updates(self.config, updates)
@@ -1147,13 +1153,10 @@ class Processor:
             else:
                 raise ValueError(f"unknown lumos_cam action: {action_name}")
 
+            old_lumos = self.config.lumos_cam
             if updates:
                 self.config = apply_updates(self.config, updates)
-
-            stream_changed = any(
-                key in _LUMOS_RESTART_KEYS and key != "lumos_cam.enabled"
-                for key in updates
-            )
+            stream_changed = _lumos_stream_changed(old_lumos, self.config.lumos_cam)
             lumos_result: dict[str, Any]
             sidecar_restarted = False
             if self._idle and action_name != "stop":
@@ -1164,7 +1167,11 @@ class Processor:
                 }
             elif action_name == "stop" or not self.config.lumos_cam.enabled:
                 lumos_result = self._lumos.stop()
-            elif live and not stream_changed and self._lumos.running:
+            elif (
+                self._lumos.running
+                and not stream_changed
+                and action_name != "restart"
+            ):
                 lumos_result = self._lumos.apply_live(self.config.lumos_cam)
             else:
                 lumos_result = self._start_lumos_unlocked(restart=True)

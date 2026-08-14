@@ -462,10 +462,10 @@ class ScrcpyConfig:
 
 @dataclass
 class LumosCamConfig:
-    """Lumos Cam (Camera2 Android app) → v4l2loopback.
+    """Lumos Cam (Camera2 Android app) → ffmpeg pipe.
 
     Preferred over scrcpy when ``enabled``. Zoom, pan, and AF/AE/AWB locks are
-    live HTTP; ffmpeg only restarts when codec/size/sink change. Needs Lumos
+    live HTTP; ffmpeg only restarts when codec/size/ports change. Needs Lumos
     Cam ≥ 0.1.0 (``Lumos-Cam-Protocol: 1``).
     """
 
