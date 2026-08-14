@@ -68,12 +68,15 @@ def test_build_ffmpeg_command_h264():
         video_host_port=18766,
         v4l2_sink="/dev/video11",
         ffmpeg="/usr/bin/ffmpeg",
+        startup_timeout_sec=15.0,
     )
     cmd = build_ffmpeg_command(cfg, binary="/usr/bin/ffmpeg")
     assert cmd[0] == "/usr/bin/ffmpeg"
     assert "-f" in cmd and "h264" in cmd
     assert "tcp://127.0.0.1:18766" in cmd
     assert "/dev/video11" in cmd
+    assert "-timeout" in cmd
+    assert "15000000" in cmd
 
 
 def test_build_ffmpeg_command_mjpeg():
@@ -195,6 +198,82 @@ def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
     assert result["running"] is True
     assert "-f" in spawned["cmd"]
     assert mgr.stop()["running"] is False
+
+
+def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path):
+    sink = tmp_path / "video11"
+    sink.write_text("")
+
+    class FakeProc:
+        def __init__(self):
+            self.pid = 5151
+            self.returncode = None
+            self.stdout = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.returncode = self.returncode if self.returncode is not None else 0
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return ("", None)
+
+    def fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "package:/data/app/dev.lumos.cam.apk\n"
+            stderr = ""
+
+        text = " ".join(str(c) for c in cmd)
+        if "devices" in text:
+            Result.stdout = "List of devices attached\nphone\tdevice\n"
+        return Result()
+
+    monkeypatch.setattr("processor.utils.lumos_cam.subprocess.Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
+    monkeypatch.setattr("processor.utils.lumos_cam.sink_has_capture", lambda device: False)
+    monkeypatch.setattr("processor.utils.lumos_cam.os.killpg", lambda *a, **k: None)
+    monkeypatch.setattr("processor.utils.lumos_cam.adb_device_ready", lambda *a, **k: True)
+    monkeypatch.setattr("processor.utils.lumos_cam.package_installed", lambda cfg: True)
+
+    mgr = LumosCamManager()
+
+    def fake_status():
+        return {
+            "ok": True,
+            "protocol": 1,
+            "app_version": "0.1.0",
+            "streaming": True,
+            "video_clients": 0,
+        }
+
+    mgr.client.status = fake_status
+    mgr.client.set_camera = lambda camera_id: fake_status()
+    mgr.client.set_zoom = lambda ratio: fake_status()
+    mgr.client.set_pan = lambda x, y: fake_status()
+    mgr.client.set_locks = lambda **k: fake_status()
+    mgr.client.set_stream = lambda cfg, enabled=True: fake_status()
+
+    result = mgr.start(
+        LumosCamConfig(
+            enabled=True,
+            v4l2_sink=str(sink),
+            startup_timeout_sec=0.6,
+            ffmpeg="/usr/bin/ffmpeg",
+        )
+    )
+    assert result["ok"] is False
+    assert result["running"] is False
+    assert result["ready"] is False
+    assert "no frames" in (result.get("error") or "")
 
 
 def test_apply_lumos_zoom_is_live(monkeypatch):
@@ -353,6 +432,84 @@ def test_enable_lumos_reopens_bound_camera(monkeypatch):
         result = app.apply_lumos_cam({"enabled": True}, action="apply")
         assert result["ok"] is True
         assert recreates == [1]
+        assert app.config.camera.device == "/dev/video11"
+    finally:
+        app.shutdown()
+
+
+def test_enable_lumos_skips_capture_until_loopback_ready(monkeypatch):
+    from processor.app import Processor
+
+    recreates = []
+
+    class FakeMgr:
+        def __init__(self):
+            self._running = False
+
+        @property
+        def running(self):
+            return self._running
+
+        def status(self, cfg):
+            from processor.utils.lumos_cam import LumosCamStatus
+
+            return LumosCamStatus(
+                enabled=cfg.enabled,
+                running=self._running,
+                pid=1 if self._running else None,
+                zoom=cfg.camera_zoom,
+                pan_x=cfg.pan_x,
+                pan_y=cfg.pan_y,
+                af=cfg.af,
+                ae=cfg.ae,
+                awb=cfg.awb,
+                cal_mode=False,
+                camera_id=cfg.camera_id,
+                camera_size=cfg.camera_size,
+                camera_fps=cfg.camera_fps,
+                codec=cfg.codec,
+                v4l2_sink=cfg.v4l2_sink,
+                app_version="0.1.0",
+                protocol=1,
+                package_installed=True,
+                last_error="",
+                command=[],
+            )
+
+        def stop(self):
+            self._running = False
+            return {"ok": True, "running": False}
+
+        def restart(self, cfg):
+            self._running = True
+            return {"ok": True, "running": True, "pid": 1, "ready": False}
+
+        def ensure_running(self, cfg):
+            return self.restart(cfg)
+
+        def apply_live(self, cfg):
+            return {"ok": True, "running": True, "live": True}
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "synthetic", "replay_fps": 60},
+            "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+            "lumos_cam": {"enabled": False, "bind_camera": True, "v4l2_sink": "/dev/video11"},
+        }
+    )
+    app = Processor(config)
+    app._lumos = FakeMgr()
+    monkeypatch.setattr(
+        app,
+        "_recreate_source_unlocked",
+        lambda: recreates.append(1) or {"ok": True},
+    )
+    app.start()
+    try:
+        result = app.apply_lumos_cam({"enabled": True}, action="apply")
+        assert result["ok"] is True
+        assert recreates == []
         assert app.config.camera.device == "/dev/video11"
     finally:
         app.shutdown()

@@ -183,6 +183,7 @@ def build_ffmpeg_command(
     exe = binary or resolve_ffmpeg(cfg.ffmpeg)
     codec = (cfg.codec or "h264").strip().lower()
     demux = "mjpeg" if codec == "mjpeg" else "h264"
+    timeout_us = int(max(1.0, float(cfg.startup_timeout_sec)) * 1_000_000)
     url = f"tcp://127.0.0.1:{int(cfg.video_host_port)}"
     cmd = [
         exe,
@@ -193,6 +194,12 @@ def build_ffmpeg_command(
         "nobuffer",
         "-flags",
         "low_delay",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
+        "-timeout",
+        str(timeout_us),
         "-f",
         demux,
         "-i",
@@ -517,17 +524,29 @@ class LumosCamManager:
             pass
 
         if not ready:
-            log.warning(
-                "Lumos Cam ffmpeg is running (pid %s) but %s did not become ready within %.1fs",
-                proc.pid,
-                sink or "(no sink)",
-                float(cfg.startup_timeout_sec),
+            phone = self._phone or {}
+            self._last_error = (
+                f"no frames on {sink or '(no sink)'} after {float(cfg.startup_timeout_sec):.0f}s "
+                f"(phone streaming={phone.get('streaming')!r} "
+                f"video_clients={phone.get('video_clients', 0)}). "
+                "Keep Lumos Cam on screen, then Apply again. "
+                "Do not capture the loopback until ffmpeg is writing "
+                "(exclusive_caps=1)."
             )
+            log.error("lumos-cam: %s", self._last_error)
+            self.stop()
+            return {
+                "ok": False,
+                "error": self._last_error,
+                "running": False,
+                "ready": False,
+                "command": list(cmd),
+            }
         return {
             "ok": True,
             "running": True,
             "pid": proc.pid,
-            "ready": ready,
+            "ready": True,
             "command": list(cmd),
         }
 
@@ -721,7 +740,20 @@ class LumosCamManager:
         while time.monotonic() < deadline:
             if not self.running:
                 return False
-            if sink and os.path.exists(sink) and sink_has_capture(sink):
+            has_client_field = False
+            clients = 0
+            try:
+                st = self.client.status()
+                self._phone = {**self._phone, **st}
+                has_client_field = "video_clients" in st
+                clients = int(st.get("video_clients") or 0)
+            except (RuntimeError, TypeError, ValueError):
+                pass
+            producing = bool(sink and os.path.exists(sink) and sink_has_capture(sink))
+            # exclusive_caps: do not treat "node exists" as ready. Wait until
+            # ffmpeg has attached (video_clients) and the loopback flipped to
+            # capture. Opening OpenCV earlier steals the writer slot.
+            if producing and (not has_client_field or clients >= 1):
                 return True
             if not sink:
                 time.sleep(0.4)

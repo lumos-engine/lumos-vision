@@ -438,8 +438,24 @@ class ScrcpyManager:
             return ""
 
 
+def _device_caps_window(v4l2_ctl_all: str) -> str:
+    """Slice of ``v4l2-ctl --all`` covering the current Device Caps block."""
+    text = (v4l2_ctl_all or "").lower()
+    caps_idx = text.find("device caps")
+    if caps_idx < 0:
+        return text
+    return text[caps_idx : caps_idx + 400]
+
+
 def sink_has_capture(device: str) -> bool:
-    """Best-effort: device exists and (optionally) advertises capture."""
+    """True when a producer has flipped the loopback to Video Capture.
+
+    With ``exclusive_caps=1`` an idle node advertises Video Output (or both
+    in Capabilities). Opening OpenCV as capture in that window steals the
+    node so ffmpeg can never write, then ``select()`` times out forever.
+    Require Device Caps to list Video Capture — that happens after the
+    writer attaches — not merely that ``v4l2-ctl`` succeeded.
+    """
     if not os.path.exists(device):
         return False
     try:
@@ -453,11 +469,9 @@ def sink_has_capture(device: str) -> bool:
     except (OSError, subprocess.TimeoutExpired):
         # Device node present is enough when v4l2-ctl is missing.
         return True
-    text = (result.stdout or "").lower()
-    if "video capture" in text:
-        return True
-    # exclusive_caps: before producer attaches, capture may be absent briefly.
-    return result.returncode == 0
+    if result.returncode != 0:
+        return False
+    return "video capture" in _device_caps_window(result.stdout or "")
 
 
 __all__ = [

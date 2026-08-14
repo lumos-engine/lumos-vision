@@ -87,6 +87,14 @@ def _is_loopback_driver(info: dict[str, str]) -> bool:
     return "v4l2loopback" in (info.get("driver") or "").lower()
 
 
+def is_v4l2loopback(device: str) -> bool:
+    """True when ``v4l2-ctl --info`` reports the v4l2loopback driver."""
+    path = resolve_device_path(device)
+    if not path:
+        return False
+    return _is_loopback_driver(_read_v4l2_info(path))
+
+
 def _is_capture_capable(device: str) -> bool:
     """True when the node advertises Video Capture (not metadata-only)."""
     if not v4l2_ctl_available():

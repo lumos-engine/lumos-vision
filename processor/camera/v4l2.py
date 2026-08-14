@@ -16,7 +16,7 @@ import numpy as np
 
 from processor.camera.base import Frame, FrameSource
 from processor.camera.controls import preferred_controls, set_controls
-from processor.camera.devices import real_video_node, resolve_device_path
+from processor.camera.devices import is_v4l2loopback, real_video_node, resolve_device_path
 from processor.config.schema import CameraConfig
 from processor.utils.logging import get_logger
 
@@ -230,20 +230,30 @@ class V4l2Source(FrameSource):
             pass
 
         # Prefer MJPEG when available: USB webcams usually deliver higher
-        # resolution/fps that way than raw YUYV.
-        try:
-            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        except cv2.error:
-            pass
-
-        width = int(self.config.capture_width or 0)
-        height = int(self.config.capture_height or 0)
-        if width > 0:
-            capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        if height > 0:
-            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        if self.config.capture_fps > 0:
-            capture.set(cv2.CAP_PROP_FPS, self.config.capture_fps)
+        # resolution/fps that way than raw YUYV. Loopback writers (ffmpeg /
+        # scrcpy) emit YUYV — requesting MJPG makes OpenCV's V4L2 backend
+        # sit in select() until it times out.
+        loopback = is_v4l2loopback(
+            str(opened_as) if not isinstance(opened_as, int) else f"/dev/video{opened_as}"
+        )
+        if loopback:
+            try:
+                capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
+            except cv2.error:
+                pass
+        else:
+            try:
+                capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            except cv2.error:
+                pass
+            width = int(self.config.capture_width or 0)
+            height = int(self.config.capture_height or 0)
+            if width > 0:
+                capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            if height > 0:
+                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            if self.config.capture_fps > 0:
+                capture.set(cv2.CAP_PROP_FPS, self.config.capture_fps)
 
         self._capture = capture
         got_w = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))

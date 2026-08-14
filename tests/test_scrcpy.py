@@ -17,6 +17,46 @@ from processor.utils.scrcpy import (
 )
 
 
+def test_sink_has_capture_requires_device_caps_not_idle_output(monkeypatch, tmp_path):
+    from processor.utils.scrcpy import sink_has_capture
+
+    sink = tmp_path / "video11"
+    sink.write_text("")
+    stdout = {"text": ""}
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+        @property
+        def stdout(self):
+            return stdout["text"]
+
+    monkeypatch.setattr(
+        "processor.utils.scrcpy.subprocess.run",
+        lambda *a, **k: Result(),
+    )
+    stdout["text"] = (
+        "Capabilities     : 0x85200003\n"
+        "\tVideo Capture\n"
+        "\tVideo Output\n"
+        "\tDevice Capabilities\n"
+        "Device Caps      : 0x05200002\n"
+        "\tVideo Output\n"
+        "\tStreaming\n"
+    )
+    assert sink_has_capture(str(sink)) is False
+    stdout["text"] = (
+        "Capabilities     : 0x85200001\n"
+        "\tVideo Capture\n"
+        "\tDevice Capabilities\n"
+        "Device Caps      : 0x05200001\n"
+        "\tVideo Capture\n"
+        "\tStreaming\n"
+    )
+    assert sink_has_capture(str(sink)) is True
+
+
 def test_adb_device_ready_parses_devices(monkeypatch):
     class Result:
         stdout = "List of devices attached\n452ee42b0506\tdevice\n"

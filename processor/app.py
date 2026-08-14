@@ -599,7 +599,7 @@ class Processor:
             return
         log.info("Lumos Cam not running — restarting (phone reconnected?)")
         result = self._start_lumos_unlocked(restart=True)
-        if not result.get("ok") or not result.get("running"):
+        if not result.get("ok") or not result.get("running") or not result.get("ready", True):
             return
         try:
             self._recreate_source_unlocked()
@@ -1170,6 +1170,7 @@ class Processor:
                 and (sidecar_restarted or stream_changed)
                 and lumos_result.get("ok")
                 and lumos_result.get("running")
+                and lumos_result.get("ready", True)
             ):
                 try:
                     source_result = self._recreate_source_unlocked()
