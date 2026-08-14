@@ -35,7 +35,6 @@ log = get_logger(__name__)
 
 V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
 VIDIOC_G_FMT = 0xC0D05604
-VIDIOC_STREAMON = 0x40045612
 _V4L2_FORMAT_SIZE = 208
 
 
@@ -88,7 +87,12 @@ def yuyv_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) 
 
 
 class _LoopbackCapture:
-    """``read()``-based capture for v4l2loopback writers (ffmpeg / scrcpy)."""
+    """``read()``-based capture for v4l2loopback writers (ffmpeg / scrcpy).
+
+    Do not STREAMON: ffmpeg's v4l2 muxer ``write()``s frames. STREAMON switches
+    the node to mmap and delivers a couple of leftover buffers, then stalls —
+    the "connected for a second then dies" symptom.
+    """
 
     def __init__(self, fd: int, path: str, width: int, height: int, size_image: int, fourcc: str):
         self._fd = fd
@@ -100,10 +104,18 @@ class _LoopbackCapture:
 
     @classmethod
     def open(cls, path: str) -> "_LoopbackCapture | None":
-        try:
-            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-        except OSError as exc:
-            log.warning("loopback open %s failed: %s", path, exc)
+        fd = -1
+        last_exc: OSError | None = None
+        for flags in (os.O_RDWR, os.O_RDONLY):
+            try:
+                fd = os.open(path, flags)
+                last_exc = None
+                break
+            except OSError as exc:
+                last_exc = exc
+                fd = -1
+        if fd < 0:
+            log.warning("loopback open %s failed: %s", path, last_exc)
             return None
         buf = bytearray(_V4L2_FORMAT_SIZE)
         struct.pack_into("<I4x", buf, 0, V4L2_BUF_TYPE_VIDEO_CAPTURE)
@@ -121,10 +133,6 @@ class _LoopbackCapture:
             return None
         if size_image <= 0:
             size_image = int(bpl) * height if bpl else width * height * 2
-        try:
-            fcntl.ioctl(fd, VIDIOC_STREAMON, struct.pack("I", V4L2_BUF_TYPE_VIDEO_CAPTURE))
-        except OSError:
-            pass
         log.info(
             "V4L2 loopback %s: read() %dx%d fourcc=%s (%d bytes)",
             path,
@@ -139,34 +147,61 @@ class _LoopbackCapture:
         return self._fd >= 0
 
     def read(self) -> tuple[bool, np.ndarray | None]:
+        image = self._read_frame(block=True)
+        if image is None:
+            return False, None
+        # Drop-old: ffmpeg will block in write() if we let the 2-deep
+        # loopback queue fill, which stalls the phone TCP stream.
+        while True:
+            extra = self._read_frame(block=False)
+            if extra is None:
+                break
+            image = extra
+        return True, image
+
+    def _read_frame(self, *, block: bool) -> np.ndarray | None:
         fd = self._fd
         if fd < 0:
-            return False, None
-        try:
-            ready, _, _ = select.select([fd], [], [], 0.1)
-        except OSError:
-            return False, None
-        if not ready:
-            return False, None
+            return None
+        if not block:
+            try:
+                ready, _, _ = select.select([fd], [], [], 0)
+            except OSError:
+                self.release()
+                return None
+            if not ready:
+                return None
         try:
             data = os.read(fd, self.size_image)
-        except BlockingIOError:
-            return False, None
         except OSError:
-            return False, None
-        if len(data) < self.size_image:
-            return False, None
+            self.release()
+            return None
+        if not data:
+            self.release()
+            return None
+        return self._decode(data)
+
+    def _decode(self, data: bytes) -> np.ndarray | None:
         fourcc = (self.fourcc or "").upper().strip()
+        width, height = self.width, self.height
         if fourcc in {"YUYV", "YUY2"}:
-            return True, yuyv_to_bgr(data, self.width, self.height)
+            row = width * 2
+            if len(data) < row or len(data) % row:
+                return None
+            got_h = len(data) // row
+            return yuyv_to_bgr(data, width, min(height, got_h))
         if fourcc in {"BGR3", "RGB3"}:
-            image = np.frombuffer(data, dtype=np.uint8, count=self.width * self.height * 3)
-            image = image.reshape((self.height, self.width, 3))
+            row = width * 3
+            if len(data) < row or len(data) % row:
+                return None
+            got_h = len(data) // row
+            image = np.frombuffer(data, dtype=np.uint8, count=row * got_h)
+            image = image.reshape((got_h, width, 3)).copy()
             if fourcc == "RGB3":
-                return True, cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            return True, image.copy()
+                return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            return image
         log.warning("loopback %s fourcc %s is not YUYV/BGR; dropping frame", self.path, fourcc)
-        return False, None
+        return None
 
     def get(self, prop: int) -> float:
         if prop == cv2.CAP_PROP_FRAME_WIDTH:
@@ -227,10 +262,11 @@ class V4l2Source(FrameSource):
 
     def stop(self) -> None:
         self._stop.set()
+        # Close the fd first so a blocking loopback read() unblocks.
+        self._release()
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.join(timeout=3.0)
-        self._release()
         log.info("V4L2 source stopped")
 
     def read(self, timeout: float = 1.0) -> Frame | None:
@@ -299,6 +335,13 @@ class V4l2Source(FrameSource):
             now = time.monotonic()
 
             if not ok or image is None:
+                if not capture.isOpened() or self._stop.is_set():
+                    return
+                # Keep a loopback fd open: closing it makes ffmpeg's write()
+                # fail, which kills the phone TCP stream a few seconds later.
+                if isinstance(capture, _LoopbackCapture):
+                    time.sleep(0.01)
+                    continue
                 if now - last_ok > self.config.read_timeout:
                     self._last_error = f"no frames for {self.config.read_timeout:.0f}s"
                     return
