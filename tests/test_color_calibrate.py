@@ -110,14 +110,31 @@ def test_white_point_anchor_neutralises_warm_dim_white():
     solution = solve_calibration(means)
     adj_white = np.maximum(means["white"] - np.asarray(solution.black_level_bgr), 0.0)
     corr = adj_white @ solution.matrix_bgr
-    assert corr.min() > 220
     assert corr.max() - corr.min() < 15.0
+    assert corr.mean() > 150.0
+    # Must NOT blast dim white all the way to 255 (that washes light tones).
+    assert corr.mean() < 240.0
     # A bright near-white camera sample should stay near-neutral, not orange.
     bright = np.array([240.0, 245.0, 250.0])
     out = (bright - np.asarray(solution.black_level_bgr)) @ solution.matrix_bgr
     out = np.clip(out, 0, 255)
-    assert out.max() - out.min() < 25.0
+    assert out.max() - out.min() < 30.0
     assert out.mean() > 200.0
+
+
+def test_soft_white_anchor_keeps_light_brown_from_clipping():
+    """Light brown must remain shaded, not crushed to white after cal."""
+    means = {name: tgt.copy() for name, tgt in patch_targets_bgr().items()}
+    means["white"] = np.array([150.0, 165.0, 200.0])
+    means["black"] = np.array([8.0, 6.0, 10.0])
+    solution = solve_calibration(means)
+    pedestal = np.asarray(solution.black_level_bgr)
+    # Slightly bright warm tone (camera space).
+    brown = np.array([70.0, 110.0, 175.0])
+    out = np.clip((brown - pedestal) @ solution.matrix_bgr, 0, 255)
+    assert out.mean() < 245.0
+    assert out.max() - out.min() > 15.0
+    assert solution.gamma == pytest.approx(1.0, abs=0.12)
 
 
 def _synthetic_solids(channel_cast: np.ndarray | None = None) -> dict[str, tuple[int, int, int]]:

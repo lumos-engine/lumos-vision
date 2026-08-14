@@ -244,6 +244,11 @@ def solve_matrix(
 def _estimate_gamma(
     cleaned: dict[str, np.ndarray], matrix: np.ndarray
 ) -> tuple[float, list[str]]:
+    """Estimate gamma from greys — kept near 1.0 for ambilight headroom.
+
+    Phone AE makes grey-ladder ratios unreliable; a hot gamma wash-outs
+    light browns into white. We only accept a tiny nudge.
+    """
     notes: list[str] = []
     white = cleaned.get("white")
     if white is None:
@@ -261,17 +266,17 @@ def _estimate_gamma(
         ratio = float(np.clip(g_luma / w_luma, 1e-3, 0.999))
         expected = float(np.clip(level / 255.0, 1e-3, 0.999))
         est = float(np.log(expected) / np.log(ratio))
-        if 0.5 <= est <= 2.0:
+        if 0.85 <= est <= 1.2:
             gamma_votes.append(est)
 
     gamma = 1.0
     if gamma_votes:
         gamma = float(np.median(gamma_votes))
-        gamma = float(np.clip(gamma, 0.6, 1.8))
-        if abs(gamma - 1.0) < 0.05:
+        gamma = float(np.clip(gamma, 0.9, 1.12))
+        if abs(gamma - 1.0) < 0.04:
             gamma = 1.0
-        if len(gamma_votes) >= 2:
-            notes.append(f"gamma from {len(gamma_votes)} grey levels")
+        elif len(gamma_votes) >= 2:
+            notes.append(f"gamma from {len(gamma_votes)} grey levels (soft)")
     return gamma, notes
 
 
@@ -298,26 +303,34 @@ def _anchor_white_point(
     matrix: np.ndarray,
     white_adjusted: np.ndarray,
     *,
-    target: float = 255.0,
-    scale_min: float = 0.55,
-    scale_max: float = 2.2,
+    luma_target: float = 210.0,
+    luma_boost_max: float = 1.25,
 ) -> tuple[np.ndarray, list[str]]:
-    """Force ``white_adjusted @ matrix`` to neutral full-scale white.
+    """Neutralise white chroma; only gently lift luma (preserve highlight room).
 
-    Phone AE often captures white darker / warmer than chromatics. Pure LS then
-    leaves whites muddy (orange-brown) while skin/primaries still look fine.
+    Pushing a dim AE white all the way to 255 makes every lighter runtime tone
+    clip — light browns wash to white. We equalise channels to their mean, then
+    optionally nudge mean toward ``luma_target`` with a hard boost cap.
     """
     notes: list[str] = []
     out = white_adjusted @ matrix
     safe = np.maximum(out, 1.0)
-    scale = np.clip(target / safe, scale_min, scale_max)
+    mean = float(np.mean(safe))
+    # Chroma: map each channel to the current mean (neutral, same brightness).
+    chroma = mean / safe
+    # Soft luma: only boost if white is dark; never force to 255.
+    if mean < luma_target:
+        luma = min(luma_target / mean, luma_boost_max)
+    else:
+        luma = 1.0
+    scale = np.clip(chroma * luma, 0.55, 2.0)
     anchored = matrix @ np.diag(scale)
     if float(np.max(np.abs(scale - 1.0))) > 0.04:
         notes.append(
             "white-point scale BGR "
-            f"({scale[0]:.2f}, {scale[1]:.2f}, {scale[2]:.2f})"
+            f"({scale[0]:.2f}, {scale[1]:.2f}, {scale[2]:.2f}) "
+            f"(chroma+soft luma→{mean * luma:.0f})"
         )
-    # Verify neutrality of the anchored white.
     check = white_adjusted @ anchored
     spread = float(check.max() - check.min())
     if spread > 12.0:
@@ -376,7 +389,7 @@ def solve_calibration(
             notes.append(f"{name} residual high ({err:.0f})")
 
     corr_white = adjusted["white"] @ matrix
-    if float(corr_white.mean()) < 200:
+    if float(corr_white.mean()) < 120:
         notes.append(
             f"anchored white still dim (mean {float(corr_white.mean()):.0f}) — re-capture white"
         )
