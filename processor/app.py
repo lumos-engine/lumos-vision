@@ -1144,6 +1144,7 @@ class Processor:
                 for key in updates
             )
             lumos_result: dict[str, Any]
+            sidecar_restarted = False
             if self._idle and action_name != "stop":
                 lumos_result = {
                     "ok": True,
@@ -1156,6 +1157,7 @@ class Processor:
                 lumos_result = self._lumos.apply_live(self.config.lumos_cam)
             else:
                 lumos_result = self._start_lumos_unlocked(restart=True)
+                sidecar_restarted = True
                 if lumos_result.get("ok") and lumos_result.get("running"):
                     self._lumos.apply_live(self.config.lumos_cam)
 
@@ -1165,7 +1167,7 @@ class Processor:
                 and self.config.lumos_cam.enabled
                 and self.config.lumos_cam.bind_camera
                 and action_name != "stop"
-                and stream_changed
+                and (sidecar_restarted or stream_changed)
                 and lumos_result.get("ok")
                 and lumos_result.get("running")
             ):

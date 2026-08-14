@@ -279,6 +279,85 @@ def test_apply_lumos_zoom_is_live(monkeypatch):
         app.shutdown()
 
 
+def test_enable_lumos_reopens_bound_camera(monkeypatch):
+    from processor.app import Processor
+
+    recreates = []
+
+    class FakeMgr:
+        def __init__(self):
+            self._running = False
+
+        @property
+        def running(self):
+            return self._running
+
+        def status(self, cfg):
+            from processor.utils.lumos_cam import LumosCamStatus
+
+            return LumosCamStatus(
+                enabled=cfg.enabled,
+                running=self._running,
+                pid=1 if self._running else None,
+                zoom=cfg.camera_zoom,
+                pan_x=cfg.pan_x,
+                pan_y=cfg.pan_y,
+                af=cfg.af,
+                ae=cfg.ae,
+                awb=cfg.awb,
+                cal_mode=False,
+                camera_id=cfg.camera_id,
+                camera_size=cfg.camera_size,
+                camera_fps=cfg.camera_fps,
+                codec=cfg.codec,
+                v4l2_sink=cfg.v4l2_sink,
+                app_version="0.1.0",
+                protocol=1,
+                package_installed=True,
+                last_error="",
+                command=[],
+            )
+
+        def stop(self):
+            self._running = False
+            return {"ok": True, "running": False}
+
+        def restart(self, cfg):
+            self._running = True
+            return {"ok": True, "running": True, "pid": 1}
+
+        def ensure_running(self, cfg):
+            self._running = True
+            return {"ok": True, "running": True, "pid": 1}
+
+        def apply_live(self, cfg):
+            return {"ok": True, "running": True, "live": True}
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "synthetic", "replay_fps": 60},
+            "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+            "lumos_cam": {"enabled": False, "bind_camera": True, "v4l2_sink": "/dev/video11"},
+        }
+    )
+    app = Processor(config)
+    app._lumos = FakeMgr()
+    monkeypatch.setattr(
+        app,
+        "_recreate_source_unlocked",
+        lambda: recreates.append(1) or {"ok": True},
+    )
+    app.start()
+    try:
+        result = app.apply_lumos_cam({"enabled": True}, action="apply")
+        assert result["ok"] is True
+        assert recreates == [1]
+        assert app.config.camera.device == "/dev/video11"
+    finally:
+        app.shutdown()
+
+
 def test_lumos_primary_skips_scrcpy(monkeypatch):
     from processor.app import Processor
 
