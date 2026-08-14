@@ -194,10 +194,6 @@ def build_ffmpeg_command(
         "nobuffer",
         "-flags",
         "low_delay",
-        "-probesize",
-        "32",
-        "-analyzeduration",
-        "0",
         "-timeout",
         str(timeout_us),
         "-f",
@@ -528,10 +524,10 @@ class LumosCamManager:
             self._last_error = (
                 f"no frames on {sink or '(no sink)'} after {float(cfg.startup_timeout_sec):.0f}s "
                 f"(phone streaming={phone.get('streaming')!r} "
-                f"video_clients={phone.get('video_clients', 0)}). "
-                "Keep Lumos Cam on screen, then Apply again. "
-                "Do not capture the loopback until ffmpeg is writing "
-                "(exclusive_caps=1)."
+                f"video_clients={phone.get('video_clients', 0)} "
+                f"bytes_sent={phone.get('bytes_sent', 0)} "
+                f"encoder_attached={phone.get('encoder_attached')!r}). "
+                "Keep Lumos Cam on screen. Sideload Lumos Cam ≥ 0.1.11 if bytes_sent stays 0."
             )
             log.error("lumos-cam: %s", self._last_error)
             self.stop()
@@ -730,7 +726,7 @@ class LumosCamManager:
         self._last_error = (
             f"{last} — nothing is listening on device port {int(cfg.control_device_port)}. "
             "Open Lumos Cam, grant camera, keep it on screen, then retry. "
-            "Rebuild/sideload ≥ 0.1.10 if this APK is older."
+            "Rebuild/sideload ≥ 0.1.11 if this APK is older."
         )
         return None
 
@@ -740,25 +736,62 @@ class LumosCamManager:
         while time.monotonic() < deadline:
             if not self.running:
                 return False
-            has_client_field = False
-            clients = 0
+            st: dict[str, Any] = {}
             try:
                 st = self.client.status()
                 self._phone = {**self._phone, **st}
-                has_client_field = "video_clients" in st
-                clients = int(st.get("video_clients") or 0)
-            except (RuntimeError, TypeError, ValueError):
-                pass
-            producing = bool(sink and os.path.exists(sink) and sink_has_capture(sink))
-            # exclusive_caps: do not treat "node exists" as ready. Wait until
-            # ffmpeg has attached (video_clients) and the loopback flipped to
-            # capture. Opening OpenCV earlier steals the writer slot.
-            if producing and (not has_client_field or clients >= 1):
-                return True
+            except RuntimeError:
+                st = {}
+            if not self._stream_is_flowing(st):
+                time.sleep(0.25)
+                continue
             if not sink:
-                time.sleep(0.4)
-                return self.running
+                return True
+            held = self._ffmpeg_holds_sink(sink)
+            if held is True:
+                return True
+            # No /proc (macOS / tests): node existence is the fallback.
+            if held is None and os.path.exists(sink):
+                return True
             time.sleep(0.25)
+        return False
+
+    def _stream_is_flowing(self, st: dict[str, Any]) -> bool:
+        """True when the phone is actually sending video, not just TCP-connected."""
+        if "bytes_sent" in st:
+            try:
+                return int(st.get("bytes_sent") or 0) > 0
+            except (TypeError, ValueError):
+                return False
+        if "video_clients" in st:
+            try:
+                return int(st.get("video_clients") or 0) >= 1
+            except (TypeError, ValueError):
+                return False
+        sink = ""
+        if self._cfg is not None:
+            sink = (self._cfg.v4l2_sink or "").strip()
+        return bool(sink and os.path.exists(sink) and sink_has_capture(sink))
+
+    def _ffmpeg_holds_sink(self, sink: str) -> bool | None:
+        """Whether ffmpeg has /dev/videoN open. None if we cannot tell."""
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return False
+        fd_dir = f"/proc/{proc.pid}/fd"
+        if not os.path.isdir(fd_dir):
+            return None
+        try:
+            real_sink = os.path.realpath(sink)
+            for name in os.listdir(fd_dir):
+                try:
+                    target = os.readlink(os.path.join(fd_dir, name))
+                except OSError:
+                    continue
+                if target == sink or os.path.realpath(target) == real_sink:
+                    return True
+        except OSError:
+            return None
         return False
 
     @staticmethod

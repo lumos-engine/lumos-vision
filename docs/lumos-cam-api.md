@@ -67,7 +67,9 @@ All JSON bodies. Unknown fields ignored. Errors:
   "streaming": false,
   "codec": "h264",
   "orientation": 90,
-  "video_clients": 0
+  "video_clients": 0,
+  "bytes_sent": 0,
+  "encoder_attached": false
 }
 ```
 

@@ -123,7 +123,7 @@ def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
 
     class FakeProc:
         def __init__(self):
-            self.pid = 5150
+            self.pid = 2_147_483_647
             self.returncode = None
             self.stdout = None
 
@@ -274,6 +274,82 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
     assert result["running"] is False
     assert result["ready"] is False
     assert "no frames" in (result.get("error") or "")
+
+
+def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
+    sink = tmp_path / "video11"
+    sink.write_text("")
+
+    class FakeProc:
+        def __init__(self):
+            self.pid = 2_147_483_646
+            self.returncode = None
+            self.stdout = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.returncode = self.returncode if self.returncode is not None else 0
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return ("", None)
+
+    def fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "package:/data/app/dev.lumos.cam.apk\n"
+            stderr = ""
+
+        text = " ".join(str(c) for c in cmd)
+        if "devices" in text:
+            Result.stdout = "List of devices attached\nphone\tdevice\n"
+        return Result()
+
+    monkeypatch.setattr("processor.utils.lumos_cam.subprocess.Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
+    monkeypatch.setattr("processor.utils.lumos_cam.sink_has_capture", lambda device: True)
+    monkeypatch.setattr("processor.utils.lumos_cam.os.killpg", lambda *a, **k: None)
+    monkeypatch.setattr("processor.utils.lumos_cam.adb_device_ready", lambda *a, **k: True)
+    monkeypatch.setattr("processor.utils.lumos_cam.package_installed", lambda cfg: True)
+
+    mgr = LumosCamManager()
+
+    def fake_status():
+        return {
+            "ok": True,
+            "protocol": 1,
+            "app_version": "0.1.10",
+            "streaming": True,
+            "video_clients": 1,
+            "bytes_sent": 0,
+            "encoder_attached": False,
+        }
+
+    mgr.client.status = fake_status
+    mgr.client.set_camera = lambda camera_id: fake_status()
+    mgr.client.set_zoom = lambda ratio: fake_status()
+    mgr.client.set_pan = lambda x, y: fake_status()
+    mgr.client.set_locks = lambda **k: fake_status()
+    mgr.client.set_stream = lambda cfg, enabled=True: fake_status()
+
+    result = mgr.start(
+        LumosCamConfig(
+            enabled=True,
+            v4l2_sink=str(sink),
+            startup_timeout_sec=0.6,
+            ffmpeg="/usr/bin/ffmpeg",
+        )
+    )
+    assert result["ok"] is False
+    assert "bytes_sent=0" in (result.get("error") or "")
 
 
 def test_apply_lumos_zoom_is_live(monkeypatch):
