@@ -42,6 +42,19 @@ def test_rtsp_source_requires_a_url():
         create_source(CameraConfig(source="rtsp"))
 
 
+def test_yuyv_to_bgr_converts_packed_frame():
+    from processor.camera.v4l2 import yuyv_to_bgr
+
+    width, height = 8, 4
+    packed = np.zeros((height, width, 2), np.uint8)
+    packed[:, :, 0] = 128
+    packed[:, 0::2, 1] = 128
+    packed[:, 1::2, 1] = 128
+    bgr = yuyv_to_bgr(packed.tobytes(), width, height)
+    assert bgr.shape == (height, width, 3)
+    assert bgr.dtype == np.uint8
+
+
 def test_v4l2_source_requires_a_device():
     with pytest.raises(ValueError, match="device"):
         create_source(CameraConfig(source="v4l2"))
