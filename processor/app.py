@@ -341,16 +341,26 @@ class Processor:
         self.sinks.write(ctx.image)
         self._frames_out += 1
         self.output_fps.tick()
+        if self._frames_out == 1:
+            log.info(
+                "First processed frame %dx%d (open http://localhost:%d/ if the wizard is blank)",
+                ctx.image.shape[1],
+                ctx.image.shape[0],
+                int(self.config.web.port or 7660),
+            )
 
         self._publish_previews(ctx)
         return ctx
 
     def _publish_previews(self, ctx: FrameContext) -> None:
-        wanted = self.brokers.subscribed_names()
+        # Always keep the last source/output so /stream/* is not blank when
+        # the wizard opens after the first frame (no subscribers yet).
+        self.brokers.publish("source", ctx.source)
+        self.brokers.publish("output", ctx.image)
+        wanted = self.brokers.subscribed_names() - {"source", "output"}
         if not wanted:
             return
         views = self.pipeline.debug_views(ctx)
-        views.setdefault("source", ctx.source)
         for name in wanted:
             image = views.get(name)
             if image is not None:
@@ -1475,10 +1485,12 @@ class Processor:
 
     def snapshot(self, view: str = "output") -> np.ndarray | None:
         ctx = self._last_ctx
+        if view == "source":
+            if ctx is not None:
+                return ctx.source
+            return self._last_source
         if ctx is None:
             return None
-        if view == "source":
-            return ctx.source
         if view == "output":
             return ctx.image
         return self.pipeline.debug_views(ctx).get(view)

@@ -197,6 +197,14 @@ def test_snapshot_returns_a_jpeg(server):
     assert body[:2] == b"\xff\xd8"  # JPEG SOI
 
 
+def test_process_frame_keeps_preview_without_wizard_subscribers(processor):
+    _, source = processor.brokers.get("source").latest()
+    _, output = processor.brokers.get("output").latest()
+    assert source is not None
+    assert output is not None
+    assert output.shape[1] == 320
+
+
 # ------------------------------------------------------------------ config
 
 

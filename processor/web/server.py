@@ -452,6 +452,11 @@ class _Handler(BaseHTTPRequestHandler):
             return self.send_error(404, f"unknown view {view}")
         config = self.processor.config.web
         broker = self.processor.brokers.get(view)
+        _, current = broker.latest()
+        if current is None:
+            image = self.processor.snapshot(view)
+            if image is not None:
+                broker.publish(image)
         write_mjpeg_stream(
             self,
             broker,
