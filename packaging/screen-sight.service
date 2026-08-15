@@ -5,7 +5,10 @@ After=network-online.target
 Wants=network-online.target
 # Optional: create /dev/video10 (and video11 for scrcpy) without unloading
 # an already-loaded module. Needs packaging/sudoers.d/screen-sight-loopback.
-# ExecStartPre=/usr/lib/screen-sight/screen-sight-loopback /dev/video10
+# The `+` prefix runs as root and bypasses NoNewPrivileges so the helper
+# can modprobe. Screen Sight also repairs a stuck node at runtime via
+# `screen-sight-loopback --reload` (same sudoers entry).
+# ExecStartPre=+/usr/lib/screen-sight/screen-sight-loopback /dev/video10
 
 [Service]
 Type=simple

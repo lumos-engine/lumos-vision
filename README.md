@@ -136,28 +136,23 @@ the machine misbehaves under Wayland, switch the session to Xorg.
 
 ### The virtual camera (HyperHDR output)
 
+Screen Sight creates `/dev/video10` on start and keeps a producer on it so
+HyperHDR's **Video capturing** list can see **Screen Sight**. If a previous
+format is stuck (`YUYV 640×360 Invalid argument`), it releases HyperHDR's
+grabber, recreates the node, and asks HyperHDR to rescan — no manual
+`modprobe -r` or HyperHDR restart.
+
+Still load the kernel module once per machine (or use the
+`screen-sight-loopback` helper / sudoers file under `packaging/`):
+
 ```bash
+sudo apt install -y v4l2loopback-dkms v4l2loopback-utils
 sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1
 ```
 
 `exclusive_caps=1` matters. Without it the device advertises both capture and
 output capabilities, and many consumers — HyperHDR included — refuse to open
 it.
-
-If HyperHDR shows a pink / doubled / wrong-aspect image while the Screen Sight
-window and `:7661` look fine, the loopback format is stale. Reload it, start
-Screen Sight first, then HyperHDR:
-
-```bash
-sudo pkill -f "python -m processor" || true
-sudo systemctl stop hyperhdr@$USER 2>/dev/null || pkill hyperhdr || true
-sudo modprobe -r v4l2loopback
-sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1
-python -m processor run
-# then start HyperHDR; match width/height/pixel format to the log line
-# "V4L2 output ready: /dev/video10 YUYV WxH"
-v4l2-ctl -d /dev/video10 -c keep_format=1
-```
 
 To load it at every boot:
 
@@ -172,15 +167,19 @@ v4l2-ctl --list-devices
 v4l2-ctl -d /dev/video10 --all
 ```
 
+Look for `V4L2 output ready: /dev/video10 YUYV WxH` in the Screen Sight log.
+HyperHDR must match that size (often 640×360), not a leftover 1280×720.
+
 ### Pointing HyperHDR at it
 
-1. Start Screen Sight so it is writing to `/dev/video10`
-2. Restart HyperHDR so it rescans devices
-3. Open **Video capturing** (not “add device” — there isn’t one)
-4. Choose **Screen Sight** / `/dev/video10`
-5. Resolution **1280×720** (match Screen Sight), format **YUYV**, ~20 fps  
-   (use 640×360 only if you started Screen Sight at that size)
-6. Turn off HyperHDR’s own crop / black-bar / signal detection — Screen Sight
+1. Start Screen Sight so it is writing to `/dev/video10` (it also nudges
+   HyperHDR's video grabber over `power.hyperhdr_url` when that is set).
+2. Open **Video capturing** (not “add device” — there isn’t one)
+3. Choose **Screen Sight** / `/dev/video10`
+4. Match Screen Sight's output size and format from the log line
+   `V4L2 output ready: /dev/video10 YUYV WxH` (often **640×360 YUYV**, not
+   a leftover 1280×720)
+5. Turn off HyperHDR’s own crop / black-bar / signal detection — Screen Sight
    already did that work
 
 ### Running as a service
@@ -463,10 +462,11 @@ running. `pkill -f 'python -m processor'` then retry.
 space (or the lines were pasted badly). Use the one-line command in
 [Quick start](#quick-start-usb-webcam).
 
-**HyperHDR cannot open the device** — reload v4l2loopback with
-`exclusive_caps=1`, start Screen Sight **before** enabling capture, and pick
-the device under **Video capturing**. `v4l2-ctl -d /dev/video10 --all` should
-show a 1280x720 YUYV format (or whatever `--width/--height` you set).
+**HyperHDR cannot open the device** — Screen Sight should already be writing
+to `/dev/video10` (`V4L2 output ready` in the log). Confirm
+`exclusive_caps=1`, pick the device under **Video capturing**, and match
+width/height/pixel format. `v4l2-ctl -d /dev/video10 --all` should show the
+same YUYV size Screen Sight logged.
 
 **The TV is never detected** — the detector needs moving picture; a paused
 frame or a static menu gives it nothing to work with. Play something, or mark

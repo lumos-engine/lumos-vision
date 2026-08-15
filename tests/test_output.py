@@ -104,6 +104,84 @@ def test_v4l2_explains_itself_on_other_platforms():
         sink.open(640, 360)
 
 
+def test_v4l2_open_repairs_stuck_format_instead_of_raising(monkeypatch):
+    from processor.config.schema import V4L2Config
+
+    repaired: list[str] = []
+    monkeypatch.setattr("processor.output.v4l2.sys.platform", "linux")
+    monkeypatch.setattr("processor.output.v4l2.os.path.exists", lambda path: True)
+    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._set_keep_format", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "processor.output.v4l2.repair_loopback",
+        lambda path, **k: repaired.append(path) or True,
+    )
+    monkeypatch.setattr("processor.output.v4l2.ensure_loopback", lambda *a, **k: True)
+
+    def boom(*_args, **_kwargs):
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr("processor.output.v4l2.os.open", boom)
+
+    sink = V4L2Sink(V4L2Config())
+    sink.open(640, 360)
+    assert sink.stats["open"] is False
+    assert repaired == ["/dev/video10"]
+
+
+def test_processor_recovers_v4l2_and_nudges_hyperhdr(monkeypatch):
+    from processor.app import Processor
+    from processor.config.schema import Config, V4L2Config
+
+    grabber: list[bool] = []
+    repaired: list[str] = []
+    nudged: list[str] = []
+    monkeypatch.setattr("processor.app.sys.platform", "linux")
+    monkeypatch.setattr(
+        "processor.app.set_video_grabber",
+        lambda url, enabled, **kw: grabber.append(bool(enabled)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        "processor.app.repair_loopback",
+        lambda path, **kw: repaired.append(path) or True,
+    )
+    monkeypatch.setattr(
+        "processor.app.refresh_video_grabber",
+        lambda url, **kw: nudged.append(url) or {"ok": True},
+    )
+
+    sink = V4L2Sink(V4L2Config())
+    opened: list[tuple[int, int]] = []
+
+    def fake_open(width, height):
+        opened.append((width, height))
+        sink._fd = 7
+        sink._size = (width, height)
+
+    monkeypatch.setattr(sink, "open", fake_open)
+    monkeypatch.setattr(sink, "close", lambda: None)
+
+    app = Processor(
+        Config.from_dict(
+            {
+                "camera": {"source": "synthetic"},
+                "output": {
+                    "width": 640,
+                    "height": 360,
+                    "v4l2": {"enabled": True, "device": "/dev/video10"},
+                },
+                "power": {"hyperhdr_url": "http://127.0.0.1:8090"},
+            }
+        )
+    )
+    app.sinks = SinkGroup([sink])
+    app._recover_v4l2_unlocked()
+    app._nudge_hyperhdr_grabber_unlocked()
+    assert grabber == [False]
+    assert repaired == ["/dev/video10"]
+    assert opened == [(640, 360)]
+    assert nudged == ["http://127.0.0.1:8090"]
+
+
 # ------------------------------------------------------------------- sinks
 
 

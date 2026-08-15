@@ -9,6 +9,7 @@ touching the stages, which removes a whole category of bug and costs nothing.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from concurrent.futures import Future
@@ -28,6 +29,7 @@ from processor.config.schema import Config, LumosCamConfig
 from processor.output.base import SinkGroup
 from processor.output.broker import BrokerHub
 from processor.output.factory import create_sinks
+from processor.output.v4l2 import V4L2Sink
 from processor.pipeline.context import FrameContext, PipelineState
 from processor.pipeline.pipeline import Pipeline
 from processor.pipeline.registry import apply_config as apply_pipeline_config
@@ -48,9 +50,14 @@ from processor.utils.color_profiles import (
     slot_key,
     store_slot_updates,
 )
-from processor.utils.hyperhdr_leds import set_led_device
+from processor.utils.hyperhdr_leds import refresh_video_grabber, set_led_device, set_video_grabber
 from processor.utils.logging import get_logger
-from processor.utils.loopback import ensure_processor_loopbacks
+from processor.utils.loopback import (
+    OUTPUT_LABEL,
+    ensure_processor_loopbacks,
+    needed_loopbacks,
+    repair_loopback,
+)
 from processor.utils.lumos_cam import (
     LumosCamManager,
     step_lumos_pan,
@@ -213,6 +220,7 @@ class Processor:
         self._lumos = LumosCamManager()
         self._lumos_next_retry = 0.0
         self._lumos_transform_at = 0.0
+        self._v4l2_next_repair = 0.0
         self._color_cal = ColorCalibrationSession()
 
     # ------------------------------------------------------------------
@@ -223,6 +231,8 @@ class Processor:
         self._ensure_loopbacks_unlocked()
         self.sinks = SinkGroup(create_sinks(self.config.output))
         self.sinks.open(self.config.output.width, self.config.output.height)
+        self._recover_v4l2_unlocked()
+        self._nudge_hyperhdr_grabber_unlocked()
         self._started_at = time.monotonic()
         # Start the clock now so the first stats line reports a real interval
         # instead of the cold-start numbers.
@@ -304,6 +314,7 @@ class Processor:
                 self._tick_power()
                 self._tick_scrcpy_watchdog()
                 self._tick_lumos_watchdog()
+                self._tick_v4l2_watchdog()
 
                 if self._idle:
                     self._write_idle_frame()
@@ -513,6 +524,64 @@ class Processor:
             ensure_processor_loopbacks(self.config)
         except Exception:
             log.exception("Failed to ensure v4l2loopback nodes")
+
+    def _v4l2_sink_unlocked(self) -> V4L2Sink | None:
+        if self.sinks is None:
+            return None
+        for sink in self.sinks.sinks:
+            if isinstance(sink, V4L2Sink):
+                return sink
+        return None
+
+    def _v4l2_is_open_unlocked(self) -> bool:
+        sink = self._v4l2_sink_unlocked()
+        return bool(sink is not None and sink.stats.get("open"))
+
+    def _recover_v4l2_unlocked(self) -> None:
+        """If the HyperHDR-facing sink failed to open, repair the loopback and retry."""
+        if sys.platform != "linux" or not self.config.output.v4l2.enabled:
+            return
+        if self.sinks is None:
+            return
+        if self._v4l2_is_open_unlocked():
+            return
+        sink = self._v4l2_sink_unlocked()
+        if sink is None:
+            sink = V4L2Sink(self.config.output.v4l2)
+            self.sinks.sinks.append(sink)
+        log.warning(
+            "V4L2 output is not open — releasing HyperHDR's grabber and repairing %s",
+            sink.device,
+        )
+        set_video_grabber(self.config.power.hyperhdr_url, False)
+        try:
+            repair_loopback(
+                sink.device,
+                label=OUTPUT_LABEL,
+                keep=needed_loopbacks(self.config),
+            )
+            sink.close()
+            sink.open(self.config.output.width, self.config.output.height)
+        except Exception:
+            log.exception("V4L2 repair of %s failed", sink.device)
+
+    def _nudge_hyperhdr_grabber_unlocked(self) -> None:
+        """Make HyperHDR rescan /dev/video* after we are producing frames."""
+        if not self._v4l2_is_open_unlocked():
+            return
+        refresh_video_grabber(self.config.power.hyperhdr_url)
+
+    def _tick_v4l2_watchdog(self) -> None:
+        if sys.platform != "linux" or not self.config.output.v4l2.enabled:
+            return
+        if self._v4l2_is_open_unlocked():
+            return
+        now = time.monotonic()
+        if now < self._v4l2_next_repair:
+            return
+        self._v4l2_next_repair = now + 10.0
+        self._recover_v4l2_unlocked()
+        self._nudge_hyperhdr_grabber_unlocked()
 
     def _release_loopback_reader_unlocked(self, sink: str, *, bound: bool, label: str) -> None:
         """Drop capture on a v4l2loopback node so the producer can reopen it."""

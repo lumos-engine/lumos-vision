@@ -1,7 +1,18 @@
 #!/bin/sh
-# Ensure v4l2loopback nodes for Screen Sight. Never unloads the module.
-# Usage: screen-sight-loopback [/dev/video10] [/dev/video11]
+# Ensure v4l2loopback nodes for Screen Sight.
+# Usage: screen-sight-loopback [--reload] [/dev/video10] [/dev/video11]
+#
+# Without --reload: create missing nodes. Never unloads the module.
+# With --reload: delete the given nodes (or unload the module if ctl cannot)
+# then recreate them with exclusive_caps=1. Screen Sight calls this only when
+# VIDIOC_S_FMT fails (stuck keep_format / HyperHDR holding the old size).
 set -eu
+
+RELOAD=0
+if [ "${1:-}" = "--reload" ]; then
+  RELOAD=1
+  shift
+fi
 
 OUTPUT="${1:-/dev/video10}"
 SCRCPY="${2:-}"
@@ -29,6 +40,29 @@ add_one() {
   fi
   return 1
 }
+
+delete_one() {
+  path="$1"
+  if [ ! -e "$path" ]; then
+    return 0
+  fi
+  if command -v v4l2loopback-ctl >/dev/null 2>&1; then
+    v4l2loopback-ctl delete "$path" >/dev/null 2>&1 || true
+    v4l2loopback-ctl remove "$path" >/dev/null 2>&1 || true
+  fi
+}
+
+if [ "$RELOAD" = 1 ]; then
+  delete_one "$OUTPUT"
+  if [ -n "$SCRCPY" ]; then
+    delete_one "$SCRCPY"
+  fi
+  # ctl could not drop the node (a consumer still holds it). Unload the
+  # module; the create path below recreates every requested device.
+  if [ -e "$OUTPUT" ]; then
+    modprobe -r v4l2loopback || true
+  fi
+fi
 
 NRS=""
 LABELS=""

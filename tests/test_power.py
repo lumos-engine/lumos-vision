@@ -78,6 +78,36 @@ def test_set_led_device_posts_componentstate():
     }
 
 
+def test_refresh_video_grabber_toggles_off_then_on():
+    from processor.utils.hyperhdr_leds import refresh_video_grabber
+
+    seen = []
+
+    class _Resp(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_open(request, timeout=0.4):
+        seen.append(json.loads(request.data.decode()))
+        return _Resp(b'{"success": true}')
+
+    result = refresh_video_grabber("http://127.0.0.1:8090", opener=fake_open)
+    assert result["ok"] is True
+    assert [body["componentstate"]["state"] for body in seen] == [False, True]
+    assert seen[0]["componentstate"]["component"] == "VIDEOGRABBER"
+
+
+def test_refresh_video_grabber_skips_empty_url():
+    from processor.utils.hyperhdr_leds import refresh_video_grabber
+
+    assert refresh_video_grabber("") == {"ok": True, "skipped": True}
+
+
 def _processor(**power) -> Processor:
     config = Config.from_dict(
         {

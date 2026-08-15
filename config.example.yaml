@@ -152,7 +152,8 @@ logging:
 # Wizard → Input type "scrcpy (phone fallback)". Absolute phone zoom restarts
 # scrcpy. Screen Sight creates /dev/video11 when this source is selected.
 # Requires: scrcpy ≥ 4.0. Output loopback stays /dev/video10 (HyperHDR).
-# Preferred module load (only if nodes are missing; never modprobe -r):
+# Preferred module load (only if nodes are missing). Screen Sight creates
+# them on start and repairs a stuck /dev/video10 (S_FMT EINVAL) itself:
 #   sudo modprobe v4l2loopback devices=2 video_nr=10,11 \
 #     card_label="Screen Sight","Android Cam" exclusive_caps=1
 # camera:

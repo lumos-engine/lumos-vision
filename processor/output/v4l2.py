@@ -4,13 +4,14 @@ Talks to ``/dev/videoN`` directly: one ``VIDIOC_S_FMT`` ioctl to declare the
 format, then a plain ``write()`` per frame.  That keeps the dependency list at
 zero and the per-frame cost at one colour conversion plus one syscall.
 
-Requires the ``v4l2loopback`` kernel module (Linux only)::
-
-    sudo apt install v4l2loopback-dkms v4l2loopback-utils
-    sudo modprobe v4l2loopback video_nr=10 card_label="Screen Sight" exclusive_caps=1
+Requires the ``v4l2loopback`` kernel module (Linux only). Screen Sight creates
+and, when ``S_FMT`` fails, repairs the node; do not treat a missing or stuck
+``/dev/video10`` as a manual ``modprobe`` step.
 
 ``exclusive_caps=1`` matters: without it the device advertises both capture and
 output capabilities and many consumers, HyperHDR included, refuse to open it.
+A producer must hold the node open (and write at least one frame) before
+HyperHDR will list it as a capture device.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import numpy as np
 from processor.config.schema import V4L2Config
 from processor.output.base import Sink
 from processor.utils.logging import get_logger
+from processor.utils.loopback import OUTPUT_LABEL, ensure_loopback, repair_loopback
 
 log = get_logger(__name__)
 
@@ -138,6 +140,8 @@ class V4L2Sink(Sink):
         self._errors = 0
         self._last_error: str | None = None
         self._retry_at = 0.0
+        self._next_repair = 0.0
+        self._repair_cooldown = 15.0
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -151,43 +155,53 @@ class V4L2Sink(Sink):
             raise ValueError("YUYV output requires an even width")
 
         self._size = (width, height)
-        self._open_device()
+        if not self._open_device():
+            log.error(
+                "V4L2 sink deferred: will keep retrying %s %s %dx%d",
+                self.device,
+                self.pixel_format,
+                width,
+                height,
+            )
 
-    def _open_device(self) -> None:
+    def _open_device(self) -> bool:
         width, height = self._size
         if not os.path.exists(self.device):
-            raise FileNotFoundError(
-                f"{self.device} does not exist. Load the loopback module first:\n"
-                f"  sudo modprobe v4l2loopback video_nr={self._device_number()} "
-                f'card_label="Screen Sight" exclusive_caps=1'
+            ensure_loopback(self.device, label=OUTPUT_LABEL)
+        if not os.path.exists(self.device):
+            self._last_error = f"{self.device} does not exist"
+            log.error(
+                "%s does not exist and Screen Sight could not create it",
+                self.device,
             )
+            return False
 
         # A previous keep_format=1 (or HyperHDR) can pin RGB3/YUYV so S_FMT
         # appears to work but G_FMT still reports the old fourcc -- then we
         # used to abort and leave no producer, so every viewer fails to open.
         self._set_keep_format(0)
 
-        fd = os.open(self.device, os.O_WRONLY)
-        try:
-            request = pack_format(width, height, self.pixel_format, self.full_range)
-            fcntl.ioctl(fd, VIDIOC_S_FMT, request)
-            got = bytearray(request)
-            fcntl.ioctl(fd, VIDIOC_G_FMT, got)
-            got_w, got_h, got_code, _, got_bpl, got_size = struct.unpack_from("<6I", got, 8)
-        except OSError as exc:
-            os.close(fd)
-            raise OSError(
-                f"failed to set {self.pixel_format} {width}x{height} on {self.device}: {exc}. "
-                f"Try: sudo modprobe -r v4l2loopback && "
-                f"sudo modprobe v4l2loopback video_nr={self._device_number()} "
-                f'card_label="Screen Sight" exclusive_caps=1'
-            ) from exc
+        negotiated = self._negotiate()
+        if negotiated is None and time.monotonic() >= self._next_repair:
+            self._next_repair = time.monotonic() + self._repair_cooldown
+            log.info("Repairing %s after S_FMT failure", self.device)
+            repair_loopback(self.device, label=OUTPUT_LABEL)
+            self._set_keep_format(0)
+            negotiated = self._negotiate()
 
+        if negotiated is None:
+            self._last_error = (
+                f"failed to set {self.pixel_format} {width}x{height} on {self.device}"
+            )
+            log.error("%s; HyperHDR will not see this device until it succeeds", self._last_error)
+            return False
+
+        fd, got_w, got_h, got_code, got_bpl, got_size = negotiated
         expect_code, _bpp = PIXEL_FORMATS[self.pixel_format]
         if (got_w, got_h, got_code) != (width, height, expect_code):
             log.warning(
                 "%s reports %dx%d fourcc=0x%08x after S_FMT %s %dx%d -- "
-                "reloading the loopback module is the reliable fix",
+                "repairing the loopback node if this keeps happening",
                 self.device,
                 got_w,
                 got_h,
@@ -199,7 +213,9 @@ class V4L2Sink(Sink):
 
         self._fd = fd
         self._size = (width, height)
+        self._announce_capture(fd, width, height)
         self._set_keep_format(1)
+        self._last_error = None
         log.info(
             "V4L2 output ready: %s %s %dx%d (device bpl=%d size=%d)",
             self.device,
@@ -209,6 +225,50 @@ class V4L2Sink(Sink):
             got_bpl,
             got_size,
         )
+        return True
+
+    def _negotiate(self) -> tuple[int, int, int, int, int, int] | None:
+        """Open the node and set the output format. Tries write-only then RDWR."""
+        last: OSError | None = None
+        for flags in (os.O_WRONLY, os.O_RDWR):
+            try:
+                return self._set_format(flags)
+            except OSError as exc:
+                last = exc
+                continue
+        if last is not None:
+            log.warning(
+                "failed to set %s %dx%d on %s: %s",
+                self.pixel_format,
+                self._size[0],
+                self._size[1],
+                self.device,
+                last,
+            )
+        return None
+
+    def _set_format(self, flags: int) -> tuple[int, int, int, int, int, int]:
+        width, height = self._size
+        fd = os.open(self.device, flags)
+        try:
+            request = pack_format(width, height, self.pixel_format, self.full_range)
+            fcntl.ioctl(fd, VIDIOC_S_FMT, request)
+            got = bytearray(request)
+            fcntl.ioctl(fd, VIDIOC_G_FMT, got)
+            got_w, got_h, got_code, _, got_bpl, got_size = struct.unpack_from("<6I", got, 8)
+        except OSError:
+            os.close(fd)
+            raise
+        return fd, got_w, got_h, got_code, got_bpl, got_size
+
+    def _announce_capture(self, fd: int, width: int, height: int) -> None:
+        """Write one black frame so exclusive_caps flips to Video Capture."""
+        black = np.zeros((height, width, 3), dtype=np.uint8)
+        payload = np.ascontiguousarray(self._convert(black))
+        try:
+            os.write(fd, payload.tobytes())
+        except OSError as exc:
+            log.debug("prime write on %s failed: %s", self.device, exc)
 
     def _set_keep_format(self, value: int) -> None:
         """v4l2loopback control: 1 locks format, 0 allows renegotiation."""
@@ -224,10 +284,6 @@ class V4L2Sink(Sink):
             )
         except Exception as exc:
             log.debug("keep_format=%s on %s failed: %s", value, self.device, exc)
-
-    def _device_number(self) -> str:
-        digits = "".join(ch for ch in self.device if ch.isdigit())
-        return digits or "10"
 
     def close(self) -> None:
         fd, self._fd = self._fd, None
@@ -253,7 +309,9 @@ class V4L2Sink(Sink):
             if time.monotonic() < self._retry_at:
                 return False
             try:
-                self._open_device()
+                if not self._open_device():
+                    self._retry_at = time.monotonic() + 5.0
+                    return False
             except Exception as exc:
                 self._retry_at = time.monotonic() + 5.0
                 self._last_error = str(exc)
