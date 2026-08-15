@@ -14,8 +14,15 @@ Live `color.*` (matrix, manual WB, gamma, black level) is a **view** of
 `color.profiles.selection` + `color.profiles.slots`. The colour stage does not
 know about profiles.
 
-Uncalibrated combo → **passthrough** (`white_balance: off`, no matrix, gamma 1).
-Do not invent a fallback matrix from a neighbouring combo.
+While locked, the phone must not hunt. Unlock is manual only. Each slot
+stores ISO / exposure_ns / focus_distance / awb_gains and restores them on
+profile switch via `POST /locks` with those numbers.
+
+## Camera 3A on a slot
+
+Do not put 3A on `ColorStage`. `ColorProfileSlot.camera` (`ProfileCameraState`)
+is the freeze. `bind_config` copies it onto `lumos_cam.*`; `apply_live` pushes
+it to the phone. Uncalibrated combos set AF/AE/AWB back to auto.
 
 ## Source of truth
 

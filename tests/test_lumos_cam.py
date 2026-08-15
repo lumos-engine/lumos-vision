@@ -900,6 +900,9 @@ def test_color_cal_toggles_lumos_cal_mode(monkeypatch, tmp_path):
             calls.append(enabled)
             return {"ok": True, "cal_mode": enabled}
 
+        def apply_live(self, cfg):
+            return {"ok": True, "running": True, "live": True}
+
     config = Config.from_dict(
         {
             "camera": {"source": "lumos"},

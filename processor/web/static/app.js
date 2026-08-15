@@ -285,6 +285,9 @@ let lumosPanelState = {
   af: 'auto',
   ae: 'auto',
   awb: 'auto',
+  iso: null,
+  exposure_ns: null,
+  focus_distance: null,
   cal_mode: false,
   last_error: '',
   app_version: '',
@@ -339,7 +342,7 @@ function syncLumosMeta() {
     `${Number(lumosPanelState.camera_zoom).toFixed(2)}×`,
     `pan ${Number(lumosPanelState.pan_x).toFixed(2)},${Number(lumosPanelState.pan_y).toFixed(2)}`,
     `AF ${lumosPanelState.af}`,
-    `AE ${lumosPanelState.ae}`,
+    lumosPanelState.iso ? `AE ${lumosPanelState.ae} ISO ${lumosPanelState.iso}` : `AE ${lumosPanelState.ae}`,
     `AWB ${lumosPanelState.awb}`,
   ];
   if (lumosPanelState.cal_mode) bits.push('cal mode');
@@ -501,6 +504,10 @@ async function buildLumosCamPanel() {
     <div class="control">
       <label class="check"><input type="checkbox" id="lumos-awb"> AWB lock</label>
     </div>
+    <p class="hint">Locks freeze the current exposure / focus / white balance into the
+    active environment profile. Switching profiles restores those numbers.
+    Uncheck to let the phone hunt; it will not auto-lock again until you tick
+    it or switch profiles.</p>
     <div class="control">
       <label class="check"><input type="checkbox" id="lumos-cal-mode"> Cal mode</label>
     </div>
@@ -1098,7 +1105,8 @@ function renderColorProfiles(p) {
   const meta = $('color-profile-meta');
   if (meta) {
     const mode = p.calibrated ? 'calibrated' : 'no calibration (passthrough)';
-    meta.textContent = `${p.label || '—'} · ${mode} · ${p.calibrated_count || 0}/${p.combo_count || 0} combos`;
+    const cam = p.camera_locked ? '3A frozen' : '3A auto';
+    meta.textContent = `${p.label || '—'} · ${mode} · ${cam} · ${p.calibrated_count || 0}/${p.combo_count || 0} combos`;
   }
   const chips = $('color-profile-combos');
   if (chips) {
@@ -1148,8 +1156,10 @@ async function buildColorProfilePanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Environment profile</h3>
-    <p class="hint">Pick the room as it is now, then run Colour calibrate. A combo
-    without a saved matrix is passthrough (no software colour correction).</p>
+    <p class="hint">Pick the room as it is now. Switching restores that combo's
+    frozen exposure / focus / WB (and colour matrix if calibrated). Uncalibrated
+    combos are colour-passthrough and 3A auto. Locks do not hunt after that
+    unless you unlock them.</p>
     <p class="source-meta" id="color-profile-meta">idle</p>
     <div class="profile-combos" id="color-profile-combos"></div>`;
   root.appendChild(section);
@@ -1971,6 +1981,9 @@ async function refresh() {
       if (status.lumos_cam.af) lumosPanelState.af = status.lumos_cam.af;
       if (status.lumos_cam.ae) lumosPanelState.ae = status.lumos_cam.ae;
       if (status.lumos_cam.awb) lumosPanelState.awb = status.lumos_cam.awb;
+      lumosPanelState.iso = status.lumos_cam.iso ?? null;
+      lumosPanelState.exposure_ns = status.lumos_cam.exposure_ns ?? null;
+      lumosPanelState.focus_distance = status.lumos_cam.focus_distance ?? null;
       if (status.config?.lumos_cam) {
         lumosPanelState.enabled = Boolean(status.config.lumos_cam.enabled);
       } else if (status.lumos_cam.enabled != null) {

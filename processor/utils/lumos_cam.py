@@ -20,7 +20,7 @@ import socket
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import cv2
@@ -71,6 +71,10 @@ class LumosCamStatus:
     frame_rotation: int = 0
     flip_h: bool = False
     flip_v: bool = False
+    iso: int | None = None
+    exposure_ns: int | None = None
+    focus_distance: float | None = None
+    awb_gains: list[float] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -97,6 +101,10 @@ class LumosCamStatus:
             "frame_rotation": self.frame_rotation,
             "flip_h": self.flip_h,
             "flip_v": self.flip_v,
+            "iso": self.iso,
+            "exposure_ns": self.exposure_ns,
+            "focus_distance": self.focus_distance,
+            "awb_gains": list(self.awb_gains),
             "min_app_version": MIN_APP_VERSION,
         }
 
@@ -407,6 +415,51 @@ def step_lumos_pan(cfg: LumosCamConfig, *, direction: str) -> tuple[float, float
     return pan_x, pan_y
 
 
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number
+
+
+def _optional_gains(value: Any) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) < 4:
+        return []
+    try:
+        return [float(v) for v in value[:4]]
+    except (TypeError, ValueError):
+        return []
+
+
+def _capture_lock_kwargs(cfg: LumosCamConfig) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "af": cfg.af,
+        "ae": cfg.ae,
+        "awb": cfg.awb,
+    }
+    if str(cfg.ae or "").lower() == "locked" and int(cfg.iso or 0) > 0 and int(cfg.exposure_ns or 0) > 0:
+        kwargs["iso"] = int(cfg.iso)
+        kwargs["exposure_ns"] = int(cfg.exposure_ns)
+    if str(cfg.af or "").lower() == "locked" and float(cfg.focus_distance) >= 0:
+        kwargs["focus_distance"] = float(cfg.focus_distance)
+    if str(cfg.awb or "").lower() == "locked" and len(cfg.awb_gains or []) >= 4:
+        kwargs["awb_gains"] = [float(v) for v in cfg.awb_gains[:4]]
+    return kwargs
+
+
 class LumosCamClient:
     """HTTP client for the phone control port (after adb forward)."""
 
@@ -464,7 +517,17 @@ class LumosCamClient:
     def set_pan(self, x: float, y: float) -> dict[str, Any]:
         return self.request("POST", "/pan", {"x": float(x), "y": float(y)})
 
-    def set_locks(self, *, af: str | None = None, ae: str | None = None, awb: str | None = None) -> dict[str, Any]:
+    def set_locks(
+        self,
+        *,
+        af: str | None = None,
+        ae: str | None = None,
+        awb: str | None = None,
+        iso: int | None = None,
+        exposure_ns: int | None = None,
+        focus_distance: float | None = None,
+        awb_gains: list[float] | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         if af is not None:
             payload["af"] = af
@@ -472,6 +535,14 @@ class LumosCamClient:
             payload["ae"] = ae
         if awb is not None:
             payload["awb"] = awb
+        if iso is not None and int(iso) > 0:
+            payload["iso"] = int(iso)
+        if exposure_ns is not None and int(exposure_ns) > 0:
+            payload["exposure_ns"] = int(exposure_ns)
+        if focus_distance is not None and float(focus_distance) >= 0:
+            payload["focus_distance"] = float(focus_distance)
+        if awb_gains and len(awb_gains) >= 4:
+            payload["awb_gains"] = [float(v) for v in awb_gains[:4]]
         return self.request("POST", "/locks", payload)
 
     def set_cal_mode(self, enabled: bool) -> dict[str, Any]:
@@ -579,6 +650,10 @@ class LumosCamManager:
             frame_rotation=int(phone.get("frame_rotation", 0) or 0),
             flip_h=bool(phone.get("flip_h")),
             flip_v=bool(phone.get("flip_v")),
+            iso=_optional_int(phone.get("iso")),
+            exposure_ns=_optional_int(phone.get("exposure_ns")),
+            focus_distance=_optional_float(phone.get("focus_distance")),
+            awb_gains=_optional_gains(phone.get("awb_gains")),
         )
 
     def ensure_running(self, cfg: LumosCamConfig) -> dict[str, Any]:
@@ -635,8 +710,8 @@ class LumosCamManager:
             self.client.set_camera(cfg.camera_id)
             self.client.set_zoom(clamp_zoom(cfg.camera_zoom, cfg))
             self.client.set_pan(clamp_pan(cfg.pan_x), clamp_pan(cfg.pan_y))
-            self.client.set_locks(af=cfg.af, ae=cfg.ae, awb=cfg.awb)
             self.client.set_stream(cfg, enabled=True)
+            self.client.set_locks(**_capture_lock_kwargs(cfg))
             phone = {**phone, **self.client.status()}
         except RuntimeError as exc:
             self._last_error = str(exc)
@@ -903,7 +978,7 @@ class LumosCamManager:
         try:
             self.client.set_zoom(clamp_zoom(cfg.camera_zoom, cfg))
             self.client.set_pan(clamp_pan(cfg.pan_x), clamp_pan(cfg.pan_y))
-            self.client.set_locks(af=cfg.af, ae=cfg.ae, awb=cfg.awb)
+            self.client.set_locks(**_capture_lock_kwargs(cfg))
             self._phone = {**self._phone, **self.client.status()}
         except RuntimeError as exc:
             self._last_error = str(exc)

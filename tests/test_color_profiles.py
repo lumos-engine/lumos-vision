@@ -170,6 +170,67 @@ def test_profile_round_trip_yaml(tmp_path):
     assert "time_of_day=day|lighting=large" in data["color"]["profiles"]["slots"]
 
 
+def test_profile_switch_restores_and_clears_phone_3a():
+    cfg = Config.from_dict(
+        {
+            "color": {
+                "profiles": {
+                    "selection": {"time_of_day": "night", "lighting": "bed"},
+                    "slots": {
+                        "time_of_day=night|lighting=bed": {
+                            "calibrated_at": "2026-08-15T12:00:00Z",
+                            "white_balance": "manual",
+                            "matrix_enabled": True,
+                            "gamma": 1.08,
+                            "camera": {
+                                "af": "locked",
+                                "ae": "locked",
+                                "awb": "locked",
+                                "iso": 250,
+                                "exposure_ns": 12500000,
+                                "focus_distance": 0.18,
+                                "awb_gains": [1.7, 1.0, 1.0, 1.4],
+                            },
+                        }
+                    },
+                }
+            }
+        }
+    )
+    assert cfg.lumos_cam.ae == "locked"
+    assert cfg.lumos_cam.iso == 250
+    assert cfg.lumos_cam.exposure_ns == 12500000
+    assert cfg.color.exposure.enabled is False
+
+    cfg = apply_updates(cfg, {"color.profiles.selection.lighting": "large"})
+    cfg = bind_config(cfg)
+    assert cfg.lumos_cam.ae == "auto"
+    assert cfg.lumos_cam.iso == 0
+    assert cfg.color.matrix_enabled is False
+
+    cfg = apply_updates(cfg, {"color.profiles.selection.lighting": "bed"})
+    cfg = bind_config(cfg)
+    assert cfg.lumos_cam.ae == "locked"
+    assert cfg.lumos_cam.iso == 250
+    assert cfg.lumos_cam.awb_gains[0] == pytest.approx(1.7)
+
+
+def test_legacy_ae_lock_is_absorbed_into_the_active_slot():
+    cfg = Config.from_dict(
+        {
+            "lumos_cam": {
+                "ae": "locked",
+                "iso": 400,
+                "exposure_ns": 8000000,
+            }
+        }
+    )
+    slot = cfg.color.profiles.slots[slot_key(cfg.color.profiles)]
+    assert slot.camera.ae == "locked"
+    assert slot.camera.iso == 400
+    assert cfg.lumos_cam.ae == "locked"
+
+
 def test_processor_switches_between_slot_and_passthrough():
     from processor.app import Processor
 

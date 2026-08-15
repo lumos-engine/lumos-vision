@@ -25,6 +25,7 @@ from processor.config.schema import (
     Config,
     ConfigError,
     GainsConfig,
+    ProfileCameraState,
     ProfileDimension,
     ProfileOption,
 )
@@ -179,6 +180,93 @@ def slot_is_calibrated(slot: ColorProfileSlot | None) -> bool:
     return bool(slot.matrix_enabled)
 
 
+def _lock_name(value: Any) -> str:
+    text = str(value or "auto").strip().lower()
+    return "locked" if text == "locked" else "auto"
+
+
+def camera_from_phone(phone: Mapping[str, Any] | None) -> ProfileCameraState:
+    """Snapshot Lumos GET /status (or live lumos_cam config) into a slot camera."""
+    data = dict(phone or {})
+    iso = int(data.get("iso") or 0)
+    exposure = int(data.get("exposure_ns") or 0)
+    focus = data.get("focus_distance")
+    try:
+        focus_f = float(focus) if focus is not None else -1.0
+    except (TypeError, ValueError):
+        focus_f = -1.0
+    gains = data.get("awb_gains") or []
+    if not isinstance(gains, (list, tuple)):
+        gains = []
+    return ProfileCameraState(
+        af=_lock_name(data.get("af")),
+        ae=_lock_name(data.get("ae")),
+        awb=_lock_name(data.get("awb")),
+        iso=max(0, iso),
+        exposure_ns=max(0, exposure),
+        focus_distance=focus_f,
+        awb_gains=[float(v) for v in list(gains)[:4]],
+    )
+
+
+def camera_from_lumos(cfg: Any) -> ProfileCameraState:
+    return camera_from_phone(
+        {
+            "af": getattr(cfg, "af", "auto"),
+            "ae": getattr(cfg, "ae", "auto"),
+            "awb": getattr(cfg, "awb", "auto"),
+            "iso": getattr(cfg, "iso", 0),
+            "exposure_ns": getattr(cfg, "exposure_ns", 0),
+            "focus_distance": getattr(cfg, "focus_distance", -1.0),
+            "awb_gains": getattr(cfg, "awb_gains", []),
+        }
+    )
+
+
+def slot_has_camera(slot: ColorProfileSlot | None) -> bool:
+    if slot is None:
+        return False
+    cam = slot.camera
+    return (
+        _lock_name(cam.ae) == "locked"
+        or _lock_name(cam.af) == "locked"
+        or _lock_name(cam.awb) == "locked"
+    )
+
+
+def auto_camera_updates() -> dict[str, Any]:
+    return {
+        "lumos_cam.af": "auto",
+        "lumos_cam.ae": "auto",
+        "lumos_cam.awb": "auto",
+        "lumos_cam.iso": 0,
+        "lumos_cam.exposure_ns": 0,
+        "lumos_cam.focus_distance": -1.0,
+        "lumos_cam.awb_gains": [],
+        "color.exposure.enabled": False,
+    }
+
+
+def camera_live_updates(slot: ColorProfileSlot | None) -> dict[str, Any]:
+    """Restore a slot's phone 3A, or auto if this combo has no freeze."""
+    if not slot_has_camera(slot) or slot is None:
+        return auto_camera_updates()
+    cam = slot.camera
+    updates: dict[str, Any] = {
+        "lumos_cam.af": _lock_name(cam.af),
+        "lumos_cam.ae": _lock_name(cam.ae),
+        "lumos_cam.awb": _lock_name(cam.awb),
+        "lumos_cam.iso": int(cam.iso or 0),
+        "lumos_cam.exposure_ns": int(cam.exposure_ns or 0),
+        "lumos_cam.focus_distance": float(cam.focus_distance),
+        "lumos_cam.awb_gains": [float(v) for v in (cam.awb_gains or [])],
+        "color.exposure.enabled": False,
+    }
+    if _lock_name(cam.awb) == "locked" and str(slot.white_balance or "").lower() == "auto":
+        updates["color.white_balance"] = "off"
+    return updates
+
+
 def lookup_slot(
     profiles: ColorProfilesConfig,
     selection: Mapping[str, str] | None = None,
@@ -326,6 +414,22 @@ def absorb_legacy_calibration(config: Config) -> Config:
     return apply_updates(config, {f"color.profiles.slots.{key}": slot_as_dict(slot)})
 
 
+def absorb_legacy_camera(config: Config) -> Config:
+    """Copy a pre-profile AE/AF/AWB freeze into the current slot."""
+    from processor.config.loader import apply_updates
+
+    slot = lookup_slot(config.color.profiles)
+    if any(slot_has_camera(item) for item in config.color.profiles.slots.values()):
+        return config
+    incoming = camera_from_lumos(config.lumos_cam)
+    if not slot_has_camera(ColorProfileSlot(camera=incoming)):
+        return config
+    key = slot_key(config.color.profiles)
+    payload = slot_as_dict(slot) if slot is not None else slot_as_dict(ColorProfileSlot())
+    payload["camera"] = asdict(incoming)
+    return apply_updates(config, {f"color.profiles.slots.{key}": payload})
+
+
 def bind_config(config: Config) -> Config:
     """Normalize selection, absorb a legacy matrix, then apply the active slot.
 
@@ -339,12 +443,17 @@ def bind_config(config: Config) -> Config:
     if dict(color.profiles.selection) != resolved:
         config = apply_updates(config, {"color.profiles.selection": resolved})
     config = absorb_legacy_calibration(config)
+    config = absorb_legacy_camera(config)
     slot = lookup_slot(config.color.profiles)
+    updates: dict[str, Any] = {}
     if slot_is_calibrated(slot):
-        return apply_updates(config, live_updates_from_slot(slot))
-    if live_looks_calibrated(config.color):
-        return apply_updates(config, bypass_live_updates())
-    return config
+        updates.update(live_updates_from_slot(slot))
+    elif live_looks_calibrated(config.color):
+        updates.update(bypass_live_updates())
+    updates.update(camera_live_updates(slot))
+    if not updates:
+        return config
+    return apply_updates(config, updates)
 
 
 def all_combos(profiles: ColorProfilesConfig) -> list[dict[str, str]]:
@@ -393,6 +502,8 @@ def profile_status(color: ColorConfig) -> dict[str, Any]:
         "combos": combos,
         "calibrated_count": sum(1 for item in combos if item["calibrated"]),
         "combo_count": len(combos),
+        "camera": asdict(slot.camera) if slot is not None else asdict(ProfileCameraState()),
+        "camera_locked": slot_has_camera(slot),
     }
 
 

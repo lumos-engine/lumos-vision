@@ -240,6 +240,24 @@ class ColorCalibrationInfo:
 
 
 @dataclass
+class ProfileCameraState:
+    """Phone 3A freeze for one environment combo.
+
+    ``ae`` / ``af`` / ``awb`` are ``auto`` or ``locked``. Numeric fields are
+    the Camera2 values to restore on profile switch (0 / -1 / empty = unknown).
+    While locked, the phone must not hunt; unlock is manual only.
+    """
+
+    af: str = "auto"
+    ae: str = "auto"
+    awb: str = "auto"
+    iso: int = 0
+    exposure_ns: int = 0
+    focus_distance: float = -1.0
+    awb_gains: list[float] = field(default_factory=list)
+
+
+@dataclass
 class ProfileOption:
     id: str = ""
     label: str = ""
@@ -287,6 +305,7 @@ class ColorProfileSlot:
     saturation: float = 1.0
     notes: list[str] = field(default_factory=list)
     patch_means_bgr: dict[str, list[float]] = field(default_factory=dict)
+    camera: ProfileCameraState = field(default_factory=ProfileCameraState)
 
 
 @dataclass
@@ -560,6 +579,13 @@ class LumosCamConfig:
     af: str = "auto"
     ae: str = "auto"
     awb: str = "auto"
+    #: 0 = not set (phone AE auto unless ``ae`` is locked without numbers).
+    iso: int = 0
+    exposure_ns: int = 0
+    #: <0 = not set.
+    focus_distance: float = -1.0
+    #: Camera2 RGGB gains; empty = not set.
+    awb_gains: list[float] = field(default_factory=list)
     control_device_port: int = 8765
     video_device_port: int = 8766
     control_host_port: int = 18765

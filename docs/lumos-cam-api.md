@@ -65,6 +65,7 @@ All JSON bodies. Unknown fields ignored. Errors:
   "focus_distance": null,
   "iso": null,
   "exposure_ns": null,
+  "awb_gains": null,
   "streaming": false,
   "codec": "h264",
   "orientation": 90,
@@ -91,7 +92,22 @@ clamp zoom and decide whether manual ISO/focus are offered.
 {"af": "locked", "ae": "auto", "awb": "locked"}
 ```
 
-Omitted keys unchanged.
+Omitted keys unchanged. Optional numeric freeze (profile restore):
+
+```json
+{
+  "af": "locked",
+  "ae": "locked",
+  "awb": "locked",
+  "iso": 100,
+  "exposure_ns": 10000000,
+  "focus_distance": 0.2,
+  "awb_gains": [1.8, 1.0, 1.0, 1.4]
+}
+```
+
+`awb_gains` is Camera2 RGGB. Locked AE without numbers snapshots the current
+CaptureResult. Unlocking a channel lets 3A hunt again.
 
 ### `POST /zoom`
 

@@ -17,6 +17,10 @@ know about profiles.
 Uncalibrated combo → **passthrough** (`white_balance: off`, no matrix, gamma 1).
 Do not invent a fallback matrix from a neighbouring combo.
 
+Each slot also stores phone 3A (`camera`: ISO, exposure_ns, focus, awb_gains).
+Profile switch restores those via `POST /locks`. While locked, 3A must not hunt;
+unlock is manual only. Uncalibrated combos set AF/AE/AWB auto.
+
 ## Source of truth
 
 Edit **`processor/utils/color_profiles.py`** `DEFAULT_DIMENSION_SPECS` and
