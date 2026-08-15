@@ -118,4 +118,5 @@ def apply_updates(config: Config, updates: dict[str, Any]) -> Config:
     data = config_to_dict(config)
     for path, value in updates.items():
         dotted_set(data, path, value)
-    return Config.from_dict(data)
+    # Skip profile bind here: apply_updates is used *by* bind_config.
+    return Config.from_dict(data, bind_profiles=False)

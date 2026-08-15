@@ -117,6 +117,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(
                     {"ok": True, "lumos_cam": self.processor.lumos_cam_status()}
                 )
+            if route == "/api/color/profile":
+                return self._send_json(
+                    {"ok": True, **self.processor.color_profile_status()}
+                )
             if route in (
                 "/api/calibrate/color",
                 "/api/calibrate/color/status",
@@ -225,6 +229,20 @@ class _Handler(BaseHTTPRequestHandler):
             if route == "/api/calibrate/color/apply":
                 save = bool(body.get("save"))
                 result = self.processor.apply_color_calibration(save=save)
+                return self._send_json(
+                    result, status=200 if result.get("ok") else 400
+                )
+            if route == "/api/color/profile":
+                selection = body.get("selection")
+                if selection is not None and not isinstance(selection, dict):
+                    return self._send_json(
+                        {"ok": False, "error": "selection must be an object"},
+                        status=400,
+                    )
+                result = self.processor.set_color_profile(
+                    selection,
+                    save=bool(body.get("save")),
+                )
                 return self._send_json(
                     result, status=200 if result.get("ok") else 400
                 )

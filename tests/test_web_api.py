@@ -234,6 +234,19 @@ def test_empty_update_is_rejected(server):
     assert status == 400
 
 
+def test_color_profile_switch_is_passthrough_when_uncalibrated(server, processor):
+    status, body = post(
+        server,
+        "/api/color/profile",
+        {"selection": {"time_of_day": "day", "lighting": "large"}},
+    )
+    assert status == 200 and body["ok"]
+    assert body["calibrated"] is False
+    assert body["mode"] == "none"
+    assert processor.config.color.profiles.selection["time_of_day"] == "day"
+    assert processor.config.color.matrix_enabled is False
+
+
 def test_config_can_be_saved_to_yaml(server, tmp_path):
     target = tmp_path / "saved.yaml"
     status, body = post(server, "/api/config/save", {"path": str(target)})

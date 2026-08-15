@@ -1047,6 +1047,138 @@ function renderColorCal(status) {
   }
 }
 
+let colorProfileBusy = false;
+let colorProfileDimSig = '';
+
+function profileDimSignature(p) {
+  return (p.dimensions || [])
+    .map((d) => `${d.id}:${(d.options || []).map((o) => o.id).join(',')}`)
+    .join('|');
+}
+
+function currentProfileSelection() {
+  const root = $('color-profile-panel');
+  if (!root) return {};
+  const selection = {};
+  root.querySelectorAll('[data-profile-dim]').forEach((el) => {
+    selection[el.getAttribute('data-profile-dim')] = el.value;
+  });
+  return selection;
+}
+
+async function postColorProfile(selection) {
+  colorProfileBusy = true;
+  try {
+    const result = await api('/api/color/profile', { selection });
+    renderColorProfiles(result);
+    if (result.config) applyConfig(result.config, { skipFocused: true });
+    const mode = result.calibrated ? 'calibrated' : 'no calibration (passthrough)';
+    toast(`${result.label || 'Profile'} — ${mode}`, result.calibrated ? 'ok' : '');
+    return result;
+  } finally {
+    colorProfileBusy = false;
+  }
+}
+
+function renderColorProfiles(p) {
+  const root = $('color-profile-panel');
+  if (!root || !p) return;
+  const sig = profileDimSignature(p);
+  if (sig !== colorProfileDimSig) {
+    colorProfileDimSig = sig;
+    fillColorProfileStructure(p);
+  }
+  const sel = p.selection || {};
+  if (!colorProfileBusy) {
+    Object.entries(sel).forEach(([id, value]) => {
+      const el = $(`color-profile-${id}`);
+      if (el && document.activeElement !== el) el.value = value;
+    });
+  }
+  const meta = $('color-profile-meta');
+  if (meta) {
+    const mode = p.calibrated ? 'calibrated' : 'no calibration (passthrough)';
+    meta.textContent = `${p.label || '—'} · ${mode} · ${p.calibrated_count || 0}/${p.combo_count || 0} combos`;
+  }
+  const chips = $('color-profile-combos');
+  if (chips) {
+    chips.innerHTML = (p.combos || []).map((combo) => {
+      const cls = [
+        'profile-chip',
+        combo.calibrated ? 'calibrated' : '',
+        combo.active ? 'active' : '',
+      ].filter(Boolean).join(' ');
+      const title = combo.calibrated ? 'Calibrated' : 'Not calibrated — passthrough';
+      return `<button type="button" class="${cls}" data-profile-key="${combo.key}" title="${title}"><span class="dot"></span>${combo.label}</button>`;
+    }).join('');
+  }
+}
+
+function fillColorProfileStructure(p) {
+  const root = $('color-profile-panel');
+  if (!root) return;
+  const dims = p.dimensions || [];
+  const sel = p.selection || {};
+  const selects = dims.map((d) => {
+    const options = (d.options || []).map((o) => {
+      const chosen = sel[d.id] === o.id ? ' selected' : '';
+      return `<option value="${o.id}"${chosen}>${o.label || o.id}</option>`;
+    }).join('');
+    return `<div class="control">
+      <label for="color-profile-${d.id}">${d.label || d.id}</label>
+      <select id="color-profile-${d.id}" data-profile-dim="${d.id}">${options}</select>
+    </div>`;
+  }).join('');
+  const html = `${selects}
+    <p class="source-meta" id="color-profile-meta"></p>
+    <div class="profile-combos" id="color-profile-combos"></div>`;
+  const section = root.querySelector('.control-group') || root;
+  const head = section.querySelector('h3');
+  const hint = section.querySelector('.hint');
+  if (!head || !hint) return;
+  section.querySelectorAll('.control, .source-meta, .profile-combos').forEach((el) => el.remove());
+  hint.insertAdjacentHTML('afterend', html);
+}
+
+async function buildColorProfilePanel() {
+  const root = $('color-profile-panel');
+  if (!root) return;
+  root.innerHTML = '';
+  const section = document.createElement('div');
+  section.className = 'control-group';
+  section.innerHTML = `
+    <h3>Environment profile</h3>
+    <p class="hint">Pick the room as it is now, then run Colour calibrate. A combo
+    without a saved matrix is passthrough (no software colour correction).</p>
+    <p class="source-meta" id="color-profile-meta">idle</p>
+    <div class="profile-combos" id="color-profile-combos"></div>`;
+  root.appendChild(section);
+  root.addEventListener('change', async (ev) => {
+    const dim = ev.target?.getAttribute?.('data-profile-dim');
+    if (!dim) return;
+    try {
+      await postColorProfile(currentProfileSelection());
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  root.addEventListener('click', async (ev) => {
+    const btn = ev.target?.closest?.('[data-profile-key]');
+    if (!btn) return;
+    const key = btn.getAttribute('data-profile-key');
+    const parts = {};
+    String(key || '').split('|').forEach((chunk) => {
+      const idx = chunk.indexOf('=');
+      if (idx > 0) parts[chunk.slice(0, idx)] = chunk.slice(idx + 1);
+    });
+    try {
+      await postColorProfile(parts);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+}
+
 async function buildColorCalPanel() {
   const root = $('color-cal-panel');
   if (!root) return;
@@ -1056,10 +1188,9 @@ async function buildColorCalPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Colour calibrate</h3>
-    <p class="hint">Open the patch page fullscreen on the HDMI TV. <strong>Start</strong>
-    turns on Lumos Cam cal mode (AF/AE/AWB locked) when that path is running.
-    <strong>Capture</strong> replaces a colour in place. Solve, then Apply &amp; Save.
-    Abort/Apply restore phone auto.</p>
+    <p class="hint">Saves into the <strong>active environment profile</strong> above.
+    Open the patch page fullscreen on the HDMI TV. Freeze AE/AWB on mid-grey first.
+    Uncalibrated combos stay passthrough (no matrix).</p>
     <div class="control">
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-manual" value="manual" checked> Manual capture</label>
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-auto" value="auto"> Auto-run (timed settle)</label>
@@ -1877,6 +2008,9 @@ async function refresh() {
   if (status.color_calibration) {
     renderColorCal(status.color_calibration);
   }
+  if (status.color_profiles) {
+    renderColorProfiles(status.color_profiles);
+  }
 
   // Adopt the pipeline's corners only while the user is not editing them.
   if (!picker.dirty && picker.dragging < 0 && state.corners && state.frame_size) {
@@ -1942,6 +2076,7 @@ async function init() {
   await buildSourcePanel();
   await buildLumosCamPanel();
   await buildScrcpyPanel();
+  await buildColorProfilePanel();
   await buildColorCalPanel();
   await buildCameraControls();
   setupPicker();

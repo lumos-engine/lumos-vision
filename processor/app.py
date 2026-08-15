@@ -34,6 +34,15 @@ from processor.pipeline.registry import apply_config as apply_pipeline_config
 from processor.pipeline.registry import build_pipeline
 from processor.stages.boundary import BoundaryStage
 from processor.utils.color_calibrate import ColorCalibrationSession, iso_now
+from processor.utils.color_profiles import (
+    bind_config,
+    profile_status,
+    profiles_touch_selection,
+    resolve_selection,
+    slot_from_solution,
+    slot_key,
+    store_slot_updates,
+)
 from processor.utils.hyperhdr_leds import set_led_device
 from processor.utils.logging import get_logger
 from processor.utils.loopback import ensure_processor_loopbacks
@@ -150,11 +159,11 @@ def _updates_require_source_recreate(updates: dict[str, Any]) -> bool:
 
 class Processor:
     def __init__(self, config: Config, config_path: str | Path | None = None):
-        self.config = config
+        self.config = bind_config(config)
         self.config_path = Path(config_path) if config_path else None
 
         self.state = PipelineState()
-        self.pipeline: Pipeline = build_pipeline(config, self.state)
+        self.pipeline: Pipeline = build_pipeline(self.config, self.state)
         self.source: FrameSource | None = None
         self.sinks: SinkGroup | None = None
         self.brokers = BrokerHub()
@@ -748,6 +757,8 @@ class Processor:
 
         def apply() -> dict[str, Any]:
             new_config = apply_updates(self.config, updates)
+            if profiles_touch_selection(updates):
+                new_config = bind_config(new_config)
             old_lumos = self.config.lumos_cam
             self.config = new_config
             apply_pipeline_config(self.pipeline, new_config)
@@ -1392,6 +1403,7 @@ class Processor:
                 "ok": True,
                 **status,
                 "lumos_cal_mode": bool(lumos_cal.get("ok") and not lumos_cal.get("skipped")),
+                "color_profiles": profile_status(self.config.color),
             }
 
         return self.call(run)
@@ -1400,10 +1412,57 @@ class Processor:
         def run() -> dict[str, Any]:
             status = self._color_cal.abort()
             self._set_lumos_cal_mode(False)
+            self._sync_color_profile_unlocked()
             log.info("Colour calibration aborted")
-            return {"ok": True, **status}
+            return {
+                "ok": True,
+                **status,
+                "color_profiles": profile_status(self.config.color),
+            }
 
         return self.call(run)
+
+    def _sync_color_profile_unlocked(self) -> None:
+        self.config = bind_config(self.config)
+        apply_pipeline_config(self.pipeline, self.config)
+
+    def set_color_profile(
+        self,
+        selection: dict[str, str] | None = None,
+        *,
+        save: bool = False,
+    ) -> dict[str, Any]:
+        """Switch the active environment combo; uncalibrated combos are passthrough."""
+
+        def run() -> dict[str, Any]:
+            try:
+                resolved = resolve_selection(self.config.color.profiles, selection)
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+            updates = {
+                f"color.profiles.selection.{key}": value
+                for key, value in resolved.items()
+            }
+            self.config = apply_updates(self.config, updates)
+            self._sync_color_profile_unlocked()
+            saved_path = str(self.save()) if save else None
+            status = profile_status(self.config.color)
+            log.info(
+                "Colour profile %s (%s)",
+                status["label"],
+                "calibrated" if status["calibrated"] else "no calibration",
+            )
+            return {
+                "ok": True,
+                **status,
+                "saved": saved_path,
+                "config": config_to_dict(self.config),
+            }
+
+        return self.call(run)
+
+    def color_profile_status(self) -> dict[str, Any]:
+        return profile_status(self.config.color)
 
     def capture_color_calibration(self) -> dict[str, Any]:
         def run() -> dict[str, Any]:
@@ -1470,6 +1529,8 @@ class Processor:
             br, bg, bb = solution.black_level_rgb()
             matrix = solution.matrix_flat()
             black_enabled = any(v > 0.5 for v in solution.black_level_bgr)
+            slot = slot_from_solution(solution)
+            key = slot_key(self.config.color.profiles)
             updates = {
                 "color.white_balance": "manual",
                 "color.gains.r": r,
@@ -1493,11 +1554,13 @@ class Processor:
                 "color.calibration.black_level.b": bb,
                 "color.calibration.notes": list(solution.notes),
             }
+            updates.update(store_slot_updates(key, slot))
             self.config = apply_updates(self.config, updates)
             apply_pipeline_config(self.pipeline, self.config)
             saved_path = str(self.save()) if save else None
             log.info(
-                "Colour calibration applied (3×3 matrix, black R%.1f G%.1f B%.1f, gamma %.3f)%s",
+                "Colour calibration applied to %s (3×3 matrix, black R%.1f G%.1f B%.1f, gamma %.3f)%s",
+                key,
                 br,
                 bg,
                 bb,
@@ -1512,6 +1575,7 @@ class Processor:
                 "saved": saved_path,
                 "calibration": self._color_cal.status(),
                 "lumos_cal_mode": False,
+                "color_profiles": profile_status(self.config.color),
             }
 
         return self.call(run)
@@ -1625,6 +1689,7 @@ class Processor:
             "scrcpy": self._scrcpy.status(self.config.scrcpy).as_dict(),
             "lumos_cam": self._lumos.status(self.config.lumos_cam).as_dict(),
             "color_calibration": self._color_cal.status(),
+            "color_profiles": profile_status(self.config.color),
         }
 
     def available_views(self) -> list[str]:

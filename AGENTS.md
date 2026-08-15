@@ -37,6 +37,7 @@ tools/          # detection bench, etc.
 packaging/      # systemd unit (screen-sight.service)
 config.example.yaml
 docs/lumos-cam-api.md   # shared with sibling repo lumos-cam (protocol v1)
+.agents/skills/         # project skills (colour profiles, …)
 ```
 
 Android Camera2 capture lives in a **separate repo** (`lumos-cam`, sibling

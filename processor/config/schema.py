@@ -240,6 +240,72 @@ class ColorCalibrationInfo:
 
 
 @dataclass
+class ProfileOption:
+    id: str = ""
+    label: str = ""
+
+
+@dataclass
+class ProfileDimension:
+    """One axis of an environment profile (e.g. time of day, room lights)."""
+
+    id: str = ""
+    label: str = ""
+    options: list[ProfileOption] = field(default_factory=list)
+
+
+def _default_color_profile_dimensions() -> list[ProfileDimension]:
+    from processor.utils.color_profiles import default_profile_dimensions
+
+    return default_profile_dimensions()
+
+
+def _default_color_profile_selection() -> dict[str, str]:
+    from processor.utils.color_profiles import default_profile_selection
+
+    return default_profile_selection()
+
+
+@dataclass
+class ColorProfileSlot:
+    """Stored correction for one environment combo.
+
+    Empty ``calibrated_at`` means this combo has not been measured yet; the
+    pipeline then runs in no-calibration (passthrough) mode.
+    """
+
+    calibrated_at: str = ""
+    white_balance: str = "off"
+    gains: GainsConfig = field(default_factory=GainsConfig)
+    matrix_enabled: bool = False
+    matrix: list[float] = field(
+        default_factory=lambda: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    )
+    black_level_enabled: bool = False
+    black_level: BlackLevelConfig = field(default_factory=BlackLevelConfig)
+    gamma: float = 1.0
+    saturation: float = 1.0
+    notes: list[str] = field(default_factory=list)
+    patch_means_bgr: dict[str, list[float]] = field(default_factory=dict)
+
+
+@dataclass
+class ColorProfilesConfig:
+    """Cartesian environment profiles for colour calibration.
+
+    Add a dimension (or an option on an existing one) without changing the
+    live colour stage — see ``.agents/skills/color-profiles/SKILL.md``.
+    """
+
+    dimensions: list[ProfileDimension] = field(
+        default_factory=_default_color_profile_dimensions
+    )
+    selection: dict[str, str] = field(default_factory=_default_color_profile_selection)
+    #: Keyed ``dim=option|dim=option`` in ``dimensions`` order.
+    slots: dict[str, ColorProfileSlot] = field(default_factory=dict)
+
+
+@dataclass
 class ColorConfig:
     enabled: bool = True
     #: off | auto (grey-world) | manual (use ``gains``)
@@ -263,6 +329,7 @@ class ColorConfig:
     contrast: float = 1.0
     saturation: float = 1.0
     calibration: ColorCalibrationInfo = field(default_factory=ColorCalibrationInfo)
+    profiles: ColorProfilesConfig = field(default_factory=ColorProfilesConfig)
 
 
 @dataclass
@@ -524,10 +591,17 @@ class Config:
     lumos_cam: LumosCamConfig = field(default_factory=LumosCamConfig)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "Config":
+    def from_dict(
+        cls, data: dict[str, Any] | None, *, bind_profiles: bool = True
+    ) -> "Config":
         raw = copy.deepcopy(data or {})
         normalize_capture_dict(raw)
-        return build_dataclass(cls, raw)
+        cfg = build_dataclass(cls, raw)
+        if bind_profiles:
+            from processor.utils.color_profiles import bind_config
+
+            return bind_config(cfg)
+        return cfg
 
 
 def _legacy_loopback_device(device: str) -> bool:

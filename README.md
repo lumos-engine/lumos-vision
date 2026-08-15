@@ -83,11 +83,12 @@ For **cinema / letterboxed** content: enable **Black bars**, raise **Darkness
 threshold** to ~50–70 until **Result → output** has no bars, then point
 HyperHDR at that clean frame.
 
-**Colour calibrate** (occasional, HDMI TV): mark corners first, open
-`/calibrate/display` fullscreen on the HDMI output, keep the wizard on your
-other display, then **Colour calibrate → Start**. Screen Sight cycles black,
-white, three greys, and R/G/B, measures the panel centre, and proposes manual
-RGB gains + gamma. Use **Apply & Save** to keep them in `config.yaml`.
+**Colour calibrate** (occasional, HDMI TV): in the wizard pick the
+**Environment profile** (day/night × room lights) first, freeze phone AE/AWB
+on mid-grey, then open `/calibrate/display` fullscreen on the HDMI output and
+**Colour calibrate → Start**. Apply & Save stores the matrix in that combo.
+Uncalibrated combos stay passthrough (no software correction). Add more axes
+via `.agents/skills/color-profiles/SKILL.md`.
 
 If ports are busy from a previous run:
 
