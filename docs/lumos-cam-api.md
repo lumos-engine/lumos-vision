@@ -167,7 +167,7 @@ or absolute values:
 {"ui_rotation": 90, "frame_rotation": 180, "flip_h": true, "flip_v": false}
 ```
 
-Omitted keys unchanged. `ui_rotation` only moves the on-phone control chrome
-(camera stays landscape). `frame_rotation` / flips apply to the preview and
-to `orientation` / `flip_*` that the host uses for ffmpeg.
+Omitted keys unchanged. The on-phone UI is always portrait. `orientation`
+follows how the phone is held (plus `frame_rotation`). Flips apply to the
+preview and to the host ffmpeg filter.
 

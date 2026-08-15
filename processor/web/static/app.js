@@ -343,7 +343,6 @@ function syncLumosMeta() {
     `AWB ${lumosPanelState.awb}`,
   ];
   if (lumosPanelState.cal_mode) bits.push('cal mode');
-  bits.push(`UI ${Number(lumosPanelState.ui_rotation || 0)}°`);
   bits.push(`frame ${Number(lumosPanelState.frame_rotation || 0)}°`);
   if (lumosPanelState.flip_h) bits.push('flip H');
   if (lumosPanelState.flip_v) bits.push('flip V');
@@ -459,13 +458,11 @@ async function buildLumosCamPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Lumos Cam</h3>
-    <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1.12). Leave the
-    app open on the phone. Wireless adb serial looks like
-    <code>192.168.1.243:37847</code> (the port changes). No USB device — frames
-    come from an ffmpeg pipe. Live zoom, pan, and AF/AE/AWB locks. Colour-cal
-    Start turns on cal mode. <strong>UI ⟳</strong> only moves the on-phone
-    controls (camera stays landscape). <strong>Frame ⟳</strong> / Flip rotate
-    or mirror the preview and the host feed.</p>
+    <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1.13). Leave the
+    app open on the phone. The phone UI stays portrait; the preview and host
+    feed follow how you hold the phone. <strong>Frame ⟳</strong> / Flip are
+    extra offsets on top of that. Wireless adb serial looks like
+    <code>192.168.1.243:37847</code> (the port changes).</p>
     <div class="control">
       <label for="lumos-serial">ADB serial (optional)</label>
       <input id="lumos-serial" type="text" spellcheck="false" placeholder="452ee42b0506">
@@ -516,7 +513,6 @@ async function buildLumosCamPanel() {
       <button type="button" class="btn" id="btn-lumos-pan-up" title="Pan up">↑</button>
       <button type="button" class="btn" id="btn-lumos-pan-down" title="Pan down">↓</button>
       <button type="button" class="btn" id="btn-lumos-pan-center">Center</button>
-      <button type="button" class="btn" id="btn-lumos-ui-rotate">UI ⟳</button>
       <button type="button" class="btn" id="btn-lumos-frame-rotate">Frame ⟳</button>
       <button type="button" class="btn" id="btn-lumos-flip-h">Flip H</button>
       <button type="button" class="btn" id="btn-lumos-flip-v">Flip V</button>
@@ -595,7 +591,6 @@ async function buildLumosCamPanel() {
       }
     });
   };
-  liveDisplay('btn-lumos-ui-rotate', 'ui_rotate', 'UI rotated');
   liveDisplay('btn-lumos-frame-rotate', 'frame_rotate', 'Frame rotated');
   liveDisplay('btn-lumos-flip-h', 'flip_h', 'Flip H');
   liveDisplay('btn-lumos-flip-v', 'flip_v', 'Flip V');
