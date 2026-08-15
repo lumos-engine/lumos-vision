@@ -167,7 +167,10 @@ or absolute values:
 {"ui_rotation": 90, "frame_rotation": 180, "flip_h": true, "flip_v": false}
 ```
 
-Omitted keys unchanged. The on-phone UI is always portrait. `orientation`
-follows how the phone is held (plus `frame_rotation`). Flips apply to the
-preview and to the host ffmpeg filter.
+Omitted keys unchanged. The on-phone UI is always portrait. The preview
+letterboxes the camera buffer (typically 16:9) into that layout; only
+`frame_rotation` 90/270 swaps the preview to 9:16. `orientation` still
+follows how the phone is held (plus `frame_rotation`) so the host ffmpeg
+filter can keep the stream upright. Flips apply to the preview and to the
+host ffmpeg filter.
 
