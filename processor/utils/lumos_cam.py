@@ -213,10 +213,9 @@ def resolve_ffmpeg(configured: str) -> str:
     return found or text
 
 
-# Long-edge cap for the ffmpeg MJPEG pipe. 1080p JPEG encode on a typical
-# host is ~7 fps, so the h264 input queue grows and the wizard plays in
-# slow motion. Detection already downscales to detect_width (480).
-PIPE_MAX_EDGE = 1280
+# 0 = send the phone's requested size. A 1280 cap was for the old H.264→MJPEG
+# ffmpeg transcode (~7 fps at 1080p). Camera2 JPEG drop-old keeps 1080p live.
+PIPE_MAX_EDGE = 0
 
 
 def build_ffmpeg_command(
@@ -481,13 +480,13 @@ class LumosCamClient:
         return self.request("POST", "/display", fields)
 
     def set_stream(self, cfg: LumosCamConfig, *, enabled: bool = True) -> dict[str, Any]:
-        width, height = output_frame_size(cfg, 0)
+        width, height = parse_camera_size(cfg.camera_size)
         return self.request(
             "POST",
             "/stream",
             {
                 "enabled": enabled,
-                "codec": (cfg.codec or "h264").strip().lower(),
+                "codec": (cfg.codec or "mjpeg").strip().lower(),
                 "width": width,
                 "height": height,
                 "fps": int(cfg.camera_fps),
