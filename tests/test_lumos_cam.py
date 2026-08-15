@@ -174,6 +174,28 @@ def test_step_lumos_zoom_and_pan():
     assert pan_x == 0.0 and pan_y == 0.0
 
 
+def test_phone_lan_ipv4_from_wireless_serial():
+    from processor.utils.lumos_cam import phone_lan_ipv4
+
+    cfg = LumosCamConfig(serial="192.168.1.243:37847")
+    assert phone_lan_ipv4(cfg) == "192.168.1.243"
+
+
+def test_phone_lan_ipv4_parses_adb_wlan(monkeypatch):
+    from processor.utils.lumos_cam import phone_lan_ipv4
+
+    def fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "2: wlan0    inet 192.168.1.243/24 brd 192.168.1.255 scope global wlan0\n"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
+    assert phone_lan_ipv4(LumosCamConfig(serial="452ee42b0506")) == "192.168.1.243"
+
+
 def test_config_round_trip_includes_lumos_cam():
     config = Config.from_dict(
         {
@@ -187,6 +209,7 @@ def test_config_round_trip_includes_lumos_cam():
     assert config.lumos_cam.enabled is True
     assert config.lumos_cam.camera_zoom == 1.5
     assert config.lumos_cam.af == "locked"
+    assert config.lumos_cam.codec == "mjpeg"
     data = config_to_dict(config)
     assert data["lumos_cam"]["package"] == "dev.lumos.cam"
     again = Config.from_dict(data)
@@ -267,6 +290,7 @@ def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
 
     cfg = LumosCamConfig(
         enabled=True,
+        codec="h264",
         startup_timeout_sec=1.0,
         ffmpeg="/usr/bin/ffmpeg",
     )
@@ -320,11 +344,12 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
     mgr.client.set_stream = lambda cfg, enabled=True: fake_status()
 
     result = mgr.start(
-        LumosCamConfig(
-            enabled=True,
-            startup_timeout_sec=0.6,
-            ffmpeg="/usr/bin/ffmpeg",
-        )
+            LumosCamConfig(
+                enabled=True,
+                codec="h264",
+                startup_timeout_sec=0.6,
+                ffmpeg="/usr/bin/ffmpeg",
+            )
     )
     assert result["ok"] is True
     assert result["running"] is True
@@ -377,11 +402,12 @@ def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
     mgr.client.set_stream = lambda cfg, enabled=True: fake_status()
 
     result = mgr.start(
-        LumosCamConfig(
-            enabled=True,
-            startup_timeout_sec=0.6,
-            ffmpeg="/usr/bin/ffmpeg",
-        )
+            LumosCamConfig(
+                enabled=True,
+                codec="h264",
+                startup_timeout_sec=0.6,
+                ffmpeg="/usr/bin/ffmpeg",
+            )
     )
     assert result["ok"] is True
     assert result["running"] is True

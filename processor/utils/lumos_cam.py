@@ -12,9 +12,11 @@ import http.client
 import json
 import math
 import os
+import re
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -139,6 +141,28 @@ def resolve_adb_serial(cfg: LumosCamConfig) -> str:
             log.info("adb serial %s not connected; using %s", wanted, devices[0])
         return devices[0]
     return wanted
+
+
+_WLAN_INET = re.compile(r"inet\s+(\d{1,3}(?:\.\d{1,3}){3})")
+
+
+def phone_lan_ipv4(cfg: LumosCamConfig) -> str:
+    """Wi-Fi address of the phone, for a direct TCP video path that skips adb."""
+    serial = (cfg.serial or "").strip()
+    if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}:\d+$", serial):
+        return serial.rsplit(":", 1)[0]
+    try:
+        result = subprocess.run(
+            adb_argv(cfg, "shell", "ip", "-o", "-4", "addr", "show", "wlan0"),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    match = _WLAN_INET.search(result.stdout or "")
+    return match.group(1) if match else ""
 
 
 def adb_argv(cfg: LumosCamConfig, *args: str) -> list[str]:
@@ -332,6 +356,23 @@ def _rotation_filter(degrees: int) -> str:
     return ""
 
 
+def _apply_output_transform(
+    image: np.ndarray, rotation: int, flip_h: bool, flip_v: bool
+) -> np.ndarray:
+    turn = int(rotation) % 360
+    if turn == 90:
+        image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+    elif turn == 180:
+        image = cv2.rotate(image, cv2.ROTATE_180)
+    elif turn == 270:
+        image = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if flip_h:
+        image = cv2.flip(image, 1)
+    if flip_v:
+        image = cv2.flip(image, 0)
+    return image
+
+
 def _phone_transform(phone: dict[str, Any]) -> tuple[int, bool, bool]:
     return (
         int(phone.get("orientation") or 0) % 360,
@@ -477,9 +518,19 @@ class LumosCamManager:
         self._stderr_tail: list[str] = []
         self._logged_first = False
         self._stream_transform: tuple[int, bool, bool] = (0, False, False)
+        self._sock: socket.socket | None = None
+        self._host_transform = False
 
     @property
     def running(self) -> bool:
+        sock = self._sock
+        if sock is not None:
+            try:
+                sock.getpeername()
+                return True
+            except OSError:
+                self._sock = None
+                return False
         proc = self._proc
         if proc is None:
             return False
@@ -592,7 +643,79 @@ class LumosCamManager:
             log.error("lumos-cam control: %s", exc)
             return {"ok": False, "error": self._last_error, "running": False}
 
+        codec = (cfg.codec or "mjpeg").strip().lower()
+        if codec == "mjpeg":
+            return self._start_jpeg_socket(cfg, phone)
         return self._start_ffmpeg(cfg, phone)
+
+    def _close_sock(self) -> None:
+        sock, self._sock = self._sock, None
+        if sock is None:
+            return
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+    def _connect_video(self, cfg: LumosCamConfig) -> socket.socket | None:
+        candidates: list[tuple[str, int, str]] = []
+        lan = phone_lan_ipv4(cfg)
+        if lan:
+            candidates.append((lan, int(cfg.video_device_port), "lan"))
+        candidates.append(("127.0.0.1", int(cfg.video_host_port), "adb"))
+        last = "video connect failed"
+        for host, port, via in candidates:
+            try:
+                sock = socket.create_connection((host, port), timeout=2.0)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
+                sock.setblocking(False)
+                log.info("Lumos Cam video %s:%s via %s", host, port, via)
+                return sock
+            except OSError as exc:
+                last = f"{host}:{port} ({via}): {exc}"
+                log.warning("Lumos Cam video %s", last)
+        self._last_error = last
+        return None
+
+    def _start_jpeg_socket(
+        self, cfg: LumosCamConfig, phone: dict[str, Any], *, wait: bool = True
+    ) -> dict[str, Any]:
+        """Read Camera2 JPEGs ourselves so ffmpeg cannot queue H.264/TCP."""
+        self._kill_ffmpeg_unlocked()
+        self._close_sock()
+        rotation, flip_h, flip_v = _phone_transform(phone)
+        self._stream_transform = (rotation, flip_h, flip_v)
+        self._host_transform = True
+        self._frame_wh = output_frame_size(cfg, rotation)
+        self._pending = b""
+        self._held_frame = None
+        self._logged_first = False
+        sock = self._connect_video(cfg)
+        if sock is None:
+            return {"ok": False, "error": self._last_error, "running": False}
+        self._sock = sock
+        self._command = ["socket", f"{sock.getpeername()[0]}:{sock.getpeername()[1]}"]
+        ready = self._wait_until_ready(cfg) if wait else True
+        if not self.running:
+            return {"ok": False, "error": self._last_error or "video socket closed", "running": False}
+        if not ready:
+            log.warning(
+                "lumos-cam: no JPEG yet after %.0fs — leaving socket open",
+                float(cfg.startup_timeout_sec),
+            )
+            return {
+                "ok": True,
+                "running": True,
+                "ready": False,
+                "command": list(self._command),
+            }
+        return {
+            "ok": True,
+            "running": True,
+            "ready": True,
+            "command": list(self._command),
+        }
 
     def _start_ffmpeg(
         self,
@@ -601,6 +724,8 @@ class LumosCamManager:
         *,
         wait: bool = True,
     ) -> dict[str, Any]:
+        self._close_sock()
+        self._host_transform = False
         self._ffmpeg = resolve_ffmpeg(cfg.ffmpeg)
         rotation, flip_h, flip_v = _phone_transform(phone)
         self._stream_transform = (rotation, flip_h, flip_v)
@@ -762,6 +887,7 @@ class LumosCamManager:
             except Exception:
                 pass
         self._drop_forwards()
+        self._close_sock()
         self._kill_ffmpeg_unlocked()
         return {"ok": True, "running": False}
 
@@ -813,6 +939,9 @@ class LumosCamManager:
         return self._respawn_ffmpeg(cfg, phone)
 
     def _respawn_ffmpeg(self, cfg: LumosCamConfig, phone: dict[str, Any]) -> dict[str, Any]:
+        if self._sock is not None:
+            self._stream_transform = _phone_transform(phone)
+            return {"ok": True, "running": True, "ready": True}
         self._kill_ffmpeg_unlocked()
         return self._start_ffmpeg(cfg, phone, wait=False)
 
@@ -947,18 +1076,29 @@ class LumosCamManager:
     def frame_size(self) -> tuple[int, int]:
         return self._frame_wh
 
-    def read_bgr(self, timeout: float = 0.25) -> np.ndarray | None:
-        """Read the newest JPEG from ffmpeg stdout and decode it to BGR."""
-        if self._held_frame is not None:
-            frame, self._held_frame = self._held_frame, None
-            return frame
+    def _video_fd(self) -> int | None:
+        sock = self._sock
+        if sock is not None:
+            try:
+                return sock.fileno()
+            except OSError:
+                return None
         proc = self._proc
         stdout = None if proc is None else proc.stdout
         if proc is None or stdout is None or proc.poll() is not None:
             return None
         try:
-            fd = stdout.fileno()
+            return stdout.fileno()
         except Exception:
+            return None
+
+    def read_bgr(self, timeout: float = 0.25) -> np.ndarray | None:
+        """Read the newest JPEG and decode it to BGR."""
+        if self._held_frame is not None:
+            frame, self._held_frame = self._held_frame, None
+            return frame
+        fd = self._video_fd()
+        if fd is None:
             return None
         deadline = time.monotonic() + max(0.0, timeout)
         buf = bytearray(self._pending)
@@ -1008,6 +1148,9 @@ class LumosCamManager:
         image = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             return None
+        if self._host_transform:
+            rot, flip_h, flip_v = self._stream_transform
+            image = _apply_output_transform(image, rot, flip_h, flip_v)
         if not self._logged_first:
             self._logged_first = True
             height, width = image.shape[:2]
@@ -1047,8 +1190,9 @@ class LumosCamManager:
                 self._phone = {**self._phone, **st}
             except RuntimeError:
                 st = {}
-            stdout = None if self._proc is None else self._proc.stdout
-            if stdout is None:
+            if self._sock is None and (
+                self._proc is None or self._proc.stdout is None
+            ):
                 return True
             # Drain from the first select: waiting on phone bytes_sent while
             # ffmpeg's 64KiB stdout pipe is full deadlocks the decoder.
@@ -1094,6 +1238,7 @@ __all__ = [
     "build_ffmpeg_command",
     "output_frame_size",
     "package_installed",
+    "phone_lan_ipv4",
     "step_lumos_pan",
     "step_lumos_zoom",
 ]

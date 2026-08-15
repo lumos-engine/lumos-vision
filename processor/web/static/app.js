@@ -278,7 +278,7 @@ let lumosPanelState = {
   camera_id: '0',
   camera_size: '1280x720',
   camera_fps: 30,
-  codec: 'h264',
+  codec: 'mjpeg',
   camera_zoom: 1,
   pan_x: 0,
   pan_y: 0,
@@ -319,7 +319,7 @@ function applyLumosPanelFromConfig(config) {
     camera_id: lc.camera_id || '0',
     camera_size: lc.camera_size || '1280x720',
     camera_fps: lc.camera_fps || 30,
-    codec: lc.codec || 'h264',
+    codec: lc.codec || 'mjpeg',
     camera_zoom: Number(lc.camera_zoom || 1),
     pan_x: Number(lc.pan_x || 0),
     pan_y: Number(lc.pan_y || 0),
@@ -396,7 +396,7 @@ function readLumosFields() {
     camera_id: ($('lumos-camera-id')?.value || '0').trim(),
     camera_size: ($('lumos-camera-size')?.value || '1280x720').trim(),
     camera_fps: Number($('lumos-camera-fps')?.value || 30),
-    codec: ($('lumos-codec')?.value || 'h264').trim(),
+    codec: ($('lumos-codec')?.value || 'mjpeg').trim(),
     camera_zoom: Number($('lumos-zoom')?.value || 1),
     pan_x: Number(lumosPanelState.pan_x || 0),
     pan_y: Number(lumosPanelState.pan_y || 0),
@@ -482,11 +482,11 @@ async function buildLumosCamPanel() {
     <div class="control">
       <label for="lumos-codec">Codec</label>
       <select id="lumos-codec">
-        <option value="h264">h264 (recommended)</option>
-        <option value="mjpeg">mjpeg</option>
+        <option value="mjpeg">mjpeg (low latency)</option>
+        <option value="h264">h264</option>
       </select>
-      <p class="hint">Use h264. Many phones never attach an MJPEG encoder
-      (<code>encoder_attached=false</code>, no frames).</p>
+      <p class="hint">mjpeg uses Camera2 JPEG (drop-old, no H.264 queue).
+      Prefer it for ambient lighting. h264 is the fallback.</p>
     </div>
     <div class="control">
       <label for="lumos-zoom">Zoom (<span id="lumos-zoom-label">1.00</span>×)</label>
