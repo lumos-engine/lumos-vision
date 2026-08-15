@@ -228,9 +228,9 @@ def build_ffmpeg_command(
         "-use_wallclock_as_timestamps",
         "1",
         "-analyzeduration",
-        "2000000",
+        "300000",
         "-probesize",
-        "2000000",
+        "65536",
         "-f",
         demux,
         "-framerate",
@@ -240,12 +240,17 @@ def build_ffmpeg_command(
         "-an",
         "-fps_mode",
         "passthrough",
+        "-muxdelay",
+        "0",
+        "-muxpreload",
+        "0",
     ]
     filters: list[str] = []
     rot = _rotation_filter(rotation)
     if rot:
         filters.append(rot)
-    if max_edge > 0:
+    src_w, src_h = output_frame_size(cfg, rotation, max_edge=0)
+    if max_edge > 0 and max(src_w, src_h) > int(max_edge):
         filters.append(
             f"scale={int(max_edge)}:{int(max_edge)}:force_original_aspect_ratio=decrease"
         )
@@ -435,7 +440,7 @@ class LumosCamClient:
         return self.request("POST", "/display", fields)
 
     def set_stream(self, cfg: LumosCamConfig, *, enabled: bool = True) -> dict[str, Any]:
-        width, height = parse_camera_size(cfg.camera_size)
+        width, height = output_frame_size(cfg, 0)
         return self.request(
             "POST",
             "/stream",
