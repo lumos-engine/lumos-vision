@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 from processor.camera.devices import is_v4l2loopback
@@ -57,33 +58,83 @@ def _path_ready(path: str) -> bool:
     return True
 
 
+def _modprobe_bin() -> str:
+    for candidate in ("/usr/sbin/modprobe", "/sbin/modprobe"):
+        if os.path.isfile(candidate):
+            return candidate
+    return shutil.which("modprobe") or "modprobe"
+
+
+def loopback_helper() -> str:
+    """PATH, packaged install, or the checkout copy under ``packaging/``."""
+    found = shutil.which("screen-sight-loopback")
+    if found:
+        return found
+    here = Path(__file__).resolve()
+    candidates = (
+        Path("/usr/lib/screen-sight/screen-sight-loopback"),
+        here.parents[2] / "packaging" / "screen-sight-loopback",
+    )
+    for path in candidates:
+        try:
+            if path.is_file():
+                return str(path)
+        except OSError:
+            continue
+    return ""
+
+
+def _sudo(args: list[str], *, timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
+    """Run ``args`` with ``sudo -n`` unless we are already root."""
+    if os.geteuid() == 0:
+        cmd = list(args)
+    else:
+        sudo = shutil.which("sudo") or "sudo"
+        cmd = [sudo, "-n", *args]
+    try:
+        result = _run(cmd, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.warning("%s failed: %s", " ".join(cmd), exc)
+        return subprocess.CompletedProcess(cmd, 1, "", str(exc))
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        log.warning("%s: %s", " ".join(cmd), err or f"exit {result.returncode}")
+    return result
+
+
 def _ctl_add(path: str, label: str) -> bool:
     binary = shutil.which("v4l2loopback-ctl")
     if not binary:
         return False
+    existed = os.path.exists(path)
     nr = video_nr(path)
     attempts = [
-        [binary, "add", "--name", label, "--exclusive-caps", "1", path],
-        [binary, "add", "-n", label, path],
+        ["add", "--name", label, "--exclusive-caps", "1", path],
+        ["add", "-n", label, path],
     ]
     if nr is not None:
-        attempts.append([binary, "add", "--name", label, str(nr)])
-    for cmd in attempts:
-        try:
-            result = _run(cmd)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            log.debug("v4l2loopback-ctl add failed: %s", exc)
-            continue
-        if os.path.exists(path):
-            log.info("Created %s via %s", path, " ".join(cmd))
-            return True
-        if result.returncode != 0:
-            log.debug(
-                "v4l2loopback-ctl add: %s (%s)",
-                (result.stderr or result.stdout or "").strip(),
-                " ".join(cmd),
-            )
-    return os.path.exists(path)
+        attempts.append(["add", "--name", label, str(nr)])
+    for args in attempts:
+        for prefix in ([binary], ["sudo", "-n", binary] if os.geteuid() != 0 else []):
+            if not prefix:
+                continue
+            cmd = [*prefix, *args]
+            try:
+                result = _run(cmd)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log.debug("v4l2loopback-ctl add failed: %s", exc)
+                continue
+            created = os.path.exists(path) and not existed
+            if created:
+                log.info("Created %s via %s", path, " ".join(cmd))
+                return True
+            if result.returncode != 0:
+                log.debug(
+                    "v4l2loopback-ctl add: %s (%s)",
+                    (result.stderr or result.stdout or "").strip(),
+                    " ".join(cmd),
+                )
+    return os.path.exists(path) and not existed
 
 
 def _ctl_delete(path: str) -> bool:
@@ -91,19 +142,24 @@ def _ctl_delete(path: str) -> bool:
     if not binary or not path:
         return False
     attempts = [
-        [binary, "delete", path],
-        [binary, "remove", path],
-        [binary, "del", path],
+        ["delete", path],
+        ["remove", path],
+        ["del", path],
     ]
-    for cmd in attempts:
-        try:
-            _run(cmd)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            log.debug("v4l2loopback-ctl delete failed: %s", exc)
-            continue
-        if not os.path.exists(path):
-            log.info("Removed stuck loopback %s via %s", path, " ".join(cmd))
-            return True
+    prefixes = [[binary]]
+    if os.geteuid() != 0:
+        prefixes.append(["sudo", "-n", binary])
+    for args in attempts:
+        for prefix in prefixes:
+            cmd = [*prefix, *args]
+            try:
+                _run(cmd)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log.debug("v4l2loopback-ctl delete failed: %s", exc)
+                continue
+            if not os.path.exists(path):
+                log.info("Removed stuck loopback %s via %s", path, " ".join(cmd))
+                return True
     return not os.path.exists(path)
 
 
@@ -119,7 +175,7 @@ def _modprobe_line(devices: list[tuple[str, str]]) -> list[str]:
     if not nrs:
         return []
     return [
-        "modprobe",
+        _modprobe_bin(),
         "v4l2loopback",
         f"devices={len(nrs)}",
         f"video_nr={','.join(nrs)}",
@@ -132,58 +188,50 @@ def _sudo_modprobe(devices: list[tuple[str, str]]) -> bool:
     line = _modprobe_line(devices)
     if not line:
         return False
-    helper = shutil.which("screen-sight-loopback")
+    helper = loopback_helper()
     if helper:
-        cmd = ["sudo", "-n", helper, *[p for p, _ in devices]]
-        try:
-            _run(cmd, timeout=15.0)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            log.debug("screen-sight-loopback: %s", exc)
+        _sudo([helper, *[p for p, _ in devices]], timeout=15.0)
         if all(os.path.exists(p) for p, _ in devices):
             return True
-    cmd = ["sudo", "-n", *line]
-    try:
-        result = _run(cmd, timeout=15.0)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        log.warning("sudo modprobe v4l2loopback failed: %s", exc)
-        return False
+    result = _sudo(line, timeout=15.0)
     if result.returncode != 0:
-        log.debug(
-            "sudo -n modprobe: %s",
-            (result.stderr or result.stdout or "").strip(),
-        )
         return False
     return all(os.path.exists(p) for p, _ in devices)
 
 
+def _module_loaded() -> bool:
+    try:
+        with open("/proc/modules", encoding="utf-8") as handle:
+            return "v4l2loopback" in handle.read()
+    except OSError:
+        return False
+
+
 def _sudo_reload(devices: list[tuple[str, str]]) -> bool:
-    """Unload+reload via the privileged helper. Never ``modprobe -r`` here."""
+    """Unload and reload v4l2loopback. Used only when S_FMT is stuck."""
     if not devices:
         return False
-    helper = shutil.which("screen-sight-loopback")
-    if not helper:
-        log.warning(
-            "Cannot reload v4l2loopback: screen-sight-loopback is not on PATH"
-        )
+    helper = loopback_helper()
+    if helper:
+        result = _sudo([helper, "--reload", *[p for p, _ in devices]], timeout=20.0)
+        if result.returncode == 0 and all(os.path.exists(p) for p, _ in devices):
+            log.info(
+                "Reloaded v4l2loopback via %s: %s",
+                helper,
+                ", ".join(f"{p} ({label})" for p, label in devices),
+            )
+            return True
+
+    unload = _sudo([_modprobe_bin(), "-r", "v4l2loopback"], timeout=15.0)
+    if unload.returncode != 0 and _module_loaded():
         return False
-    cmd = ["sudo", "-n", helper, "--reload", *[p for p, _ in devices]]
-    try:
-        result = _run(cmd, timeout=20.0)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        log.warning("screen-sight-loopback --reload failed: %s", exc)
+    if not _sudo_modprobe(devices):
         return False
-    if result.returncode != 0:
-        log.debug(
-            "screen-sight-loopback --reload: %s",
-            (result.stderr or result.stdout or "").strip(),
-        )
-    if all(os.path.exists(p) for p, _ in devices):
-        log.info(
-            "Reloaded v4l2loopback: %s",
-            ", ".join(f"{p} ({label})" for p, label in devices),
-        )
-        return True
-    return False
+    log.info(
+        "Reloaded v4l2loopback: %s",
+        ", ".join(f"{p} ({label})" for p, label in devices),
+    )
+    return True
 
 
 def _log_manual_command(devices: list[tuple[str, str]]) -> None:
@@ -304,15 +352,15 @@ def repair_loopback(
         devices.append((node, card))
     if _sudo_reload(devices) and os.path.exists(path):
         return True
-    if _sudo_modprobe(devices) and os.path.exists(path):
-        return True
     log.error(
         "Could not repair %s — HyperHDR will not see Screen Sight until "
-        "the loopback node accepts %s",
+        "the loopback node accepts %s. If sudo asked for a password, install "
+        "packaging/sudoers.d/screen-sight-loopback or run: sudo %s -r v4l2loopback",
         path,
         label,
+        _modprobe_bin(),
     )
-    return os.path.exists(path)
+    return False
 
 
 def ensure_processor_loopbacks(config: Any) -> None:

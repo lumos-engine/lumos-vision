@@ -144,6 +144,7 @@ def set_video_grabber(
     *,
     timeout_sec: float = GRABBER_TIMEOUT_SEC,
     opener: Any = None,
+    quiet: bool = True,
 ) -> dict[str, Any]:
     """Set HyperHDR's USB/V4L grabber. Tries ``VIDEOGRABBER`` then ``V4L``."""
     url = _json_rpc_url(base_url)
@@ -158,14 +159,20 @@ def set_video_grabber(
             enabled,
             timeout_sec=timeout_sec,
             opener=opener,
-            quiet=True,
+            quiet=quiet,
         )
         if last.get("ok") or last.get("skipped"):
             return last
         error = str(last.get("error") or "")
         if "Connection refused" in error or "Name or service not known" in error:
             break
-    if last.get("error"):
+    if last.get("error") and not quiet:
+        log.warning(
+            "HyperHDR video grabber %s failed: %s",
+            "on" if enabled else "off",
+            last.get("error"),
+        )
+    elif last.get("error"):
         log.debug(
             "HyperHDR video grabber %s failed: %s",
             "on" if enabled else "off",

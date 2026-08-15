@@ -136,6 +136,7 @@ def test_processor_recovers_v4l2_and_nudges_hyperhdr(monkeypatch):
     repaired: list[str] = []
     nudged: list[str] = []
     monkeypatch.setattr("processor.app.sys.platform", "linux")
+    monkeypatch.setattr("processor.app.time.sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "processor.app.set_video_grabber",
         lambda url, enabled, **kw: grabber.append(bool(enabled)) or {"ok": True},
@@ -197,6 +198,25 @@ def test_sink_group_survives_a_broken_member():
     group.open(64, 36)
     group.write(np.zeros((36, 64, 3), np.uint8))
     assert good.frames == 1, "one broken sink stopped the others"
+
+
+def test_sink_group_logs_a_dead_sink_once(caplog):
+    import logging
+
+    class Dead(NullSink):
+        name = "dead"
+
+        def write(self, image):
+            return False
+
+    group = SinkGroup([Dead()])
+    group.open(4, 4)
+    frame = np.zeros((4, 4, 3), np.uint8)
+    with caplog.at_level(logging.WARNING):
+        group.write(frame)
+        group.write(frame)
+        group.write(frame)
+    assert sum(1 for rec in caplog.records if "stopped accepting" in rec.message) == 1
 
 
 def test_sink_group_drops_a_sink_that_cannot_open():

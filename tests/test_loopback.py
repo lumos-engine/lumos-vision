@@ -3,8 +3,10 @@
 from processor.config.schema import Config
 from processor.utils.loopback import (
     OUTPUT_LABEL,
+    _sudo_reload,
     ensure_loopback,
     ensure_processor_loopbacks,
+    loopback_helper,
     needed_loopbacks,
     repair_loopback,
     video_nr,
@@ -122,3 +124,32 @@ def test_repair_loopback_deletes_then_adds(monkeypatch):
     assert repair_loopback("/dev/video10", label=OUTPUT_LABEL) is True
     assert calls[0] == ("delete", "/dev/video10")
     assert calls[1] == ("add", "/dev/video10", OUTPUT_LABEL)
+
+
+def test_loopback_helper_finds_checkout_script(monkeypatch):
+    monkeypatch.setattr("processor.utils.loopback.shutil.which", lambda name: None)
+    path = loopback_helper()
+    assert path.endswith("screen-sight-loopback")
+    assert path
+
+
+def test_sudo_reload_unloads_module_without_helper(monkeypatch):
+    monkeypatch.setattr("processor.utils.loopback.loopback_helper", lambda: "")
+    cmds: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_sudo(args, timeout=15.0):
+        cmds.append(list(args))
+        return _Result()
+
+    monkeypatch.setattr("processor.utils.loopback._sudo", fake_sudo)
+    monkeypatch.setattr("processor.utils.loopback._module_loaded", lambda: False)
+    monkeypatch.setattr("processor.utils.loopback._sudo_modprobe", lambda devices: True)
+    monkeypatch.setattr("processor.utils.loopback._modprobe_bin", lambda: "/sbin/modprobe")
+
+    assert _sudo_reload([("/dev/video10", OUTPUT_LABEL)]) is True
+    assert cmds[0] == ["/sbin/modprobe", "-r", "v4l2loopback"]

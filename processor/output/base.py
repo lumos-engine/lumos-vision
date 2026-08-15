@@ -63,11 +63,12 @@ class SinkGroup(Sink):
     def write(self, image: np.ndarray) -> bool:
         for sink in self.sinks:
             try:
-                if not sink.write(image) and sink.name not in self._failed:
+                ok = sink.write(image)
+                if ok:
+                    self._failed.discard(sink.name)
+                elif sink.name not in self._failed:
                     self._failed.add(sink.name)
                     log.warning("Sink %s stopped accepting frames", sink.name)
-                elif sink.name in self._failed:
-                    self._failed.discard(sink.name)
             except Exception as exc:
                 if sink.name not in self._failed:
                     self._failed.add(sink.name)

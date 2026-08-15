@@ -229,6 +229,9 @@ class Processor:
 
     def start(self) -> "Processor":
         self._ensure_loopbacks_unlocked()
+        # HyperHDR must drop /dev/video10 before S_FMT; otherwise the loopback
+        # returns EINVAL and exclusive_caps never flips to capture.
+        self._release_hyperhdr_grabber_unlocked()
         self.sinks = SinkGroup(create_sinks(self.config.output))
         self.sinks.open(self.config.output.width, self.config.output.height)
         self._recover_v4l2_unlocked()
@@ -537,6 +540,18 @@ class Processor:
         sink = self._v4l2_sink_unlocked()
         return bool(sink is not None and sink.stats.get("open"))
 
+    def _release_hyperhdr_grabber_unlocked(self) -> None:
+        """Ask HyperHDR to close /dev/video10 and wait for the fd to drop."""
+        if sys.platform != "linux" or not self.config.output.v4l2.enabled:
+            return
+        result = set_video_grabber(
+            self.config.power.hyperhdr_url, False, quiet=False
+        )
+        if result.get("skipped"):
+            return
+        if result.get("ok"):
+            time.sleep(0.35)
+
     def _recover_v4l2_unlocked(self) -> None:
         """If the HyperHDR-facing sink failed to open, repair the loopback and retry."""
         if sys.platform != "linux" or not self.config.output.v4l2.enabled:
@@ -553,13 +568,14 @@ class Processor:
             "V4L2 output is not open — releasing HyperHDR's grabber and repairing %s",
             sink.device,
         )
-        set_video_grabber(self.config.power.hyperhdr_url, False)
+        self._release_hyperhdr_grabber_unlocked()
         try:
             repair_loopback(
                 sink.device,
                 label=OUTPUT_LABEL,
                 keep=needed_loopbacks(self.config),
             )
+            sink._next_repair = 0.0
             sink.close()
             sink.open(self.config.output.width, self.config.output.height)
         except Exception:
