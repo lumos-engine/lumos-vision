@@ -480,7 +480,9 @@ class LumosCamConfig:
     package: str = "dev.lumos.cam"
     activity: str = "dev.lumos.cam.MainActivity"
     camera_id: str = "0"
-    camera_size: str = "1920x1080"
+    #: 1080p Camera2 JPEGs on typical Xiaomi phones cannot hold 30 fps, so
+    #: the TCP/adb queue fills and playback goes slow-motion. 1280x720 stays live.
+    camera_size: str = "1280x720"
     camera_fps: int = 30
     codec: str = "mjpeg"
     camera_zoom: float = 1.0

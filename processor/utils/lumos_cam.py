@@ -213,9 +213,10 @@ def resolve_ffmpeg(configured: str) -> str:
     return found or text
 
 
-# 0 = send the phone's requested size. A 1280 cap was for the old H.264→MJPEG
-# ffmpeg transcode (~7 fps at 1080p). Camera2 JPEG drop-old keeps 1080p live.
-PIPE_MAX_EDGE = 0
+# Long-edge cap for the phone JPEG. 1080p Camera2 stills on this Xiaomi
+# cannot hold 30 fps, so the socket queues and playback goes slow-motion.
+# 1280 is sharp enough for detect_width 480 and 640x360 output.
+PIPE_MAX_EDGE = 1280
 
 
 def build_ffmpeg_command(
@@ -480,7 +481,7 @@ class LumosCamClient:
         return self.request("POST", "/display", fields)
 
     def set_stream(self, cfg: LumosCamConfig, *, enabled: bool = True) -> dict[str, Any]:
-        width, height = parse_camera_size(cfg.camera_size)
+        width, height = output_frame_size(cfg, 0)
         return self.request(
             "POST",
             "/stream",

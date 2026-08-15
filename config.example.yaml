@@ -125,9 +125,9 @@ logging:
 # lumos_cam:
 #   serial: ""
 #   camera_id: "0"
-#   camera_size: "1920x1080"
+#   camera_size: "1280x720"         # 1080p JPEG queues and goes slow-mo
 #   camera_fps: 30
-#   codec: h264                     # h264 | mjpeg
+#   codec: mjpeg                    # h264 | mjpeg; mjpeg is the live path
 #   camera_zoom: 1.0
 #   pan_x: 0.0
 #   pan_y: 0.0

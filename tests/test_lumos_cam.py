@@ -112,20 +112,21 @@ def test_adb_launch_error_detects_miui_type3():
 
 
 def test_build_ffmpeg_command_rotates():
-    cfg = LumosCamConfig(ffmpeg="/usr/bin/ffmpeg")
+    cfg = LumosCamConfig(ffmpeg="/usr/bin/ffmpeg", camera_size="1920x1080")
     cmd = build_ffmpeg_command(cfg, binary="/usr/bin/ffmpeg", rotation=90)
     vf = cmd[cmd.index("-vf") + 1]
-    assert vf.startswith("transpose=1")
+    assert vf.startswith("transpose=1,scale=")
     from processor.utils.lumos_cam import output_frame_size
 
-    assert output_frame_size(cfg, 90) == (1080, 1920)
-    assert output_frame_size(cfg, 0) == (1920, 1080)
-    assert output_frame_size(cfg, 0, max_edge=1280) == (1280, 720)
+    assert output_frame_size(cfg, 90) == (720, 1280)
+    assert output_frame_size(cfg, 0) == (1280, 720)
+    assert output_frame_size(cfg, 0, max_edge=0) == (1920, 1080)
 
 
 def test_build_ffmpeg_command_h264():
     cfg = LumosCamConfig(
         codec="h264",
+        camera_size="1920x1080",
         video_host_port=18766,
         ffmpeg="/usr/bin/ffmpeg",
         startup_timeout_sec=15.0,
@@ -145,7 +146,9 @@ def test_build_ffmpeg_command_h264():
     assert "-use_wallclock_as_timestamps" in cmd
     assert "-framerate" in cmd and "30" in cmd
     assert "-fps_mode" in cmd and "passthrough" in cmd
-    assert "-vf" not in cmd
+    vf = cmd[cmd.index("-vf") + 1]
+    assert vf.startswith("scale=")
+    assert "force_original_aspect_ratio=decrease" in vf
 
 
 def test_build_ffmpeg_command_mjpeg():

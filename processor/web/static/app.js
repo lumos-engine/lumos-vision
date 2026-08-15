@@ -276,7 +276,7 @@ let lumosPanelState = {
   running: false,
   serial: '',
   camera_id: '0',
-  camera_size: '1920x1080',
+  camera_size: '1280x720',
   camera_fps: 30,
   codec: 'mjpeg',
   camera_zoom: 1,
@@ -317,7 +317,7 @@ function applyLumosPanelFromConfig(config) {
     enabled: Boolean(lc.enabled),
     serial: lc.serial || '',
     camera_id: lc.camera_id || '0',
-    camera_size: lc.camera_size || '1920x1080',
+    camera_size: lc.camera_size || '1280x720',
     camera_fps: lc.camera_fps || 30,
     codec: lc.codec || 'mjpeg',
     camera_zoom: Number(lc.camera_zoom || 1),
@@ -394,7 +394,7 @@ function readLumosFields() {
   return {
     serial: ($('lumos-serial')?.value || '').trim(),
     camera_id: ($('lumos-camera-id')?.value || '0').trim(),
-    camera_size: ($('lumos-camera-size')?.value || '1920x1080').trim(),
+    camera_size: ($('lumos-camera-size')?.value || '1280x720').trim(),
     camera_fps: Number($('lumos-camera-fps')?.value || 30),
     codec: ($('lumos-codec')?.value || 'mjpeg').trim(),
     camera_zoom: Number($('lumos-zoom')?.value || 1),
@@ -473,7 +473,7 @@ async function buildLumosCamPanel() {
     </div>
     <div class="control">
       <label for="lumos-camera-size">Size</label>
-      <input id="lumos-camera-size" type="text" spellcheck="false" placeholder="1920x1080">
+      <input id="lumos-camera-size" type="text" spellcheck="false" placeholder="1280x720">
     </div>
     <div class="control">
       <label for="lumos-camera-fps">FPS</label>
