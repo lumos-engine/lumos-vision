@@ -122,9 +122,8 @@ def test_build_ffmpeg_command_h264():
     assert cmd[0] == "/usr/bin/ffmpeg"
     assert "-f" in cmd and "h264" in cmd
     assert "tcp://127.0.0.1:18766" in cmd
-    assert "rawvideo" in cmd
+    assert "mjpeg" in cmd
     assert "pipe:1" in cmd
-    assert "bgr24" in cmd
     assert "nobuffer+flush_packets" in cmd
     assert "-flush_packets" in cmd
     assert "/dev/video11" not in cmd
@@ -890,11 +889,19 @@ def test_color_cal_toggles_lumos_cal_mode(monkeypatch, tmp_path):
         app.shutdown()
 
 
+def _jpeg_bytes(width: int, height: int, value: int) -> bytes:
+    import cv2
+    import numpy as np
+
+    image = np.full((height, width, 3), int(value), dtype=np.uint8)
+    ok, buf = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    assert ok
+    return buf.tobytes()
+
+
 def test_read_bgr_assembles_chunked_pipe():
     mgr = LumosCamManager()
-    width, height = 64, 48
-    nbytes = width * height * 3
-    payload = bytes((i * 17) % 256 for i in range(nbytes))
+    payload = _jpeg_bytes(64, 48, 40)
     r, w = os.pipe()
     os.set_blocking(r, False)
 
@@ -908,7 +915,7 @@ def test_read_bgr_assembles_chunked_pipe():
             return None
 
     mgr._proc = Proc()
-    mgr._frame_wh = (width, height)
+    mgr._frame_wh = (64, 48)
 
     def writer() -> None:
         view = memoryview(payload)
@@ -924,8 +931,8 @@ def test_read_bgr_assembles_chunked_pipe():
     try:
         image = mgr.read_bgr(timeout=2.0)
         assert image is not None
-        assert image.shape == (height, width, 3)
-        assert image.tobytes() == payload
+        assert image.shape[0] == 48
+        assert image.shape[1] == 64
     finally:
         thread.join(timeout=2.0)
         try:
@@ -935,13 +942,9 @@ def test_read_bgr_assembles_chunked_pipe():
 
 
 def test_read_bgr_keeps_newest_queued_frame():
-    import numpy as np
-
     mgr = LumosCamManager()
-    width, height = 8, 4
-    nbytes = width * height * 3
-    older = bytes([1]) * nbytes
-    newer = bytes([9]) * nbytes
+    older = _jpeg_bytes(8, 4, 1)
+    newer = _jpeg_bytes(8, 4, 200)
     r, w = os.pipe()
     os.set_blocking(r, False)
     os.write(w, older + newer)
@@ -956,12 +959,11 @@ def test_read_bgr_keeps_newest_queued_frame():
             return None
 
     mgr._proc = Proc()
-    mgr._frame_wh = (width, height)
+    mgr._frame_wh = (8, 4)
     try:
         image = mgr.read_bgr(timeout=1.0)
         assert image is not None
-        assert image.tobytes() == newer
-        assert np.all(image == 9)
+        assert image.mean() > 100
     finally:
         os.close(w)
         try:

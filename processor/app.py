@@ -843,6 +843,12 @@ class Processor:
 
         def apply() -> dict[str, Any]:
             self.config = apply_updates(self.config, updates)
+            if self.config.lumos_cam.enabled and self.config.lumos_cam.bind_camera:
+                self.config = apply_updates(self.config, {"lumos_cam.enabled": False})
+                self._lumos.stop()
+            if self.config.scrcpy.enabled and self.config.scrcpy.bind_camera:
+                self.config = apply_updates(self.config, {"scrcpy.enabled": False})
+                self._scrcpy.stop()
             apply_pipeline_config(self.pipeline, self.config)
             recreated = self._recreate_source_unlocked()
             saved_path = None

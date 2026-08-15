@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any
 
+import cv2
 import numpy as np
 
 from processor.config.schema import LumosCamConfig
@@ -211,17 +212,41 @@ def build_ffmpeg_command(
     vf = _rotation_filter(rotation)
     if vf:
         cmd.extend(["-vf", vf])
+    # MJPEG on the pipe is framed (~100–300KiB) so we never block on a 6MiB
+    # raw BGR write. ffmpeg also flushes each JPEG; rawvideo often emitted
+    # one frame and then stalled.
     cmd.extend(
         [
             "-an",
-            "-pix_fmt",
-            "bgr24",
+            "-q:v",
+            "5",
             "-f",
-            "rawvideo",
+            "mjpeg",
             "pipe:1",
         ]
     )
     return cmd
+
+
+_JPEG_SOI = b"\xff\xd8"
+_JPEG_EOI = b"\xff\xd9"
+
+
+def _pop_newest_jpeg(buf: bytearray) -> bytes | None:
+    """Return the newest complete JPEG in ``buf`` and drop consumed bytes."""
+    newest: bytes | None = None
+    while True:
+        start = buf.find(_JPEG_SOI)
+        if start < 0:
+            buf.clear()
+            return newest
+        if start:
+            del buf[:start]
+        end = buf.find(_JPEG_EOI, 2)
+        if end < 0:
+            return newest
+        newest = bytes(buf[: end + 2])
+        del buf[: end + 2]
 
 
 def _enlarge_pipe(fd: int) -> None:
@@ -786,21 +811,13 @@ class LumosCamManager:
         return self._frame_wh
 
     def read_bgr(self, timeout: float = 0.25) -> np.ndarray | None:
-        """Read the newest decoded BGR frame from ffmpeg stdout.
-
-        Drain whatever is already in the pipe without ``select()`` between
-        chunks. A ``select()`` per 64KiB turn of a 6MiB frame is ~0.1 fps.
-        """
+        """Read the newest JPEG from ffmpeg stdout and decode it to BGR."""
         if self._held_frame is not None:
             frame, self._held_frame = self._held_frame, None
             return frame
         proc = self._proc
         stdout = None if proc is None else proc.stdout
         if proc is None or stdout is None or proc.poll() is not None:
-            return None
-        width, height = self._frame_wh
-        nbytes = width * height * 3
-        if nbytes <= 0:
             return None
         try:
             fd = stdout.fileno()
@@ -809,13 +826,29 @@ class LumosCamManager:
         deadline = time.monotonic() + max(0.0, timeout)
         buf = bytearray(self._pending)
         self._pending = b""
-        while len(buf) < nbytes:
+        jpeg: bytes | None = None
+        while True:
+            newest = _pop_newest_jpeg(buf)
+            if newest is not None:
+                jpeg = newest
+                while True:
+                    try:
+                        extra = os.read(fd, 65536)
+                    except (BlockingIOError, OSError):
+                        break
+                    if not extra:
+                        break
+                    buf += extra
+                drained = _pop_newest_jpeg(buf)
+                if drained is not None:
+                    jpeg = drained
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self._pending = bytes(buf)
                 return None
             try:
-                chunk = os.read(fd, nbytes - len(buf))
+                chunk = os.read(fd, 65536)
             except BlockingIOError:
                 try:
                     ready, _, _ = select.select([fd], [], [], remaining)
@@ -829,26 +862,20 @@ class LumosCamManager:
             except OSError:
                 return None
             if not chunk:
+                self._pending = bytes(buf)
                 return None
             buf += chunk
-        frame = bytes(buf[:nbytes])
-        leftover = bytearray(buf[nbytes:])
-        while True:
-            try:
-                extra = os.read(fd, 65536)
-            except (BlockingIOError, OSError):
-                break
-            if not extra:
-                break
-            leftover += extra
-            while len(leftover) >= nbytes:
-                frame = bytes(leftover[:nbytes])
-                del leftover[:nbytes]
-        self._pending = bytes(leftover)
-        image = np.frombuffer(frame, dtype=np.uint8).reshape((height, width, 3)).copy()
+        self._pending = bytes(buf)
+        if jpeg is None:
+            return None
+        image = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            return None
         if not self._logged_first:
             self._logged_first = True
+            height, width = image.shape[:2]
             log.info("Lumos Cam first frame %dx%d", width, height)
+            self._frame_wh = (width, height)
         return image
 
     def _start_stderr_drain(self, proc: subprocess.Popen[bytes]) -> None:
@@ -896,9 +923,8 @@ class LumosCamManager:
             if now - last_log > 2.0:
                 last_log = now
                 log.info(
-                    "Lumos Cam waiting for ffmpeg frame (%d/%d bytes, phone bytes_sent=%s)",
+                    "Lumos Cam waiting for ffmpeg JPEG (%d bytes buffered, phone bytes_sent=%s)",
                     len(self._pending),
-                    self._frame_wh[0] * self._frame_wh[1] * 3,
                     st.get("bytes_sent", "?"),
                 )
         return False

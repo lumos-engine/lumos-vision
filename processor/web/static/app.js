@@ -137,6 +137,8 @@ let cameraPushTimer = null;
 // ------------------------------------------------------------- source panel
 
 const SOURCE_TYPES = [
+  { value: 'lumos', label: 'Lumos Cam (phone)' },
+  { value: 'scrcpy', label: 'scrcpy (phone fallback)' },
   { value: 'v4l2', label: 'USB camera' },
   { value: 'rtsp', label: 'RTSP' },
   { value: 'file', label: 'File / image' },
@@ -159,6 +161,16 @@ function normalizeSourceType(value) {
   if (source === 'image') return 'file';
   if (SOURCE_TYPES.some((item) => item.value === source)) return source;
   return 'v4l2';
+}
+
+function captureKindFromConfig(config) {
+  if (config?.lumos_cam?.enabled && config.lumos_cam.bind_camera !== false) {
+    return 'lumos';
+  }
+  if (config?.scrcpy?.enabled && config.scrcpy.bind_camera !== false) {
+    return 'scrcpy';
+  }
+  return normalizeSourceType(config?.camera?.source);
 }
 
 function syncSourceFieldsVisibility() {
@@ -221,7 +233,7 @@ function fillDeviceSelect(selected) {
 function applySourcePanelFromConfig(config) {
   if (!config || !config.camera) return;
   const camera = config.camera;
-  sourcePanelState.source = normalizeSourceType(camera.source);
+  sourcePanelState.source = captureKindFromConfig(config);
   sourcePanelState.device = camera.device || '';
   sourcePanelState.path = camera.path || '';
   sourcePanelState.transport = camera.transport || 'tcp';
@@ -247,7 +259,7 @@ function applySourcePanelFromConfig(config) {
   }
   const meta = $('source-meta');
   if (meta) {
-    const bits = [`source: ${camera.source || '–'}`];
+    const bits = [`source: ${sourcePanelState.source}`];
     if (camera.device) bits.push(camera.device);
     if (camera.path) bits.push(camera.path);
     if (sourcePanelState.rtsp_saved) bits.push('RTSP credentials hidden');
@@ -281,7 +293,6 @@ let lumosFormDirty = false;
 let lumosBusy = false;
 
 const LUMOS_FIELD_IDS = [
-  'lumos-enabled',
   'lumos-serial',
   'lumos-camera-id',
   'lumos-zoom',
@@ -340,7 +351,6 @@ function syncLumosForm({ force = false } = {}) {
     else el.value = value;
   };
   if (force || !lumosFormDirty) {
-    set('lumos-enabled', lumosPanelState.enabled);
     set('lumos-serial', lumosPanelState.serial);
     set('lumos-camera-id', lumosPanelState.camera_id);
     set('lumos-zoom', lumosPanelState.camera_zoom);
@@ -369,7 +379,7 @@ function syncLumosForm({ force = false } = {}) {
 
 function readLumosFields() {
   return {
-    enabled: Boolean($('lumos-enabled')?.checked),
+    enabled: true,
     serial: ($('lumos-serial')?.value || '').trim(),
     camera_id: ($('lumos-camera-id')?.value || '0').trim(),
     camera_zoom: Number($('lumos-zoom')?.value || 1),
@@ -430,12 +440,9 @@ async function buildLumosCamPanel() {
   section.innerHTML = `
     <h3>Lumos Cam</h3>
     <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1). Leave the
-    app open on the phone, then enable here. Wireless adb serial looks like
+    app open on the phone. Wireless adb serial looks like
     <code>192.168.1.243:37847</code> (the port changes). Live zoom, pan, and AF/AE/AWB locks —
     no restart. Colour-cal Start turns on cal mode.</p>
-    <div class="control">
-      <label class="check"><input type="checkbox" id="lumos-enabled"> Use Lumos Cam</label>
-    </div>
     <div class="control">
       <label for="lumos-serial">ADB serial (optional)</label>
       <input id="lumos-serial" type="text" spellcheck="false" placeholder="452ee42b0506">
@@ -484,18 +491,6 @@ async function buildLumosCamPanel() {
     const label = $('lumos-zoom-label');
     if (label) label.textContent = Number($('lumos-zoom').value).toFixed(2);
     syncLumosMeta();
-  });
-
-  $('lumos-enabled')?.addEventListener('change', async () => {
-    markLumosDirty();
-    try {
-      await postLumos('apply', readLumosFields(), { save: false });
-      toast(lumosPanelState.enabled ? 'Lumos Cam enabled' : 'Lumos Cam disabled');
-      await loadCaptureDevices();
-      fillDeviceSelect(sourcePanelState.device || lumosPanelState.v4l2_sink);
-    } catch (err) {
-      toast(err.message, 'error');
-    }
   });
 
   const liveLock = (id, actionOn, actionOff) => {
@@ -590,7 +585,6 @@ let scrcpyFormDirty = false;
 let scrcpyBusy = false;
 
 const SCRCPY_FIELD_IDS = [
-  'scrcpy-enabled',
   'scrcpy-binary',
   'scrcpy-serial',
   'scrcpy-camera-id',
@@ -654,7 +648,6 @@ function syncScrcpyForm({ force = false } = {}) {
     else el.value = value;
   };
   if (force || !scrcpyFormDirty) {
-    set('scrcpy-enabled', scrcpyPanelState.enabled);
     set('scrcpy-binary', scrcpyPanelState.binary);
     set('scrcpy-serial', scrcpyPanelState.serial);
     set('scrcpy-camera-id', scrcpyPanelState.camera_id);
@@ -685,7 +678,7 @@ function syncScrcpyForm({ force = false } = {}) {
 
 function readScrcpyFields() {
   return {
-    enabled: Boolean($('scrcpy-enabled')?.checked),
+    enabled: true,
     binary: ($('scrcpy-binary')?.value || 'scrcpy').trim(),
     serial: ($('scrcpy-serial')?.value || '').trim(),
     camera_id: ($('scrcpy-camera-id')?.value || '0').trim(),
@@ -757,12 +750,9 @@ async function buildScrcpyPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Android cam (scrcpy fallback)</h3>
-    <p class="hint">Legacy path. Prefer <strong>Lumos Cam</strong> above when the
-    APK is installed — it locks AF/AE/AWB and zooms live. Scrcpy still restarts
+    <p class="hint">Legacy phone path. Prefer Lumos Cam when the APK is
+    installed — it locks AF/AE/AWB and zooms live. Scrcpy still restarts
     the child for zoom/crop.</p>
-    <div class="control">
-      <label class="check"><input type="checkbox" id="scrcpy-enabled"> Manage scrcpy</label>
-    </div>
     <div class="control">
       <label for="scrcpy-binary">Binary</label>
       <input id="scrcpy-binary" type="text" spellcheck="false" placeholder="/opt/scrcpy/scrcpy">
@@ -825,19 +815,6 @@ async function buildScrcpyPanel() {
   };
   bindZoomLabel('scrcpy-zoom', 'scrcpy-zoom-label');
   bindZoomLabel('scrcpy-view-zoom', 'scrcpy-view-zoom-label');
-
-  // Toggle applies immediately so the 1 Hz status poll cannot snap it back.
-  $('scrcpy-enabled')?.addEventListener('change', async () => {
-    markScrcpyDirty();
-    try {
-      await postScrcpy('apply', readScrcpyFields(), { save: false });
-      toast(scrcpyPanelState.enabled ? 'scrcpy enabled' : 'scrcpy disabled');
-      await loadCaptureDevices();
-      fillDeviceSelect(sourcePanelState.device || scrcpyPanelState.v4l2_sink);
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
 
   const panToast = () => {
     toast(
@@ -1216,8 +1193,8 @@ async function buildSourcePanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Source</h3>
-    <p class="hint">Pick the capture input. Apply switches live; Save writes
-    config.yaml so the choice survives reboot. Prefer USB by-id paths.</p>
+    <p class="hint">One capture source at a time. Apply switches live; Save
+    writes config.yaml. Phone options show their settings below.</p>
     <div class="control">
       <label for="source-type">Input type</label>
       <select id="source-type">
@@ -1249,7 +1226,7 @@ async function buildSourcePanel() {
     <div class="source-actions">
       <button type="button" class="btn btn-primary" id="btn-source-apply">Apply</button>
       <button type="button" class="btn" id="btn-source-save">Apply &amp; Save</button>
-      <button type="button" class="btn" id="btn-source-refresh">Refresh USB list</button>
+      <button type="button" class="btn" id="btn-source-refresh" data-source-for="v4l2">Refresh USB list</button>
     </div>`;
   root.append(section);
 
@@ -1269,7 +1246,41 @@ async function buildSourcePanel() {
 
 async function applySource({ save }) {
   const status = $('tune-status');
-  const type = normalizeSourceType($('source-type').value);
+  const type = $('source-type')?.value || 'v4l2';
+  if (type === 'lumos') {
+    try {
+      if (status) status.textContent = save ? 'saving Lumos Cam…' : 'switching to Lumos Cam…';
+      const result = await postLumos('apply', readLumosFields(), { save });
+      if (result.config) {
+        applyConfig(result.config, { skipFocused: true });
+        applySourcePanelFromConfig(result.config);
+        applyLumosPanelFromConfig(result.config);
+      }
+      toast(save && result.saved ? `Lumos Cam saved to ${result.saved}` : 'Lumos Cam applied', 'ok');
+      if (status) status.textContent = 'changes apply live';
+    } catch (err) {
+      if (status) status.textContent = 'source update failed';
+      toast(err.message, 'error');
+    }
+    return;
+  }
+  if (type === 'scrcpy') {
+    try {
+      if (status) status.textContent = save ? 'saving scrcpy…' : 'switching to scrcpy…';
+      const result = await postScrcpy('apply', { ...readScrcpyFields(), enabled: true }, { save });
+      if (result.config) {
+        applyConfig(result.config, { skipFocused: true });
+        applySourcePanelFromConfig(result.config);
+        applyScrcpyPanelFromConfig(result.config);
+      }
+      toast(save && result.saved ? `scrcpy saved to ${result.saved}` : 'scrcpy applied', 'ok');
+      if (status) status.textContent = 'changes apply live';
+    } catch (err) {
+      if (status) status.textContent = 'source update failed';
+      toast(err.message, 'error');
+    }
+    return;
+  }
   const body = { source: type, save: Boolean(save) };
 
   if (type === 'v4l2') {
@@ -1932,6 +1943,10 @@ async function init() {
     applyLumosPanelFromConfig(config);
     applyScrcpyPanelFromConfig(config);
     fillDeviceSelect(config.camera?.device || '');
+    if (captureKindFromConfig(config) !== 'v4l2') {
+      const hw = $('camera-controls');
+      if (hw) hw.innerHTML = '';
+    }
   } catch (err) {
     toast(err.message, 'error');
   }
