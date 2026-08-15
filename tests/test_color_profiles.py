@@ -18,15 +18,18 @@ from processor.utils.color_profiles import (
 import pytest
 
 
-def test_default_profiles_are_day_night_times_three_lights():
+def test_default_profiles_are_day_night_times_three_lights_times_two_brightness():
     cfg = Config()
     combos = all_combos(cfg.color.profiles)
-    assert len(combos) == 6
+    assert len(combos) == 12
     assert cfg.color.profiles.selection == {
         "time_of_day": "night",
         "lighting": "lights_off",
+        "brightness": "full",
     }
-    assert slot_key(cfg.color.profiles) == "time_of_day=night|lighting=lights_off"
+    assert slot_key(cfg.color.profiles) == (
+        "time_of_day=night|lighting=lights_off|brightness=full"
+    )
 
 
 def test_uncalibrated_combo_is_passthrough():
@@ -143,6 +146,27 @@ def test_add_dimension_rewrites_slot_keys():
     assert migrated[new_key].calibrated_at == "2026-08-15T00:00:00Z"
 
 
+def test_old_slot_keys_gain_brightness_full():
+    cfg = Config.from_dict(
+        {
+            "color": {
+                "profiles": {
+                    "slots": {
+                        "time_of_day=night|lighting=lights_off": {
+                            "calibrated_at": "2026-08-15T00:00:00Z",
+                            "matrix_enabled": True,
+                        }
+                    }
+                }
+            }
+        }
+    )
+    key = "time_of_day=night|lighting=lights_off|brightness=full"
+    assert key in cfg.color.profiles.slots
+    assert slot_is_calibrated(cfg.color.profiles.slots[key])
+    assert cfg.color.profiles.selection["brightness"] == "full"
+
+
 def test_profile_round_trip_yaml(tmp_path):
     cfg = Config.from_dict(
         {
@@ -167,7 +191,7 @@ def test_profile_round_trip_yaml(tmp_path):
     assert reloaded.color.matrix_enabled is True
     assert reloaded.color.gamma == pytest.approx(1.12)
     data = config_to_dict(reloaded)
-    assert "time_of_day=day|lighting=large" in data["color"]["profiles"]["slots"]
+    assert "time_of_day=day|lighting=large|brightness=full" in data["color"]["profiles"]["slots"]
 
 
 def test_profile_switch_restores_and_clears_phone_3a():

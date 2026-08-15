@@ -107,15 +107,16 @@ color:
   exposure:
     enabled: false
     target_luma: 110
-  # Environment combos (day/night × room lights). Live colour is a view of the
-  # active slot. Missing slots = passthrough. Quote option ids; never use
-  # YAML booleans (on/off/yes/no) as ids — use lights_off, not off.
+  # Environment combos (day/night × room lights × brightness). Live colour is
+  # a view of the active slot. Missing slots = passthrough. Quote option ids;
+  # never use YAML booleans (on/off/yes/no) as ids — use lights_off, not off.
   # profiles:
   #   selection:
   #     time_of_day: night
   #     lighting: lights_off
+  #     brightness: full
   #   slots:
-  #     time_of_day=night|lighting=lights_off:
+  #     time_of_day=night|lighting=lights_off|brightness=full:
   #       calibrated_at: "2026-08-15T00:00:00Z"
   #       white_balance: manual
   #       matrix_enabled: true

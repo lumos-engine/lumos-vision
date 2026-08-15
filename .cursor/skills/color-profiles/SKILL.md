@@ -37,14 +37,14 @@ Do **not** hardcode day/night or lighting in `app.js`.
   `lights_off`, not `off`.
 - No `.`, `|`, or `=` in ids (those are key separators)
 
-Slot key = schema order: `time_of_day=night|lighting=lights_off`
+Slot key = schema order: `time_of_day=night|lighting=lights_off|brightness=full`
 
 ## Add an option (e.g. `lighting: desk`)
 
 1. Append `{"id": "desk", "label": "Desk lamp"}` to that dimension in
    `DEFAULT_DIMENSION_SPECS`.
 2. Existing slot keys are unchanged. New combos start uncalibrated.
-3. Add a test that `all_combos` count increased (currently 2×3 = 6).
+3. Add a test that `all_combos` count increased (currently 2×3×2 = 12).
 
 No key migration. No JS changes.
 

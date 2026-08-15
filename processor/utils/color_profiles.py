@@ -1,4 +1,4 @@
-"""Environment colour profiles (day/night × room lights, extensible).
+"""Environment colour profiles (day/night × room lights × brightness, extensible).
 
 Live ``color.*`` correction is a *view* of the active slot. The source of
 truth is ``color.profiles.selection`` plus ``color.profiles.slots``. A combo
@@ -54,11 +54,20 @@ DEFAULT_DIMENSION_SPECS: tuple[dict[str, Any], ...] = (
             {"id": "lights_off", "label": "Lights off"},
         ),
     },
+    {
+        "id": "brightness",
+        "label": "Brightness",
+        "options": (
+            {"id": "full", "label": "Full"},
+            {"id": "min", "label": "Min"},
+        ),
+    },
 )
 
 DEFAULT_SELECTION: dict[str, str] = {
     "time_of_day": "night",
     "lighting": "lights_off",
+    "brightness": "full",
 }
 
 
@@ -438,6 +447,7 @@ def bind_config(config: Config) -> Config:
     """
     from processor.config.loader import apply_updates
 
+    config = _ensure_schema_dimensions(config)
     color = config.color
     resolved = resolve_selection(color.profiles)
     if dict(color.profiles.selection) != resolved:
@@ -454,6 +464,72 @@ def bind_config(config: Config) -> Config:
     if not updates:
         return config
     return apply_updates(config, updates)
+
+
+def _ensure_schema_dimensions(config: Config) -> Config:
+    """Append new default axes and rewrite old slot keys onto their defaults."""
+    from processor.config.loader import apply_updates
+
+    profiles = config.color.profiles
+    have = {dim.id for dim in profiles.dimensions}
+    dims = list(profiles.dimensions)
+    added: list[str] = []
+    for spec in DEFAULT_DIMENSION_SPECS:
+        dim_id = str(spec["id"])
+        if dim_id in have:
+            continue
+        dims.append(
+            ProfileDimension(
+                id=dim_id,
+                label=str(spec["label"]),
+                options=[
+                    ProfileOption(id=str(opt["id"]), label=str(opt["label"]))
+                    for opt in spec["options"]
+                ],
+            )
+        )
+        added.append(dim_id)
+        have.add(dim_id)
+
+    updates: dict[str, Any] = {}
+    if added:
+        updates["color.profiles.dimensions"] = [
+            {
+                "id": dim.id,
+                "label": dim.label,
+                "options": [{"id": opt.id, "label": opt.label} for opt in dim.options],
+            }
+            for dim in dims
+        ]
+        selection = dict(profiles.selection)
+        for dim_id in added:
+            selection.setdefault(dim_id, DEFAULT_SELECTION.get(dim_id, ""))
+        updates["color.profiles.selection"] = selection
+
+    working = profiles
+    if updates:
+        config = apply_updates(config, updates)
+        working = config.color.profiles
+
+    order = [dim.id for dim in working.dimensions]
+    slots = dict(working.slots)
+    for dim in working.dimensions:
+        default_option = DEFAULT_SELECTION.get(dim.id) or (option_ids(dim)[0] if option_ids(dim) else "")
+        if not default_option:
+            continue
+        if any(dim.id not in parse_slot_key(key) for key in slots):
+            slots = migrate_slots_add_dimension(
+                slots,
+                dimension_id=dim.id,
+                default_option=default_option,
+                order=order,
+            )
+    if set(slots) != set(working.slots):
+        config = apply_updates(
+            config,
+            {"color.profiles.slots": {key: slot_as_dict(slot) for key, slot in slots.items()}},
+        )
+    return config
 
 
 def all_combos(profiles: ColorProfilesConfig) -> list[dict[str, str]]:
