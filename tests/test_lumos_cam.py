@@ -142,7 +142,9 @@ def test_build_ffmpeg_command_h264():
     assert "-analyzeduration" in cmd
     assert "-probesize" in cmd
     assert "-timeout" not in cmd
-    assert "-vsync" in cmd and "passthrough" in cmd
+    assert "-use_wallclock_as_timestamps" in cmd
+    assert "-framerate" in cmd and "30" in cmd
+    assert "-fps_mode" in cmd and "passthrough" in cmd
     vf = cmd[cmd.index("-vf") + 1]
     assert vf.startswith("scale=")
     assert "force_original_aspect_ratio=decrease" in vf

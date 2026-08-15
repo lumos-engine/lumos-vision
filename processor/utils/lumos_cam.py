@@ -208,6 +208,7 @@ def build_ffmpeg_command(
     codec = (cfg.codec or "h264").strip().lower()
     demux = "mjpeg" if codec == "mjpeg" else "h264"
     url = f"tcp://127.0.0.1:{int(cfg.video_host_port)}"
+    fps = max(1, int(cfg.camera_fps or 30))
     cmd = [
         exe,
         "-hide_banner",
@@ -222,18 +223,22 @@ def build_ffmpeg_command(
         "low_delay",
         "-flush_packets",
         "1",
+        # Annex-B over TCP has no PTS. ffmpeg then assumes 25 fps, so a 30 fps
+        # phone plays in slow motion and the queue grows — USB or Wi-Fi.
+        "-use_wallclock_as_timestamps",
+        "1",
         "-analyzeduration",
         "2000000",
         "-probesize",
         "2000000",
         "-f",
         demux,
+        "-framerate",
+        str(fps),
         "-i",
         url,
         "-an",
-        # Raw h264/TCP has no timestamps; the default CFR muxer sleeps and
-        # the pipe plays back slower than realtime.
-        "-vsync",
+        "-fps_mode",
         "passthrough",
     ]
     filters: list[str] = []
