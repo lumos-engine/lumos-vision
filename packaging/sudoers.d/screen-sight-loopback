@@ -1,5 +1,10 @@
-# Allow the Screen Sight service user to create v4l2loopback nodes without a
-# password. Install as /etc/sudoers.d/screen-sight-loopback (mode 0440).
-# visudo -c -f this-file before installing.
+# Allow Screen Sight to create/reload v4l2loopback without a password.
+# Install: sudo cp packaging/sudoers.d/screen-sight-loopback /etc/sudoers.d/
+#          sudo chmod 440 /etc/sudoers.d/screen-sight-loopback
+#          sudo visudo -c -f /etc/sudoers.d/screen-sight-loopback
+#
+# `%video` covers a desktop user (e.g. shivansh) and the screensight service
+# account. `modprobe -r` is required when /dev/video10 has a stuck format.
 
-screensight ALL=(root) NOPASSWD: /usr/lib/screen-sight/screen-sight-loopback, /sbin/modprobe v4l2loopback *
+%video ALL=(root) NOPASSWD: /usr/lib/screen-sight/screen-sight-loopback, /usr/sbin/modprobe -r v4l2loopback, /sbin/modprobe -r v4l2loopback, /usr/sbin/modprobe v4l2loopback *, /sbin/modprobe v4l2loopback *
+screensight ALL=(root) NOPASSWD: /usr/lib/screen-sight/screen-sight-loopback, /usr/sbin/modprobe -r v4l2loopback, /sbin/modprobe -r v4l2loopback, /usr/sbin/modprobe v4l2loopback *, /sbin/modprobe v4l2loopback *

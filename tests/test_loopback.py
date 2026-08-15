@@ -153,3 +153,29 @@ def test_sudo_reload_unloads_module_without_helper(monkeypatch):
 
     assert _sudo_reload([("/dev/video10", OUTPUT_LABEL)]) is True
     assert cmds[0] == ["/sbin/modprobe", "-r", "v4l2loopback"]
+
+
+def test_sudo_password_is_only_attempted_once(monkeypatch):
+    import processor.utils.loopback as loopback
+
+    monkeypatch.setattr(loopback, "_sudo_password_blocked", False)
+    monkeypatch.setattr(loopback.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(loopback.shutil, "which", lambda name: "/usr/bin/sudo")
+
+    class _Denied:
+        returncode = 1
+        stdout = ""
+        stderr = "sudo: a password is required\n"
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, timeout=8.0):
+        calls.append(list(cmd))
+        return _Denied()
+
+    monkeypatch.setattr(loopback, "_run", fake_run)
+    first = loopback._sudo(["/sbin/modprobe", "-r", "v4l2loopback"])
+    second = loopback._sudo(["/sbin/modprobe", "-r", "v4l2loopback"])
+    assert first.returncode == 1
+    assert second.returncode == 1
+    assert len(calls) == 1

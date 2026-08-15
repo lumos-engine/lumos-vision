@@ -30,6 +30,7 @@ log = get_logger(__name__)
 OUTPUT_LABEL = "Screen Sight"
 SCRCPY_LABEL = "Android Cam"
 _VIDEO_NR = re.compile(r"(?:^|/)video(\d+)$")
+_sudo_password_blocked = False
 
 
 def video_nr(path: str) -> int | None:
@@ -86,11 +87,14 @@ def loopback_helper() -> str:
 
 def _sudo(args: list[str], *, timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
     """Run ``args`` with ``sudo -n`` unless we are already root."""
+    global _sudo_password_blocked
     if os.geteuid() == 0:
         cmd = list(args)
     else:
         sudo = shutil.which("sudo") or "sudo"
         cmd = [sudo, "-n", *args]
+    if _sudo_password_blocked and os.geteuid() != 0:
+        return subprocess.CompletedProcess(cmd, 1, "", "a password is required")
     try:
         result = _run(cmd, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -98,7 +102,16 @@ def _sudo(args: list[str], *, timeout: float = 15.0) -> subprocess.CompletedProc
         return subprocess.CompletedProcess(cmd, 1, "", str(exc))
     if result.returncode != 0:
         err = (result.stderr or result.stdout or "").strip()
-        log.warning("%s: %s", " ".join(cmd), err or f"exit {result.returncode}")
+        if "password is required" in err.lower():
+            _sudo_password_blocked = True
+            log.error(
+                "Passwordless sudo is not set; Screen Sight will use the "
+                "format already on the loopback instead of reloading the module. "
+                "One-time fix: sudo cp packaging/sudoers.d/screen-sight-loopback "
+                "/etc/sudoers.d/ && sudo visudo -c -f /etc/sudoers.d/screen-sight-loopback"
+            )
+        else:
+            log.warning("%s: %s", " ".join(cmd), err or f"exit {result.returncode}")
     return result
 
 

@@ -34,6 +34,7 @@ from processor.utils.loopback import OUTPUT_LABEL, ensure_loopback, repair_loopb
 log = get_logger(__name__)
 
 # include/uapi/linux/videodev2.h
+V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
 V4L2_BUF_TYPE_VIDEO_OUTPUT = 2
 V4L2_FIELD_NONE = 1
 V4L2_COLORSPACE_SRGB = 8
@@ -58,6 +59,18 @@ PIXEL_FORMATS = {
     "RGB24": (fourcc("RGB3"), 3.0),
     "BGR24": (fourcc("BGR3"), 3.0),
 }
+
+_CTL_PIX = {"YUYV": "YUYV", "YUY2": "YUYV", "RGB24": "RGB3", "BGR24": "BGR3"}
+
+
+def format_name(code: int) -> str | None:
+    if code == fourcc("YUYV"):
+        return "YUYV"
+    if code == fourcc("RGB3"):
+        return "RGB24"
+    if code == fourcc("BGR3"):
+        return "BGR24"
+    return None
 
 
 def bgr_to_yuyv(image: np.ndarray) -> np.ndarray:
@@ -89,22 +102,26 @@ def bgr_to_yuyv(image: np.ndarray) -> np.ndarray:
 
 
 def pack_format(
-    width: int, height: int, pixel_format: str, full_range: bool = True
+    width: int,
+    height: int,
+    pixel_format: str,
+    full_range: bool = True,
+    buf_type: int = V4L2_BUF_TYPE_VIDEO_OUTPUT,
 ) -> bytes:
-    """Build ``struct v4l2_format`` for a video-output device."""
+    """Build ``struct v4l2_format`` for a video-output (or capture) device."""
     code, bytes_per_pixel = PIXEL_FORMATS[pixel_format]
-    bytes_per_line = int(width * bytes_per_pixel)
-    size_image = bytes_per_line * height
+    bytes_per_line = int(max(width, 0) * bytes_per_pixel)
+    size_image = bytes_per_line * max(height, 0)
     quantization = V4L2_QUANTIZATION_FULL_RANGE if full_range else V4L2_QUANTIZATION_LIM_RANGE
 
     # struct v4l2_format { __u32 type; <4 bytes padding>; union { ... } fmt; }
     # The union is 8-byte aligned (it contains a pointer via v4l2_window) and
     # 200 bytes long, giving the well-known total of 208.
-    header = struct.pack("<I4x", V4L2_BUF_TYPE_VIDEO_OUTPUT)
+    header = struct.pack("<I4x", int(buf_type))
     pix = struct.pack(
         "<12I",
-        width,
-        height,
+        max(int(width), 0),
+        max(int(height), 0),
         code,
         V4L2_FIELD_NONE,
         bytes_per_line,
@@ -118,6 +135,13 @@ def pack_format(
     )
     blob = header + pix
     return blob + b"\x00" * (_V4L2_FORMAT_SIZE - len(blob))
+
+
+def unpack_format(blob: bytes) -> tuple[int, int, int, int, int]:
+    width, height, code, _field, bytes_per_line, size_image = struct.unpack_from(
+        "<6I", blob, 8
+    )
+    return width, height, code, bytes_per_line, size_image
 
 
 class V4L2Sink(Sink):
@@ -142,6 +166,7 @@ class V4L2Sink(Sink):
         self._retry_at = 0.0
         self._next_repair = 0.0
         self._repair_cooldown = 15.0
+        self._requested: tuple[int, int] = (0, 0)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -154,6 +179,7 @@ class V4L2Sink(Sink):
         if width % 2 and self.pixel_format in {"YUYV", "YUY2"}:
             raise ValueError("YUYV output requires an even width")
 
+        self._requested = (width, height)
         self._size = (width, height)
         if not self._open_device():
             log.error(
@@ -165,7 +191,7 @@ class V4L2Sink(Sink):
             )
 
     def _open_device(self) -> bool:
-        width, height = self._size
+        width, height = self._requested or self._size
         if not os.path.exists(self.device):
             ensure_loopback(self.device, label=OUTPUT_LABEL)
         if not os.path.exists(self.device):
@@ -176,18 +202,15 @@ class V4L2Sink(Sink):
             )
             return False
 
-        # A previous keep_format=1 (or HyperHDR) can pin RGB3/YUYV so S_FMT
-        # appears to work but G_FMT still reports the old fourcc -- then we
-        # used to abort and leave no producer, so every viewer fails to open.
         self._set_keep_format(0)
 
-        negotiated = self._negotiate()
+        negotiated = self._negotiate(width, height, self.pixel_format)
         if negotiated is None and time.monotonic() >= self._next_repair:
             self._next_repair = time.monotonic() + self._repair_cooldown
             log.info("Repairing %s after S_FMT failure", self.device)
             repair_loopback(self.device, label=OUTPUT_LABEL)
             self._set_keep_format(0)
-            negotiated = self._negotiate()
+            negotiated = self._negotiate(width, height, self.pixel_format)
 
         if negotiated is None:
             self._last_error = (
@@ -197,69 +220,169 @@ class V4L2Sink(Sink):
             return False
 
         fd, got_w, got_h, got_code, got_bpl, got_size = negotiated
-        expect_code, _bpp = PIXEL_FORMATS[self.pixel_format]
-        if (got_w, got_h, got_code) != (width, height, expect_code):
+        name = format_name(got_code) or self.pixel_format
+        if (got_w, got_h, name) != (width, height, self.pixel_format):
             log.warning(
-                "%s reports %dx%d fourcc=0x%08x after S_FMT %s %dx%d -- "
-                "repairing the loopback node if this keeps happening",
+                "%s is pinned at %s %dx%d (wanted %s %dx%d) — writing that "
+                "so HyperHDR still has a producer",
                 self.device,
+                name,
                 got_w,
                 got_h,
-                got_code,
                 self.pixel_format,
                 width,
                 height,
             )
 
         self._fd = fd
-        self._size = (width, height)
-        self._announce_capture(fd, width, height)
+        self._size = (got_w, got_h)
+        self.pixel_format = name
+        self._announce_capture(fd, got_w, got_h)
         self._set_keep_format(1)
         self._last_error = None
         log.info(
             "V4L2 output ready: %s %s %dx%d (device bpl=%d size=%d)",
             self.device,
             self.pixel_format,
-            width,
-            height,
+            got_w,
+            got_h,
             got_bpl,
             got_size,
         )
         return True
 
-    def _negotiate(self) -> tuple[int, int, int, int, int, int] | None:
-        """Open the node and set the output format. Tries write-only then RDWR."""
+    def _negotiate(
+        self, width: int, height: int, pixel_format: str
+    ) -> tuple[int, int, int, int, int, int] | None:
+        """Open the node. Prefer the configured format; otherwise keep the pin."""
         last: OSError | None = None
-        for flags in (os.O_WRONLY, os.O_RDWR):
+        for flags in (os.O_RDWR, os.O_WRONLY):
+            fd: int | None = None
             try:
-                return self._set_format(flags)
+                fd = os.open(self.device, flags)
+                current = self._read_format(fd)
+                if self._try_s_fmt(fd, width, height, pixel_format):
+                    got = self._read_format(fd)
+                    if got is None:
+                        code, _bpp = PIXEL_FORMATS[pixel_format]
+                        bpl = int(width * _bpp)
+                        got = (width, height, code, bpl, bpl * height)
+                    return (fd, *got)
+                adopted = self._adoptable(current)
+                if adopted is not None:
+                    return (fd, *adopted)
+                os.close(fd)
+                fd = None
+                if self._ctl_set_fmt(width, height, pixel_format):
+                    fd = os.open(self.device, flags)
+                    got = self._read_format(fd)
+                    if got is not None and got[0] >= 2 and got[1] >= 1:
+                        return (fd, *got)
+                    os.close(fd)
+                    fd = None
+                if pixel_format in {"YUYV", "YUY2"}:
+                    fd = os.open(self.device, flags)
+                    if self._try_s_fmt(fd, width, height, "RGB24"):
+                        got = self._read_format(fd)
+                        if got is not None:
+                            return (fd, *got)
+                    os.close(fd)
+                    fd = None
             except OSError as exc:
                 last = exc
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                    fd = None
                 continue
         if last is not None:
             log.warning(
                 "failed to set %s %dx%d on %s: %s",
-                self.pixel_format,
-                self._size[0],
-                self._size[1],
+                pixel_format,
+                width,
+                height,
                 self.device,
                 last,
             )
         return None
 
-    def _set_format(self, flags: int) -> tuple[int, int, int, int, int, int]:
-        width, height = self._size
-        fd = os.open(self.device, flags)
+    def _read_format(self, fd: int) -> tuple[int, int, int, int, int] | None:
+        for buf_type in (V4L2_BUF_TYPE_VIDEO_OUTPUT, V4L2_BUF_TYPE_VIDEO_CAPTURE):
+            buf = bytearray(pack_format(0, 0, "YUYV", self.full_range, buf_type=buf_type))
+            try:
+                fcntl.ioctl(fd, VIDIOC_G_FMT, buf)
+            except OSError:
+                continue
+            width, height, code, bpl, size = unpack_format(buf)
+            if width >= 2 and height >= 1 and format_name(code):
+                return width, height, code, bpl, size
+        return None
+
+    def _adoptable(
+        self, current: tuple[int, int, int, int, int] | None
+    ) -> tuple[int, int, int, int, int] | None:
+        if current is None:
+            return None
+        width, height, code, bpl, size = current
+        if format_name(code) and width >= 2 and height >= 1:
+            return current
+        return None
+
+    def _try_s_fmt(self, fd: int, width: int, height: int, pixel_format: str) -> bool:
+        request = bytearray(pack_format(width, height, pixel_format, self.full_range))
         try:
-            request = pack_format(width, height, self.pixel_format, self.full_range)
             fcntl.ioctl(fd, VIDIOC_S_FMT, request)
-            got = bytearray(request)
-            fcntl.ioctl(fd, VIDIOC_G_FMT, got)
-            got_w, got_h, got_code, _, got_bpl, got_size = struct.unpack_from("<6I", got, 8)
-        except OSError:
-            os.close(fd)
-            raise
-        return fd, got_w, got_h, got_code, got_bpl, got_size
+            return True
+        except OSError as exc:
+            log.warning(
+                "failed to set %s %dx%d on %s: %s",
+                pixel_format,
+                width,
+                height,
+                self.device,
+                exc,
+            )
+            return False
+
+    def _ctl_set_fmt(self, width: int, height: int, pixel_format: str) -> bool:
+        pix = _CTL_PIX.get(pixel_format)
+        if not pix:
+            return False
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                [
+                    "v4l2-ctl",
+                    "-d",
+                    self.device,
+                    f"--set-fmt-video-out=width={width},height={height},pixelformat={pix}",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+        except Exception as exc:
+            log.debug("v4l2-ctl S_FMT on %s failed: %s", self.device, exc)
+            return False
+        if result.returncode != 0:
+            log.debug(
+                "v4l2-ctl S_FMT on %s: %s",
+                self.device,
+                (result.stderr or result.stdout or "").strip(),
+            )
+            return False
+        log.info(
+            "Set %s %dx%d on %s via v4l2-ctl",
+            pixel_format,
+            width,
+            height,
+            self.device,
+        )
+        return True
 
     def _announce_capture(self, fd: int, width: int, height: int) -> None:
         """Write one black frame so exclusive_caps flips to Video Capture."""

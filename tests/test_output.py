@@ -20,6 +20,7 @@ from processor.output.v4l2 import (
     PIXEL_FORMATS,
     V4L2_BUF_TYPE_VIDEO_OUTPUT,
     V4L2_FIELD_NONE,
+    VIDIOC_S_FMT,
     V4L2Sink,
     bgr_to_yuyv,
     fourcc,
@@ -126,6 +127,40 @@ def test_v4l2_open_repairs_stuck_format_instead_of_raising(monkeypatch):
     sink.open(640, 360)
     assert sink.stats["open"] is False
     assert repaired == ["/dev/video10"]
+
+
+def test_v4l2_writes_pinned_format_when_s_fmt_is_rejected(monkeypatch):
+    from processor.config.schema import V4L2Config
+
+    repaired: list[str] = []
+    monkeypatch.setattr("processor.output.v4l2.sys.platform", "linux")
+    monkeypatch.setattr("processor.output.v4l2.os.path.exists", lambda path: True)
+    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._set_keep_format", lambda *a, **k: None)
+    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._ctl_set_fmt", lambda *a, **k: False)
+    monkeypatch.setattr(
+        "processor.output.v4l2.repair_loopback",
+        lambda path, **k: repaired.append(path) or True,
+    )
+    monkeypatch.setattr("processor.output.v4l2.ensure_loopback", lambda *a, **k: True)
+    monkeypatch.setattr("processor.output.v4l2.os.open", lambda *_a, **_k: 7)
+    monkeypatch.setattr("processor.output.v4l2.os.close", lambda *_a, **_k: None)
+    monkeypatch.setattr("processor.output.v4l2.os.write", lambda *_a, **_k: 1280 * 720 * 2)
+
+    def fake_ioctl(_fd, req, buf):
+        if req == VIDIOC_S_FMT:
+            raise OSError(22, "Invalid argument")
+        packed = pack_format(1280, 720, "YUYV")
+        buf[: len(packed)] = packed
+        return 0
+
+    monkeypatch.setattr("processor.output.v4l2.fcntl.ioctl", fake_ioctl)
+
+    sink = V4L2Sink(V4L2Config())
+    sink.open(640, 360)
+    assert sink.stats["open"] is True
+    assert sink.stats["size"] == [1280, 720]
+    assert sink.stats["pixel_format"] == "YUYV"
+    assert repaired == []
 
 
 def test_processor_recovers_v4l2_and_nudges_hyperhdr(monkeypatch):
