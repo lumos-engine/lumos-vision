@@ -117,7 +117,8 @@ logging:
   stats_interval: 30                # seconds between throughput log lines
 
 # Optional: Lumos Cam (preferred Android path). Needs Lumos Cam ≥ 0.1 on the
-# phone. Wizard → "Lumos Cam". Zoom/locks are live HTTP; ffmpeg → /dev/video11.
+# phone. Wizard → "Lumos Cam". Zoom/locks are live HTTP; ffmpeg decodes to a
+# pipe (not /dev/video11). Do not set camera.device to the loopback sink.
 # When lumos_cam.enabled, scrcpy is skipped even if scrcpy.enabled is true.
 # lumos_cam:
 #   enabled: true

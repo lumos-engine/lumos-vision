@@ -789,12 +789,15 @@ class Processor:
         }
 
     def _make_source_unlocked(self) -> FrameSource:
-        if (
-            self.config.lumos_cam.enabled
-            and self.config.lumos_cam.bind_camera
-            and self._lumos.running
-            and hasattr(self._lumos, "read_bgr")
-        ):
+        lumos = self.config.lumos_cam
+        if lumos.enabled and lumos.bind_camera and hasattr(self._lumos, "read_bgr"):
+            device = (self.config.camera.device or "").strip()
+            sink = (lumos.v4l2_sink or "").strip()
+            if device and sink and device == sink:
+                log.info(
+                    "Lumos Cam reads the ffmpeg pipe; ignoring camera.device=%s",
+                    device,
+                )
             return LumosPipeSource(self._lumos, self.config.camera)
         return create_source(self.config.camera)
 

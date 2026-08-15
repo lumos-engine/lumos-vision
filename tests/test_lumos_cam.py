@@ -705,6 +705,76 @@ def test_enable_lumos_skips_capture_until_loopback_ready(monkeypatch):
         app.shutdown()
 
 
+def test_lumos_bind_ignores_loopback_device_when_ffmpeg_down():
+    from processor.app import Processor
+    from processor.camera.lumos import LumosPipeSource
+    from processor.camera.v4l2 import V4l2Source
+
+    class FakeMgr:
+        running = False
+
+        def read_bgr(self, timeout=1.0):
+            return None
+
+        def frame_size(self):
+            return (1920, 1080)
+
+        def stop(self):
+            return {"ok": True, "running": False}
+
+        def ensure_running(self, cfg):
+            return {"ok": False, "running": False}
+
+        def status(self, cfg):
+            from processor.utils.lumos_cam import LumosCamStatus
+
+            return LumosCamStatus(
+                enabled=cfg.enabled,
+                running=False,
+                pid=None,
+                zoom=cfg.camera_zoom,
+                pan_x=cfg.pan_x,
+                pan_y=cfg.pan_y,
+                af=cfg.af,
+                ae=cfg.ae,
+                awb=cfg.awb,
+                cal_mode=False,
+                camera_id=cfg.camera_id,
+                camera_size=cfg.camera_size,
+                camera_fps=cfg.camera_fps,
+                codec=cfg.codec,
+                v4l2_sink=cfg.v4l2_sink,
+                app_version="0.1.0",
+                protocol=1,
+                package_installed=True,
+                last_error="",
+                command=[],
+            )
+
+    config = Config.from_dict(
+        {
+            "camera": {
+                "source": "v4l2",
+                "device": "/dev/video11",
+                "capture_width": 640,
+                "capture_height": 480,
+            },
+            "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+            "lumos_cam": {
+                "enabled": True,
+                "bind_camera": True,
+                "v4l2_sink": "/dev/video11",
+            },
+        }
+    )
+    app = Processor(config)
+    app._lumos = FakeMgr()
+    source = app._make_source_unlocked()
+    assert isinstance(source, LumosPipeSource)
+    assert not isinstance(source, V4l2Source)
+
+
 def test_lumos_primary_skips_scrcpy(monkeypatch):
     from processor.app import Processor
 
