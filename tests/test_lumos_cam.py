@@ -134,11 +134,12 @@ def test_build_ffmpeg_command_h264():
     assert "tcp://127.0.0.1:18766" in cmd
     assert "mjpeg" in cmd
     assert "pipe:1" in cmd
-    assert "nobuffer+flush_packets" in cmd
     assert "-flush_packets" in cmd
+    assert "nobuffer" not in cmd
     assert "/dev/video11" not in cmd
-    assert "-timeout" in cmd
-    assert "15000000" in cmd
+    assert "-analyzeduration" in cmd
+    assert "-probesize" in cmd
+    assert "-timeout" not in cmd
 
 
 def test_build_ffmpeg_command_mjpeg():
@@ -309,8 +310,8 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
             ffmpeg="/usr/bin/ffmpeg",
         )
     )
-    assert result["ok"] is False
-    assert result["running"] is False
+    assert result["ok"] is True
+    assert result["running"] is True
     assert result["ready"] is False
     assert "no decoded frames" in (result.get("error") or "")
 
@@ -366,7 +367,9 @@ def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
             ffmpeg="/usr/bin/ffmpeg",
         )
     )
-    assert result["ok"] is False
+    assert result["ok"] is True
+    assert result["running"] is True
+    assert result["ready"] is False
     assert "bytes_sent=0" in (result.get("error") or "")
 
 
@@ -629,7 +632,7 @@ def test_apply_lumos_skips_ffmpeg_restart_when_stream_unchanged(monkeypatch):
         app.shutdown()
 
 
-def test_enable_lumos_skips_capture_until_loopback_ready(monkeypatch):
+def test_enable_lumos_starts_pipe_before_first_frame(monkeypatch):
     from processor.app import Processor
 
     recreates = []
@@ -700,7 +703,7 @@ def test_enable_lumos_skips_capture_until_loopback_ready(monkeypatch):
     try:
         result = app.apply_lumos_cam({"enabled": True}, action="apply")
         assert result["ok"] is True
-        assert recreates == []
+        assert recreates == [1]
         assert app.config.camera.device != "/dev/video11"
     finally:
         app.shutdown()

@@ -383,7 +383,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             result = self.processor.apply_camera_source(fields, save=save)
         except Exception as exc:
-            return self._send_json({"ok": False, "error": str(exc)}, status=400)
+            msg = str(exc).strip() or type(exc).__name__
+            return self._send_json({"ok": False, "error": msg}, status=400)
         config = result.get("config") or {}
         url = config.get("camera", {}).get("rtsp_url", "")
         if url:

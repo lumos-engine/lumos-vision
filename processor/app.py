@@ -923,7 +923,7 @@ class Processor:
                 "saved": saved_path,
             }
 
-        return self.call(apply)
+        return self.call(apply, timeout=30.0)
 
     def _apply_camera_controls(self, values: dict[str, int]) -> dict[str, Any]:
         source = self.source
@@ -1270,7 +1270,6 @@ class Processor:
                 and (sidecar_restarted or stream_changed)
                 and lumos_result.get("ok")
                 and lumos_result.get("running")
-                and lumos_result.get("ready", True)
             ):
                 try:
                     source_result = self._recreate_source_unlocked()

@@ -187,21 +187,23 @@ def build_ffmpeg_command(
     exe = binary or resolve_ffmpeg(cfg.ffmpeg)
     codec = (cfg.codec or "h264").strip().lower()
     demux = "mjpeg" if codec == "mjpeg" else "h264"
-    timeout_us = int(max(1.0, float(cfg.startup_timeout_sec)) * 1_000_000)
     url = f"tcp://127.0.0.1:{int(cfg.video_host_port)}"
     cmd = [
         exe,
         "-hide_banner",
         "-loglevel",
         "warning",
-        "-fflags",
-        "nobuffer+flush_packets",
+        # Do not use -fflags nobuffer: it forces analyzeduration=0 even when
+        # we set -analyzeduration, so ffmpeg exits before the phone encoder
+        # attaches (bytes_sent=0 → "unspecified size").
         "-flags",
         "low_delay",
         "-flush_packets",
         "1",
-        "-timeout",
-        str(timeout_us),
+        "-analyzeduration",
+        "5000000",
+        "-probesize",
+        "5000000",
         "-f",
         demux,
         "-i",
@@ -580,13 +582,36 @@ class LumosCamManager:
 
         if not ready:
             phone = self._phone or {}
-            self._last_error = (
+            codec = (cfg.codec or "h264").strip().lower()
+            detail = (
                 f"no decoded frames from ffmpeg after {float(cfg.startup_timeout_sec):.0f}s "
                 f"(phone streaming={phone.get('streaming')!r} "
                 f"video_clients={phone.get('video_clients', 0)} "
                 f"bytes_sent={phone.get('bytes_sent', 0)} "
-                f"encoder_attached={phone.get('encoder_attached')!r}). "
-                "Keep Lumos Cam on screen. Sideload Lumos Cam ≥ 0.1.11 if bytes_sent stays 0."
+                f"encoder_attached={phone.get('encoder_attached')!r})"
+            )
+            if codec == "mjpeg" and phone.get("encoder_attached") is False:
+                detail += (
+                    " — this phone never attached an MJPEG encoder; switch codec to h264"
+                )
+            if self.running:
+                # Killing ffmpeg here made the watchdog restart-loop and the
+                # wizard POST /api/camera/source time out (5s vs 15s wait).
+                log.warning(
+                    "lumos-cam: %s — leaving ffmpeg running; frames may still arrive",
+                    detail,
+                )
+                return {
+                    "ok": True,
+                    "running": True,
+                    "pid": proc.pid,
+                    "ready": False,
+                    "command": list(cmd),
+                    "error": detail,
+                }
+            self._last_error = (
+                f"{detail}. Keep Lumos Cam on screen. "
+                "Sideload Lumos Cam ≥ 0.1.11 if bytes_sent stays 0."
             )
             log.error("lumos-cam: %s", self._last_error)
             self.stop()

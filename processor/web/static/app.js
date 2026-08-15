@@ -471,9 +471,11 @@ async function buildLumosCamPanel() {
     <div class="control">
       <label for="lumos-codec">Codec</label>
       <select id="lumos-codec">
-        <option value="h264">h264</option>
+        <option value="h264">h264 (recommended)</option>
         <option value="mjpeg">mjpeg</option>
       </select>
+      <p class="hint">Use h264. Many phones never attach an MJPEG encoder
+      (<code>encoder_attached=false</code>, no frames).</p>
     </div>
     <div class="control">
       <label for="lumos-zoom">Zoom (<span id="lumos-zoom-label">1.00</span>×)</label>
