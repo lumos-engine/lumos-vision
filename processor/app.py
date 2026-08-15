@@ -194,6 +194,7 @@ class Processor:
         self._scrcpy_next_retry = 0.0
         self._lumos = LumosCamManager()
         self._lumos_next_retry = 0.0
+        self._lumos_transform_at = 0.0
         self._color_cal = ColorCalibrationSession()
 
     # ------------------------------------------------------------------
@@ -629,6 +630,11 @@ class Processor:
         if self._idle or not cfg.enabled or not cfg.auto_restart:
             return
         if self._lumos.running:
+            now = time.monotonic()
+            sync = getattr(self._lumos, "sync_output_transform", None)
+            if callable(sync) and now >= self._lumos_transform_at:
+                self._lumos_transform_at = now + 1.5
+                sync(cfg)
             return
         now = time.monotonic()
         if now < self._lumos_next_retry:
@@ -1215,6 +1221,24 @@ class Processor:
                 if updates:
                     self.config = apply_updates(self.config, updates)
                 result = self._set_lumos_cal_mode(False)
+                return {
+                    "ok": bool(result.get("ok", True)),
+                    "action": action_name,
+                    "lumos_cam": self._lumos.status(self.config.lumos_cam).as_dict(),
+                    "result": result,
+                    "config": config_to_dict(self.config),
+                    "error": result.get("error"),
+                }
+            elif action_name in {"ui_rotate", "frame_rotate", "flip_h", "flip_v"}:
+                payload = {
+                    "ui_rotate": {"ui_rotate": 90},
+                    "frame_rotate": {"frame_rotate": 90},
+                    "flip_h": {"toggle_flip_h": True},
+                    "flip_v": {"toggle_flip_v": True},
+                }[action_name]
+                result = self._lumos.set_display(payload)
+                if action_name != "ui_rotate" and result.get("ok") and self._lumos.running:
+                    self._lumos.sync_output_transform(self.config.lumos_cam)
                 return {
                     "ok": bool(result.get("ok", True)),
                     "action": action_name,

@@ -288,6 +288,10 @@ let lumosPanelState = {
   cal_mode: false,
   last_error: '',
   app_version: '',
+  ui_rotation: 0,
+  frame_rotation: 0,
+  flip_h: false,
+  flip_v: false,
 };
 
 let lumosFormDirty = false;
@@ -339,6 +343,10 @@ function syncLumosMeta() {
     `AWB ${lumosPanelState.awb}`,
   ];
   if (lumosPanelState.cal_mode) bits.push('cal mode');
+  bits.push(`UI ${Number(lumosPanelState.ui_rotation || 0)}°`);
+  bits.push(`frame ${Number(lumosPanelState.frame_rotation || 0)}°`);
+  if (lumosPanelState.flip_h) bits.push('flip H');
+  if (lumosPanelState.flip_v) bits.push('flip V');
   if (lumosPanelState.app_version) bits.push(`app ${lumosPanelState.app_version}`);
   if (lumosPanelState.last_error) bits.push(lumosPanelState.last_error);
   if (lumosFormDirty) bits.push('unsaved edits');
@@ -422,6 +430,10 @@ async function postLumos(action, fields, { save = false } = {}) {
       lumosPanelState.awb = result.lumos_cam.awb || lumosPanelState.awb;
       lumosPanelState.cal_mode = Boolean(result.lumos_cam.cal_mode);
       lumosPanelState.app_version = result.lumos_cam.app_version || '';
+      if (result.lumos_cam.ui_rotation != null) lumosPanelState.ui_rotation = Number(result.lumos_cam.ui_rotation);
+      if (result.lumos_cam.frame_rotation != null) lumosPanelState.frame_rotation = Number(result.lumos_cam.frame_rotation);
+      lumosPanelState.flip_h = Boolean(result.lumos_cam.flip_h);
+      lumosPanelState.flip_v = Boolean(result.lumos_cam.flip_v);
     }
     if (result.config) {
       applyLumosPanelFromConfig(result.config);
@@ -447,11 +459,13 @@ async function buildLumosCamPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Lumos Cam</h3>
-    <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1). Leave the
+    <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1.12). Leave the
     app open on the phone. Wireless adb serial looks like
     <code>192.168.1.243:37847</code> (the port changes). No USB device — frames
     come from an ffmpeg pipe. Live zoom, pan, and AF/AE/AWB locks. Colour-cal
-    Start turns on cal mode.</p>
+    Start turns on cal mode. <strong>UI ⟳</strong> only moves the on-phone
+    controls (camera stays landscape). <strong>Frame ⟳</strong> / Flip rotate
+    or mirror the preview and the host feed.</p>
     <div class="control">
       <label for="lumos-serial">ADB serial (optional)</label>
       <input id="lumos-serial" type="text" spellcheck="false" placeholder="452ee42b0506">
@@ -502,6 +516,10 @@ async function buildLumosCamPanel() {
       <button type="button" class="btn" id="btn-lumos-pan-up" title="Pan up">↑</button>
       <button type="button" class="btn" id="btn-lumos-pan-down" title="Pan down">↓</button>
       <button type="button" class="btn" id="btn-lumos-pan-center">Center</button>
+      <button type="button" class="btn" id="btn-lumos-ui-rotate">UI ⟳</button>
+      <button type="button" class="btn" id="btn-lumos-frame-rotate">Frame ⟳</button>
+      <button type="button" class="btn" id="btn-lumos-flip-h">Flip H</button>
+      <button type="button" class="btn" id="btn-lumos-flip-v">Flip V</button>
     </div>`;
   root.append(section);
 
@@ -567,6 +585,20 @@ async function buildLumosCamPanel() {
   $('btn-lumos-pan-up')?.addEventListener('click', pan('pan_up'));
   $('btn-lumos-pan-down')?.addEventListener('click', pan('pan_down'));
   $('btn-lumos-pan-center')?.addEventListener('click', pan('pan_center'));
+  const liveDisplay = (id, action, label) => {
+    $(id)?.addEventListener('click', async () => {
+      try {
+        await postLumos(action, {});
+        toast(label);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  };
+  liveDisplay('btn-lumos-ui-rotate', 'ui_rotate', 'UI rotated');
+  liveDisplay('btn-lumos-frame-rotate', 'frame_rotate', 'Frame rotated');
+  liveDisplay('btn-lumos-flip-h', 'flip_h', 'Flip H');
+  liveDisplay('btn-lumos-flip-v', 'flip_v', 'Flip V');
 }
 
 // ------------------------------------------------------------- scrcpy panel
@@ -1802,6 +1834,10 @@ async function refresh() {
     lumosPanelState.last_error = status.lumos_cam.last_error || '';
     lumosPanelState.cal_mode = Boolean(status.lumos_cam.cal_mode);
     lumosPanelState.app_version = status.lumos_cam.app_version || '';
+    if (status.lumos_cam.ui_rotation != null) lumosPanelState.ui_rotation = Number(status.lumos_cam.ui_rotation);
+    if (status.lumos_cam.frame_rotation != null) lumosPanelState.frame_rotation = Number(status.lumos_cam.frame_rotation);
+    lumosPanelState.flip_h = Boolean(status.lumos_cam.flip_h);
+    lumosPanelState.flip_v = Boolean(status.lumos_cam.flip_v);
     if (!lumosFormDirty && !lumosBusy) {
       if (status.lumos_cam.zoom != null) lumosPanelState.camera_zoom = Number(status.lumos_cam.zoom);
       if (status.lumos_cam.pan_x != null) lumosPanelState.pan_x = Number(status.lumos_cam.pan_x);

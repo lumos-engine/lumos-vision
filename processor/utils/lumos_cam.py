@@ -65,6 +65,10 @@ class LumosCamStatus:
     package_installed: bool
     last_error: str
     command: list[str]
+    ui_rotation: int = 0
+    frame_rotation: int = 0
+    flip_h: bool = False
+    flip_v: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +91,10 @@ class LumosCamStatus:
             "package_installed": self.package_installed,
             "last_error": self.last_error,
             "command": list(self.command),
+            "ui_rotation": self.ui_rotation,
+            "frame_rotation": self.frame_rotation,
+            "flip_h": self.flip_h,
+            "flip_v": self.flip_v,
             "min_app_version": MIN_APP_VERSION,
         }
 
@@ -193,6 +201,8 @@ def build_ffmpeg_command(
     binary: str | None = None,
     rotation: int = 0,
     max_edge: int = PIPE_MAX_EDGE,
+    flip_h: bool = False,
+    flip_v: bool = False,
 ) -> list[str]:
     exe = binary or resolve_ffmpeg(cfg.ffmpeg)
     codec = (cfg.codec or "h264").strip().lower()
@@ -234,6 +244,10 @@ def build_ffmpeg_command(
         filters.append(
             f"scale={int(max_edge)}:{int(max_edge)}:force_original_aspect_ratio=decrease"
         )
+    if flip_h:
+        filters.append("hflip")
+    if flip_v:
+        filters.append("vflip")
     if filters:
         cmd.extend(["-vf", ",".join(filters)])
     # MJPEG on the pipe is framed (~50–150KiB after scale) so we never block
@@ -306,6 +320,14 @@ def _rotation_filter(degrees: int) -> str:
     if turn == 270:
         return "transpose=2"
     return ""
+
+
+def _phone_transform(phone: dict[str, Any]) -> tuple[int, bool, bool]:
+    return (
+        int(phone.get("orientation") or 0) % 360,
+        bool(phone.get("flip_h")),
+        bool(phone.get("flip_v")),
+    )
 
 
 def step_lumos_zoom(current: float, *, inward: bool, cfg: LumosCamConfig) -> float:
@@ -404,6 +426,9 @@ class LumosCamClient:
     def set_cal_mode(self, enabled: bool) -> dict[str, Any]:
         return self.request("POST", "/cal_mode", {"enabled": bool(enabled)})
 
+    def set_display(self, fields: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", "/display", fields)
+
     def set_stream(self, cfg: LumosCamConfig, *, enabled: bool = True) -> dict[str, Any]:
         width, height = parse_camera_size(cfg.camera_size)
         return self.request(
@@ -441,6 +466,7 @@ class LumosCamManager:
         self._stderr_thread: threading.Thread | None = None
         self._stderr_tail: list[str] = []
         self._logged_first = False
+        self._stream_transform: tuple[int, bool, bool] = (0, False, False)
 
     @property
     def running(self) -> bool:
@@ -488,6 +514,10 @@ class LumosCamManager:
             package_installed=bool(phone.get("package_installed", False)),
             last_error=last_error,
             command=list(self._command),
+            ui_rotation=int(phone.get("ui_rotation", 0) or 0),
+            frame_rotation=int(phone.get("frame_rotation", 0) or 0),
+            flip_h=bool(phone.get("flip_h")),
+            flip_v=bool(phone.get("flip_v")),
         )
 
     def ensure_running(self, cfg: LumosCamConfig) -> dict[str, Any]:
@@ -552,13 +582,29 @@ class LumosCamManager:
             log.error("lumos-cam control: %s", exc)
             return {"ok": False, "error": self._last_error, "running": False}
 
+        return self._start_ffmpeg(cfg, phone)
+
+    def _start_ffmpeg(
+        self,
+        cfg: LumosCamConfig,
+        phone: dict[str, Any],
+        *,
+        wait: bool = True,
+    ) -> dict[str, Any]:
         self._ffmpeg = resolve_ffmpeg(cfg.ffmpeg)
-        rotation = int(phone.get("orientation") or 0)
+        rotation, flip_h, flip_v = _phone_transform(phone)
+        self._stream_transform = (rotation, flip_h, flip_v)
         self._frame_wh = output_frame_size(cfg, rotation)
         self._pending = b""
         self._held_frame = None
         self._logged_first = False
-        cmd = build_ffmpeg_command(cfg, binary=self._ffmpeg, rotation=rotation)
+        cmd = build_ffmpeg_command(
+            cfg,
+            binary=self._ffmpeg,
+            rotation=rotation,
+            flip_h=flip_h,
+            flip_v=flip_v,
+        )
         self._command = cmd
         log.info(
             "Starting Lumos Cam receiver %dx%d: %s",
@@ -593,7 +639,7 @@ class LumosCamManager:
                 _enlarge_pipe(fd)
             except OSError:
                 pass
-        ready = self._wait_until_ready(cfg)
+        ready = self._wait_until_ready(cfg) if wait else True
         proc = self._proc
         if proc is not None and proc.poll() is not None:
             output = self._read_process_output(proc)
@@ -661,19 +707,13 @@ class LumosCamManager:
             "command": list(cmd),
         }
 
-    def stop(self) -> dict[str, Any]:
-        if self._forwards_up:
-            try:
-                self.client.request("POST", "/stream", {"enabled": False}, timeout=1.5)
-            except Exception:
-                pass
+    def _kill_ffmpeg_unlocked(self) -> None:
         proc = self._proc
         self._proc = None
         self._pending = b""
         self._held_frame = None
-        self._drop_forwards()
         if proc is None:
-            return {"ok": True, "running": False}
+            return
         for stream in (proc.stdout, proc.stderr):
             if stream is not None:
                 try:
@@ -681,7 +721,7 @@ class LumosCamManager:
                 except Exception:
                     pass
         if proc.poll() is not None:
-            return {"ok": True, "running": False}
+            return
         log.info("Stopping Lumos Cam ffmpeg (pid %s)", proc.pid)
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -704,6 +744,15 @@ class LumosCamManager:
                 proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 pass
+
+    def stop(self) -> dict[str, Any]:
+        if self._forwards_up:
+            try:
+                self.client.request("POST", "/stream", {"enabled": False}, timeout=1.5)
+            except Exception:
+                pass
+        self._drop_forwards()
+        self._kill_ffmpeg_unlocked()
         return {"ok": True, "running": False}
 
     def restart(self, cfg: LumosCamConfig) -> dict[str, Any]:
@@ -724,6 +773,38 @@ class LumosCamManager:
             self._last_error = str(exc)
             return {"ok": False, "error": self._last_error, "running": self.running}
         return {"ok": True, "running": self.running, "live": True}
+
+    def set_display(self, fields: dict[str, Any]) -> dict[str, Any]:
+        try:
+            phone = self.client.set_display(fields)
+            self._phone = {**self._phone, **phone}
+            return {"ok": True, **phone}
+        except RuntimeError as exc:
+            self._last_error = str(exc)
+            return {"ok": False, "error": str(exc)}
+
+    def sync_output_transform(self, cfg: LumosCamConfig) -> dict[str, Any]:
+        """Respawn ffmpeg when the phone's orientation/flip changed."""
+        if not self.running:
+            return {"ok": True, "skipped": True}
+        try:
+            phone = self.client.status()
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+        self._phone = {**self._phone, **phone}
+        wanted = _phone_transform(phone)
+        if wanted == self._stream_transform:
+            return {"ok": True, "unchanged": True, "running": True}
+        log.info(
+            "Lumos Cam output transform changed %s -> %s — restarting ffmpeg",
+            self._stream_transform,
+            wanted,
+        )
+        return self._respawn_ffmpeg(cfg, phone)
+
+    def _respawn_ffmpeg(self, cfg: LumosCamConfig, phone: dict[str, Any]) -> dict[str, Any]:
+        self._kill_ffmpeg_unlocked()
+        return self._start_ffmpeg(cfg, phone, wait=False)
 
     def set_cal_mode(self, enabled: bool) -> dict[str, Any]:
         try:

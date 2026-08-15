@@ -154,6 +154,14 @@ def test_build_ffmpeg_command_mjpeg():
     assert "mjpeg" in cmd
 
 
+def test_build_ffmpeg_command_flips():
+    cfg = LumosCamConfig(ffmpeg="/usr/bin/ffmpeg")
+    cmd = build_ffmpeg_command(cfg, binary="/usr/bin/ffmpeg", flip_h=True, flip_v=True)
+    vf = cmd[cmd.index("-vf") + 1]
+    assert "hflip" in vf
+    assert "vflip" in vf
+
+
 def test_step_lumos_zoom_and_pan():
     cfg = LumosCamConfig(zoom_min=1.0, zoom_max=10.0, camera_zoom=1.0)
     assert abs(step_lumos_zoom(1.0, inward=True, cfg=cfg) - ZOOM_STEP) < 1e-6

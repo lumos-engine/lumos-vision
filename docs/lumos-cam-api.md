@@ -70,7 +70,11 @@ All JSON bodies. Unknown fields ignored. Errors:
   "orientation": 90,
   "video_clients": 0,
   "bytes_sent": 0,
-  "encoder_attached": false
+  "encoder_attached": false,
+  "ui_rotation": 0,
+  "frame_rotation": 0,
+  "flip_h": false,
+  "flip_v": false
 }
 ```
 
@@ -150,3 +154,20 @@ session (preview stays up).
 ```
 
 Select Camera2 id (usually `"0"` = back).
+
+### `POST /display`
+
+```json
+{"ui_rotate": 90, "frame_rotate": 90, "toggle_flip_h": true, "toggle_flip_v": false}
+```
+
+or absolute values:
+
+```json
+{"ui_rotation": 90, "frame_rotation": 180, "flip_h": true, "flip_v": false}
+```
+
+Omitted keys unchanged. `ui_rotation` only moves the on-phone control chrome
+(camera stays landscape). `frame_rotation` / flips apply to the preview and
+to `orientation` / `flip_*` that the host uses for ffmpeg.
+
