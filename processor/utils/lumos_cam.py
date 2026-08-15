@@ -181,8 +181,18 @@ def resolve_ffmpeg(configured: str) -> str:
     return found or text
 
 
+# Long-edge cap for the ffmpeg MJPEG pipe. 1080p JPEG encode on a typical
+# host is ~7 fps, so the h264 input queue grows and the wizard plays in
+# slow motion. Detection already downscales to detect_width (480).
+PIPE_MAX_EDGE = 1280
+
+
 def build_ffmpeg_command(
-    cfg: LumosCamConfig, *, binary: str | None = None, rotation: int = 0
+    cfg: LumosCamConfig,
+    *,
+    binary: str | None = None,
+    rotation: int = 0,
+    max_edge: int = PIPE_MAX_EDGE,
 ) -> list[str]:
     exe = binary or resolve_ffmpeg(cfg.ffmpeg)
     codec = (cfg.codec or "h264").strip().lower()
@@ -196,28 +206,41 @@ def build_ffmpeg_command(
         # Do not use -fflags nobuffer: it forces analyzeduration=0 even when
         # we set -analyzeduration, so ffmpeg exits before the phone encoder
         # attaches (bytes_sent=0 → "unspecified size").
+        "-fflags",
+        "discardcorrupt+genpts",
         "-flags",
         "low_delay",
         "-flush_packets",
         "1",
         "-analyzeduration",
-        "5000000",
+        "2000000",
         "-probesize",
-        "5000000",
+        "2000000",
         "-f",
         demux,
         "-i",
         url,
+        "-an",
+        # Raw h264/TCP has no timestamps; the default CFR muxer sleeps and
+        # the pipe plays back slower than realtime.
+        "-vsync",
+        "passthrough",
     ]
-    vf = _rotation_filter(rotation)
-    if vf:
-        cmd.extend(["-vf", vf])
-    # MJPEG on the pipe is framed (~100–300KiB) so we never block on a 6MiB
-    # raw BGR write. ffmpeg also flushes each JPEG; rawvideo often emitted
-    # one frame and then stalled.
+    filters: list[str] = []
+    rot = _rotation_filter(rotation)
+    if rot:
+        filters.append(rot)
+    if max_edge > 0:
+        filters.append(
+            f"scale={int(max_edge)}:{int(max_edge)}:force_original_aspect_ratio=decrease"
+        )
+    if filters:
+        cmd.extend(["-vf", ",".join(filters)])
+    # MJPEG on the pipe is framed (~50–150KiB after scale) so we never block
+    # on a 6MiB raw BGR write. ffmpeg also flushes each JPEG; rawvideo often
+    # emitted one frame and then stalled.
     cmd.extend(
         [
-            "-an",
             "-q:v",
             "5",
             "-f",
@@ -250,8 +273,8 @@ def _pop_newest_jpeg(buf: bytearray) -> bytes | None:
 
 
 def _enlarge_pipe(fd: int) -> None:
-    """Grow the kernel pipe so ffmpeg can write more than 64KiB per wakeup."""
-    for size in (8 << 20, 1 << 20, 256 << 10):
+    """Give ffmpeg room for one JPEG. 8MiB held ~1s of 1080p and looked delayed."""
+    for size in (256 << 10, 64 << 10):
         try:
             fcntl.fcntl(fd, getattr(fcntl, "F_SETPIPE_SZ", 1031), size)
             return
@@ -259,10 +282,18 @@ def _enlarge_pipe(fd: int) -> None:
             continue
 
 
-def output_frame_size(cfg: LumosCamConfig, rotation: int = 0) -> tuple[int, int]:
+def output_frame_size(
+    cfg: LumosCamConfig, rotation: int = 0, *, max_edge: int = PIPE_MAX_EDGE
+) -> tuple[int, int]:
     width, height = parse_camera_size(cfg.camera_size or "1920x1080")
     if int(rotation) % 180 == 90:
-        return height, width
+        width, height = height, width
+    edge = int(max_edge)
+    long_edge = max(width, height)
+    if edge > 0 and long_edge > edge:
+        scale = edge / float(long_edge)
+        width = max(2, int(round(width * scale)))
+        height = max(2, int(round(height * scale)))
     return width, height
 
 
@@ -848,7 +879,7 @@ class LumosCamManager:
                 jpeg = newest
                 while True:
                     try:
-                        extra = os.read(fd, 65536)
+                        extra = os.read(fd, 262144)
                     except (BlockingIOError, OSError):
                         break
                     if not extra:
@@ -863,7 +894,7 @@ class LumosCamManager:
                 self._pending = bytes(buf)
                 return None
             try:
-                chunk = os.read(fd, 65536)
+                chunk = os.read(fd, 262144)
             except BlockingIOError:
                 try:
                     ready, _, _ = select.select([fd], [], [], remaining)

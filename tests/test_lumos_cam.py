@@ -114,11 +114,13 @@ def test_adb_launch_error_detects_miui_type3():
 def test_build_ffmpeg_command_rotates():
     cfg = LumosCamConfig(ffmpeg="/usr/bin/ffmpeg")
     cmd = build_ffmpeg_command(cfg, binary="/usr/bin/ffmpeg", rotation=90)
-    assert "-vf" in cmd and "transpose=1" in cmd
+    vf = cmd[cmd.index("-vf") + 1]
+    assert vf.startswith("transpose=1,scale=")
     from processor.utils.lumos_cam import output_frame_size
 
-    assert output_frame_size(cfg, 90) == (1080, 1920)
-    assert output_frame_size(cfg, 0) == (1920, 1080)
+    assert output_frame_size(cfg, 90) == (720, 1280)
+    assert output_frame_size(cfg, 0) == (1280, 720)
+    assert output_frame_size(cfg, 0, max_edge=0) == (1920, 1080)
 
 
 def test_build_ffmpeg_command_h264():
@@ -140,6 +142,10 @@ def test_build_ffmpeg_command_h264():
     assert "-analyzeduration" in cmd
     assert "-probesize" in cmd
     assert "-timeout" not in cmd
+    assert "-vsync" in cmd and "passthrough" in cmd
+    vf = cmd[cmd.index("-vf") + 1]
+    assert vf.startswith("scale=")
+    assert "force_original_aspect_ratio=decrease" in vf
 
 
 def test_build_ffmpeg_command_mjpeg():
