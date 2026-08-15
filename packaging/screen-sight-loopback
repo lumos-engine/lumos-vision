@@ -1,0 +1,69 @@
+#!/bin/sh
+# Ensure v4l2loopback nodes for Screen Sight. Never unloads the module.
+# Usage: screen-sight-loopback [/dev/video10] [/dev/video11]
+set -eu
+
+OUTPUT="${1:-/dev/video10}"
+SCRCPY="${2:-}"
+
+video_nr() {
+  echo "$1" | sed -n 's#.*/video\([0-9][0-9]*\)$#\1#p'
+}
+
+add_one() {
+  path="$1"
+  label="$2"
+  if [ -e "$path" ]; then
+    return 0
+  fi
+  nr="$(video_nr "$path")"
+  if [ -z "$nr" ]; then
+    echo "screen-sight-loopback: cannot parse video nr from $path" >&2
+    return 1
+  fi
+  if command -v v4l2loopback-ctl >/dev/null 2>&1; then
+    v4l2loopback-ctl add --name "$label" --exclusive-caps 1 "$path" >/dev/null 2>&1 || true
+    if [ -e "$path" ]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+NRS=""
+LABELS=""
+MISSING=""
+
+for spec in "$OUTPUT:Screen Sight" ${SCRCPY:+"$SCRCPY:Android Cam"}; do
+  path="${spec%%:*}"
+  label="${spec#*:}"
+  if [ -e "$path" ]; then
+    continue
+  fi
+  nr="$(video_nr "$path")"
+  if [ -z "$nr" ]; then
+    continue
+  fi
+  if [ -n "$NRS" ]; then
+    NRS="$NRS,$nr"
+    LABELS="$LABELS,$label"
+  else
+    NRS="$nr"
+    LABELS="$label"
+  fi
+  MISSING="$MISSING $path"
+done
+
+if [ -z "$NRS" ]; then
+  exit 0
+fi
+
+COUNT=$(echo "$NRS" | awk -F, '{print NF}')
+modprobe v4l2loopback "devices=$COUNT" "video_nr=$NRS" "card_label=$LABELS" exclusive_caps=1 || true
+
+add_one "$OUTPUT" "Screen Sight" || true
+if [ -n "$SCRCPY" ]; then
+  add_one "$SCRCPY" "Android Cam" || true
+fi
+
+exit 0

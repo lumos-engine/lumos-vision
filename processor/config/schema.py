@@ -7,8 +7,13 @@ what the web wizard edits (via ``dotted_set``) while the pipeline is running.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Union, get_args, get_origin, get_type_hints
+
+#: Leftover Lumos keys from the ffmpeg→v4l2loopback path. Dropped on load.
+_DROPPED_LUMOS_KEYS = ("v4l2_sink", "bind_camera", "prefer_over_scrcpy")
+_LEGACY_LOOPBACK_NODES = {"video10", "video11"}
 
 # --------------------------------------------------------------------------
 # Camera / input
@@ -17,7 +22,7 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 
 @dataclass
 class CameraConfig:
-    #: rtsp | v4l2 | usb | file | image | synthetic
+    #: lumos | scrcpy | v4l2 | usb | rtsp | file | image | synthetic
     source: str = "rtsp"
     rtsp_url: str = ""
     #: USB webcam for ``v4l2`` / ``usb``. Prefer ``/dev/v4l/by-id/…`` (stable);
@@ -444,12 +449,11 @@ class ScrcpyConfig:
     pan_x: float = 0.0
     #: Vertical pan: -1 = top, +1 = bottom.
     pan_y: float = 0.0
-    #: Loopback node scrcpy writes; Screen Sight should capture this device.
+    #: Loopback node scrcpy writes. Implied when ``camera.source`` is ``scrcpy``
+    #: (``camera.device`` is set to this path; Screen Sight creates the node).
     v4l2_sink: str = "/dev/video11"
     no_playback: bool = True
     no_audio: bool = True
-    #: When starting, set ``camera.source``/``device`` to this sink.
-    bind_camera: bool = True
     #: How long to wait for the sink to advertise capture after spawn.
     startup_timeout_sec: float = 12.0
     #: If scrcpy dies (phone unplug), keep trying to restart when ADB returns.
@@ -464,9 +468,10 @@ class ScrcpyConfig:
 class LumosCamConfig:
     """Lumos Cam (Camera2 Android app) → ffmpeg pipe.
 
-    Preferred over scrcpy when ``enabled``. Zoom, pan, and AF/AE/AWB locks are
-    live HTTP; ffmpeg only restarts when codec/size/ports change. Needs Lumos
-    Cam ≥ 0.1.0 (``Lumos-Cam-Protocol: 1``).
+    Capture is selected with ``camera.source: lumos``. ``enabled`` is a mirror
+    of that (kept so sidecar start/stop stays a boolean). Zoom, pan, and
+    AF/AE/AWB locks are live HTTP; ffmpeg only restarts when codec/size/ports
+    change. Needs Lumos Cam ≥ 0.1.0 (``Lumos-Cam-Protocol: 1``).
     """
 
     enabled: bool = False
@@ -486,8 +491,6 @@ class LumosCamConfig:
     af: str = "auto"
     ae: str = "auto"
     awb: str = "auto"
-    v4l2_sink: str = "/dev/video11"
-    bind_camera: bool = True
     control_device_port: int = 8765
     video_device_port: int = 8766
     control_host_port: int = 18765
@@ -496,8 +499,6 @@ class LumosCamConfig:
     startup_timeout_sec: float = 15.0
     auto_restart: bool = True
     restart_interval_sec: float = 5.0
-    #: When both this and scrcpy are enabled, Lumos Cam wins.
-    prefer_over_scrcpy: bool = True
 
 
 @dataclass
@@ -522,7 +523,104 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "Config":
-        return build_dataclass(cls, data or {})
+        raw = copy.deepcopy(data or {})
+        normalize_capture_dict(raw)
+        return build_dataclass(cls, raw)
+
+
+def _legacy_loopback_device(device: str) -> bool:
+    name = (device or "").rstrip("/").rsplit("/", 1)[-1]
+    return name in _LEGACY_LOOPBACK_NODES or "loopback" in (device or "").lower()
+
+
+def _source_has_no_capture_identity(camera: dict[str, Any], source: str) -> bool:
+    """True when YAML looks like leftover USB/RTSP with nothing actually set."""
+    device = str(camera.get("device") or "").strip()
+    if source in {"v4l2", "usb"}:
+        return not device or _legacy_loopback_device(device)
+    if source in {"rtsp", ""}:
+        return not str(camera.get("rtsp_url") or "").strip() and (
+            not device or _legacy_loopback_device(device)
+        )
+    return False
+
+
+def normalize_capture_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate old Lumos/scrcpy YAML and keep sidecar ``enabled`` in sync.
+
+    Mutates ``data`` in place. ``camera.source`` is the only capture switch;
+    ``lumos_cam.enabled`` / ``scrcpy.enabled`` mirror it.
+    """
+    camera = data.get("camera")
+    if not isinstance(camera, dict):
+        camera = {}
+        data["camera"] = camera
+
+    lumos = data.get("lumos_cam")
+    if isinstance(lumos, dict):
+        for key in _DROPPED_LUMOS_KEYS:
+            lumos.pop(key, None)
+    else:
+        lumos = None
+
+    scrcpy = data.get("scrcpy")
+    if isinstance(scrcpy, dict):
+        scrcpy.pop("bind_camera", None)
+    else:
+        scrcpy = None
+
+    source = str(camera.get("source") or "rtsp").strip().lower()
+    if source == "usb":
+        source = "v4l2"
+    device = str(camera.get("device") or "").strip()
+    lumos_on = bool(lumos and lumos.get("enabled"))
+    scrcpy_on = bool(scrcpy and scrcpy.get("enabled"))
+
+    if source == "lumos":
+        pass
+    elif source == "scrcpy":
+        pass
+    elif lumos_on and _source_has_no_capture_identity(camera, source):
+        source = "lumos"
+        if _legacy_loopback_device(device):
+            device = ""
+    elif (
+        scrcpy_on
+        and source not in {"file", "image", "synthetic", "lumos"}
+        and (
+            _source_has_no_capture_identity(camera, source)
+            or (
+                scrcpy is not None
+                and device == str(scrcpy.get("v4l2_sink") or "").strip()
+            )
+        )
+    ):
+        source = "scrcpy"
+
+    if source == "lumos" and _legacy_loopback_device(device):
+        device = ""
+
+    camera["source"] = source
+    camera["device"] = device
+
+    if lumos is not None or source == "lumos":
+        if lumos is None:
+            lumos = {}
+            data["lumos_cam"] = lumos
+        lumos["enabled"] = source == "lumos"
+
+    if source == "scrcpy":
+        if scrcpy is None:
+            scrcpy = {}
+            data["scrcpy"] = scrcpy
+        scrcpy["enabled"] = True
+        sink = str(scrcpy.get("v4l2_sink") or "/dev/video11").strip() or "/dev/video11"
+        scrcpy["v4l2_sink"] = sink
+        camera["device"] = sink
+    elif scrcpy is not None:
+        scrcpy["enabled"] = False
+
+    return data
 
 
 # --------------------------------------------------------------------------

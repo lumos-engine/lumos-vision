@@ -12,6 +12,7 @@ import os
 import threading
 import time
 from concurrent.futures import Future
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
@@ -35,6 +36,7 @@ from processor.stages.boundary import BoundaryStage
 from processor.utils.color_calibrate import ColorCalibrationSession, iso_now
 from processor.utils.hyperhdr_leds import set_led_device
 from processor.utils.logging import get_logger
+from processor.utils.loopback import ensure_processor_loopbacks
 from processor.utils.lumos_cam import (
     LumosCamManager,
     step_lumos_pan,
@@ -110,7 +112,6 @@ _LUMOS_RESTART_KEYS = frozenset(
         "lumos_cam.camera_size",
         "lumos_cam.camera_fps",
         "lumos_cam.codec",
-        "lumos_cam.v4l2_sink",
         "lumos_cam.ffmpeg",
         "lumos_cam.control_device_port",
         "lumos_cam.video_device_port",
@@ -134,7 +135,7 @@ _LUMOS_LIVE_KEYS = frozenset(
 _LUMOS_STREAM_ATTRS = tuple(
     key.split(".", 1)[1]
     for key in _LUMOS_RESTART_KEYS
-    if key.split(".", 1)[1] not in {"enabled", "v4l2_sink"}
+    if key.split(".", 1)[1] not in {"enabled"}
 )
 
 
@@ -200,6 +201,7 @@ class Processor:
     # ------------------------------------------------------------------
 
     def start(self) -> "Processor":
+        self._ensure_loopbacks_unlocked()
         self.sinks = SinkGroup(create_sinks(self.config.output))
         self.sinks.open(self.config.output.width, self.config.output.height)
         self._started_at = time.monotonic()
@@ -481,17 +483,25 @@ class Processor:
             self.config.power.tv_host or "(power disabled)",
         )
 
-    def _lumos_is_primary(self) -> bool:
-        cfg = self.config.lumos_cam
-        return bool(cfg.enabled and cfg.prefer_over_scrcpy)
+    def _capture_source_kind(self) -> str:
+        return (self.config.camera.source or "").strip().lower()
 
-    def _release_loopback_reader_unlocked(self, sink: str, *, bind_camera: bool, label: str) -> None:
+    def _lumos_is_primary(self) -> bool:
+        return self._capture_source_kind() == "lumos"
+
+    def _ensure_loopbacks_unlocked(self) -> None:
+        try:
+            ensure_processor_loopbacks(self.config)
+        except Exception:
+            log.exception("Failed to ensure v4l2loopback nodes")
+
+    def _release_loopback_reader_unlocked(self, sink: str, *, bound: bool, label: str) -> None:
         """Drop capture on a v4l2loopback node so the producer can reopen it."""
         sink = (sink or "").strip()
         if not sink or self.source is None:
             return
         device = (self.config.camera.device or "").strip()
-        if not bind_camera and device != sink:
+        if not bound and device != sink:
             return
         log.info("Releasing capture on %s so %s can reopen it", sink, label)
         try:
@@ -507,34 +517,39 @@ class Processor:
         if not sink:
             return
         updates: dict[str, Any] = {}
-        if self.config.camera.source not in {"v4l2", "usb"}:
-            updates["camera.source"] = "v4l2"
+        if self._capture_source_kind() != "scrcpy":
+            updates["camera.source"] = "scrcpy"
         if self.config.camera.device != sink:
             updates["camera.device"] = sink
         if updates:
             self.config = apply_updates(self.config, updates)
 
     def _start_phone_capture_unlocked(self, *, restart: bool = False) -> dict[str, Any]:
-        if self._lumos_is_primary():
+        kind = self._capture_source_kind()
+        if kind == "lumos":
             self._scrcpy.stop()
             return self._start_lumos_unlocked(restart=restart)
+        if kind == "scrcpy":
+            self._lumos.stop()
+            return self._start_scrcpy_unlocked(restart=restart)
         self._lumos.stop()
-        return self._start_scrcpy_unlocked(restart=restart)
+        self._scrcpy.stop()
+        return {"ok": True, "running": False, "skipped": True}
 
     def _release_scrcpy_sink_reader_unlocked(self) -> None:
         cfg = self.config.scrcpy
         self._release_loopback_reader_unlocked(
-            cfg.v4l2_sink, bind_camera=cfg.bind_camera, label="scrcpy"
+            cfg.v4l2_sink, bound=self._capture_source_kind() == "scrcpy", label="scrcpy"
         )
 
     def _start_scrcpy_unlocked(self, *, restart: bool = False) -> dict[str, Any]:
         cfg = self.config.scrcpy
-        if not cfg.enabled or self._lumos_is_primary():
+        if self._capture_source_kind() != "scrcpy" or not cfg.enabled:
             self._scrcpy.stop()
             skipped = "Lumos Cam is primary" if self._lumos_is_primary() else None
             return {"ok": True, "running": False, "skipped": True, "error": skipped}
-        if cfg.bind_camera:
-            self._bind_camera_to_sink(cfg.v4l2_sink)
+        self._ensure_loopbacks_unlocked()
+        self._bind_camera_to_sink(cfg.v4l2_sink)
         if restart or not self._scrcpy.running:
             self._release_scrcpy_sink_reader_unlocked()
         if restart:
@@ -547,7 +562,7 @@ class Processor:
 
     def _start_lumos_unlocked(self, *, restart: bool = False) -> dict[str, Any]:
         cfg = self.config.lumos_cam
-        if not cfg.enabled:
+        if self._capture_source_kind() != "lumos" or not cfg.enabled:
             self._lumos.stop()
             return {"ok": True, "running": False, "skipped": True}
         if restart or not self._lumos.running:
@@ -564,7 +579,7 @@ class Processor:
         """Stop the pipe reader so ffmpeg can be replaced."""
         if self.source is None:
             return
-        if getattr(self.source, "name", "") != "lumos" and not self.config.lumos_cam.bind_camera:
+        if getattr(self.source, "name", "") != "lumos" and not self._lumos_is_primary():
             return
         log.info("Stopping Lumos Cam capture while ffmpeg restarts")
         try:
@@ -587,10 +602,12 @@ class Processor:
             return
         sink = (cfg.v4l2_sink or "").strip()
         if sink and not os.path.exists(sink):
+            self._ensure_loopbacks_unlocked()
+        if sink and not os.path.exists(sink):
             self._scrcpy_next_retry = now + max(30.0, float(cfg.restart_interval_sec or 5.0) * 6)
             log.error(
-                "scrcpy sink %s is missing — create it with v4l2loopback "
-                "(devices=2 video_nr=10,11) then wait or restart Screen Sight",
+                "scrcpy sink %s is missing — Screen Sight could not create the "
+                "v4l2loopback node (devices=2 video_nr=10,11)",
                 sink,
             )
             return
@@ -799,16 +816,13 @@ class Processor:
         }
 
     def _make_source_unlocked(self) -> FrameSource:
-        lumos = self.config.lumos_cam
-        if lumos.enabled and lumos.bind_camera and hasattr(self._lumos, "read_bgr"):
-            device = (self.config.camera.device or "").strip()
-            sink = (lumos.v4l2_sink or "").strip()
-            if device and sink and device == sink:
-                log.info(
-                    "Lumos Cam reads the ffmpeg pipe; ignoring camera.device=%s",
-                    device,
-                )
+        kind = self._capture_source_kind()
+        if kind == "lumos":
             return LumosPipeSource(self._lumos, self.config.camera)
+        if kind == "scrcpy":
+            sink = (self.config.scrcpy.v4l2_sink or "").strip() or "/dev/video11"
+            camera = replace(self.config.camera, source="v4l2", device=sink)
+            return create_source(camera)
         return create_source(self.config.camera)
 
     def apply_camera_source(
@@ -829,36 +843,83 @@ class Processor:
             "replay_fps",
             "process_width",
         }
+        lumos_fields = {
+            "serial",
+            "camera_id",
+            "camera_size",
+            "camera_fps",
+            "codec",
+            "camera_zoom",
+            "pan_x",
+            "pan_y",
+            "af",
+            "ae",
+            "awb",
+        }
+        scrcpy_fields = {
+            "binary",
+            "serial",
+            "camera_id",
+            "camera_size",
+            "camera_fps",
+            "camera_zoom",
+            "view_zoom",
+            "pan_x",
+            "pan_y",
+            "v4l2_sink",
+        }
+        source = str(fields.get("source") or self.config.camera.source or "").strip().lower()
+        if source == "usb":
+            source = "v4l2"
+
         updates: dict[str, Any] = {}
         for key, value in fields.items():
             if key not in allowed:
                 continue
             if key == "source" and isinstance(value, str):
-                value = value.strip().lower()
-                if value == "usb":
-                    value = "v4l2"
+                value = source
             updates[f"camera.{key}"] = value
-        if not updates:
+        updates["camera.source"] = source
+
+        if source == "lumos":
+            for key, value in fields.items():
+                if key in lumos_fields:
+                    updates[f"lumos_cam.{key}"] = value
+            updates["lumos_cam.enabled"] = True
+        elif source == "scrcpy":
+            for key, value in fields.items():
+                if key in scrcpy_fields:
+                    updates[f"scrcpy.{key}"] = value
+            sink = str(
+                fields.get("v4l2_sink") or self.config.scrcpy.v4l2_sink or "/dev/video11"
+            ).strip()
+            updates["scrcpy.v4l2_sink"] = sink
+            updates["camera.device"] = sink
+            updates["scrcpy.enabled"] = True
+            updates["scrcpy.no_audio"] = True
+            updates["scrcpy.no_playback"] = True
+        if not any(k != "camera.source" for k in updates) and "source" not in fields:
             raise ValueError("no recognised camera source fields given")
 
         def apply() -> dict[str, Any]:
             self.config = apply_updates(self.config, updates)
-            if self.config.lumos_cam.enabled and self.config.lumos_cam.bind_camera:
-                self.config = apply_updates(self.config, {"lumos_cam.enabled": False})
-                self._lumos.stop()
-            if self.config.scrcpy.enabled and self.config.scrcpy.bind_camera:
-                self.config = apply_updates(self.config, {"scrcpy.enabled": False})
-                self._scrcpy.stop()
             apply_pipeline_config(self.pipeline, self.config)
-            recreated = self._recreate_source_unlocked()
+            self._ensure_loopbacks_unlocked()
+            phone = {"ok": True, "skipped": True}
+            recreated: dict[str, Any] = {"ok": True, "skipped": True}
+            if not self._idle:
+                phone = self._start_phone_capture_unlocked(restart=True)
+                recreated = self._recreate_source_unlocked()
             saved_path = None
             if save:
                 saved_path = self.save()
             log.info("Camera source applied: %s", ", ".join(sorted(updates)))
             return {
                 "ok": True,
+                "source": self.config.camera.source,
                 "config": config_to_dict(self.config),
                 "recreated": recreated,
+                "phone": phone,
                 "saved": saved_path,
             }
 
@@ -967,7 +1028,6 @@ class Processor:
                     "v4l2_sink",
                     "no_playback",
                     "no_audio",
-                    "bind_camera",
                     "startup_timeout_sec",
                     "extra_args",
                 }:
@@ -1010,6 +1070,7 @@ class Processor:
                 updates.setdefault("scrcpy.enabled", True)
             elif action_name == "start":
                 updates["scrcpy.enabled"] = True
+                updates["camera.source"] = "scrcpy"
             elif action_name == "stop":
                 updates["scrcpy.enabled"] = False
             elif action_name in {"apply", "restart"}:
@@ -1018,6 +1079,8 @@ class Processor:
                 raise ValueError(f"unknown scrcpy action: {action_name}")
 
             if updates:
+                if updates.get("scrcpy.enabled") is True:
+                    updates["camera.source"] = "scrcpy"
                 self.config = apply_updates(self.config, updates)
 
             scrcpy_result: dict[str, Any]
@@ -1038,7 +1101,7 @@ class Processor:
             if (
                 not self._idle
                 and self.config.scrcpy.enabled
-                and self.config.scrcpy.bind_camera
+                and self._capture_source_kind() == "scrcpy"
                 and action_name != "stop"
                 and scrcpy_result.get("ok")
                 and scrcpy_result.get("running")
@@ -1096,11 +1159,8 @@ class Processor:
                     "af",
                     "ae",
                     "awb",
-                    "v4l2_sink",
-                    "bind_camera",
                     "ffmpeg",
                     "startup_timeout_sec",
-                    "prefer_over_scrcpy",
                 }:
                     updates[f"lumos_cam.{key}"] = value
 
@@ -1165,6 +1225,7 @@ class Processor:
                 }
             elif action_name == "start":
                 updates["lumos_cam.enabled"] = True
+                updates["camera.source"] = "lumos"
             elif action_name == "stop":
                 updates["lumos_cam.enabled"] = False
             elif action_name in {"apply", "restart"}:
@@ -1174,6 +1235,8 @@ class Processor:
 
             old_lumos = self.config.lumos_cam
             if updates:
+                if updates.get("lumos_cam.enabled") is True:
+                    updates["camera.source"] = "lumos"
                 self.config = apply_updates(self.config, updates)
             stream_changed = _lumos_stream_changed(old_lumos, self.config.lumos_cam)
             lumos_result: dict[str, Any]
@@ -1202,7 +1265,7 @@ class Processor:
             if (
                 not self._idle
                 and self.config.lumos_cam.enabled
-                and self.config.lumos_cam.bind_camera
+                and self._capture_source_kind() == "lumos"
                 and action_name != "stop"
                 and (sidecar_restarted or stream_changed)
                 and lumos_result.get("ok")

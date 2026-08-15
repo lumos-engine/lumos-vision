@@ -1,8 +1,8 @@
 """Manage Lumos Cam (Camera2 Android app) → ffmpeg pipe for phone capture.
 
 Unlike scrcpy, zoom / pan / AF-AE-AWB locks are live HTTP to the phone.
-ffmpeg is only restarted when the stream itself changes (codec, size, sink).
-Decoded frames go to stdout as raw BGR — v4l2loopback is not used for capture.
+ffmpeg is only restarted when the stream itself changes (codec, size, ports).
+Decoded frames go to stdout as MJPEG — v4l2loopback is not used for capture.
 """
 
 from __future__ import annotations
@@ -60,7 +60,6 @@ class LumosCamStatus:
     camera_size: str
     camera_fps: int
     codec: str
-    v4l2_sink: str
     app_version: str
     protocol: int
     package_installed: bool
@@ -83,7 +82,6 @@ class LumosCamStatus:
             "camera_size": self.camera_size,
             "camera_fps": self.camera_fps,
             "codec": self.codec,
-            "v4l2_sink": self.v4l2_sink,
             "app_version": self.app_version,
             "protocol": self.protocol,
             "package_installed": self.package_installed,
@@ -452,7 +450,6 @@ class LumosCamManager:
             camera_size=str(phone.get("size", cfg.camera_size)),
             camera_fps=int(phone.get("fps", cfg.camera_fps)),
             codec=str(phone.get("codec", cfg.codec)),
-            v4l2_sink=str(cfg.v4l2_sink),
             app_version=str(phone.get("app_version", "")),
             protocol=int(phone.get("protocol", PROTOCOL_VERSION)),
             package_installed=bool(phone.get("package_installed", False)),
@@ -473,13 +470,6 @@ class LumosCamManager:
         self._last_error = ""
         if not cfg.enabled:
             return {"ok": True, "running": False, "skipped": True}
-
-        sink = (cfg.v4l2_sink or "").strip()
-        if sink and not os.path.exists(sink):
-            log.warning(
-                "lumos-cam: %s missing — capturing via ffmpeg pipe (loopback not required)",
-                sink,
-            )
 
         cfg = replace(cfg, serial=resolve_adb_serial(cfg))
         if not adb_device_ready(cfg.serial, adb=(cfg.adb or "adb")):

@@ -19,6 +19,17 @@ from processor.utils.lumos_cam import (
 from processor.utils.scrcpy import ZOOM_STEP
 
 
+def _use_synthetic_capture(app, monkeypatch) -> None:
+    from processor.camera.synthetic import SyntheticSource
+    from processor.config.schema import CameraConfig
+
+    monkeypatch.setattr(
+        app,
+        "_make_source_unlocked",
+        lambda: SyntheticSource(CameraConfig(source="synthetic", replay_fps=60)),
+    )
+
+
 class _AliveEmptyFfmpeg:
     """ffmpeg still running; stdout never yields a full BGR frame."""
 
@@ -101,7 +112,7 @@ def test_adb_launch_error_detects_miui_type3():
 
 
 def test_build_ffmpeg_command_rotates():
-    cfg = LumosCamConfig(ffmpeg="/usr/bin/ffmpeg", v4l2_sink="/dev/video11")
+    cfg = LumosCamConfig(ffmpeg="/usr/bin/ffmpeg")
     cmd = build_ffmpeg_command(cfg, binary="/usr/bin/ffmpeg", rotation=90)
     assert "-vf" in cmd and "transpose=1" in cmd
     from processor.utils.lumos_cam import output_frame_size
@@ -114,7 +125,6 @@ def test_build_ffmpeg_command_h264():
     cfg = LumosCamConfig(
         codec="h264",
         video_host_port=18766,
-        v4l2_sink="/dev/video11",
         ffmpeg="/usr/bin/ffmpeg",
         startup_timeout_sec=15.0,
     )
@@ -154,7 +164,6 @@ def test_config_round_trip_includes_lumos_cam():
                 "enabled": True,
                 "camera_zoom": 1.5,
                 "af": "locked",
-                "v4l2_sink": "/dev/video11",
             }
         }
     )
@@ -241,7 +250,6 @@ def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
 
     cfg = LumosCamConfig(
         enabled=True,
-        v4l2_sink=str(sink),
         startup_timeout_sec=1.0,
         ffmpeg="/usr/bin/ffmpeg",
     )
@@ -297,7 +305,6 @@ def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path
     result = mgr.start(
         LumosCamConfig(
             enabled=True,
-            v4l2_sink=str(sink),
             startup_timeout_sec=0.6,
             ffmpeg="/usr/bin/ffmpeg",
         )
@@ -355,7 +362,6 @@ def test_manager_start_fails_when_phone_sends_no_bytes(monkeypatch, tmp_path):
     result = mgr.start(
         LumosCamConfig(
             enabled=True,
-            v4l2_sink=str(sink),
             startup_timeout_sec=0.6,
             ffmpeg="/usr/bin/ffmpeg",
         )
@@ -395,7 +401,6 @@ def test_apply_lumos_zoom_is_live(monkeypatch):
                 camera_size=cfg.camera_size,
                 camera_fps=cfg.camera_fps,
                 codec=cfg.codec,
-                v4l2_sink=cfg.v4l2_sink,
                 app_version="0.1.0",
                 protocol=1,
                 package_installed=True,
@@ -426,15 +431,16 @@ def test_apply_lumos_zoom_is_live(monkeypatch):
 
     config = Config.from_dict(
         {
-            "camera": {"source": "synthetic", "replay_fps": 60},
+            "camera": {"source": "lumos"},
             "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
             "logging": {"stats_interval": 0},
-            "lumos_cam": {"enabled": True, "bind_camera": False, "camera_zoom": 1.0},
+            "lumos_cam": {"camera_zoom": 1.0},
         }
     )
     app = Processor(config)
     app._lumos = FakeMgr()
     monkeypatch.setattr(app, "_recreate_source_unlocked", lambda: {"ok": True})
+    _use_synthetic_capture(app, monkeypatch)
     app.start()
     try:
         result = app.apply_lumos_cam(action="zoom_in")
@@ -477,7 +483,6 @@ def test_enable_lumos_reopens_bound_camera(monkeypatch):
                 camera_size=cfg.camera_size,
                 camera_fps=cfg.camera_fps,
                 codec=cfg.codec,
-                v4l2_sink=cfg.v4l2_sink,
                 app_version="0.1.0",
                 protocol=1,
                 package_installed=True,
@@ -505,7 +510,7 @@ def test_enable_lumos_reopens_bound_camera(monkeypatch):
             "camera": {"source": "synthetic", "replay_fps": 60},
             "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
             "logging": {"stats_interval": 0},
-            "lumos_cam": {"enabled": False, "bind_camera": True, "v4l2_sink": "/dev/video11"},
+            "lumos_cam": {"enabled": False},
         }
     )
     app = Processor(config)
@@ -558,7 +563,6 @@ def test_apply_lumos_skips_ffmpeg_restart_when_stream_unchanged(monkeypatch):
                 camera_size=cfg.camera_size,
                 camera_fps=cfg.camera_fps,
                 codec=cfg.codec,
-                v4l2_sink=cfg.v4l2_sink,
                 app_version="0.1.0",
                 protocol=1,
                 package_installed=True,
@@ -584,12 +588,10 @@ def test_apply_lumos_skips_ffmpeg_restart_when_stream_unchanged(monkeypatch):
 
     config = Config.from_dict(
         {
-            "camera": {"source": "synthetic", "replay_fps": 60},
+            "camera": {"source": "lumos"},
             "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
             "logging": {"stats_interval": 0},
             "lumos_cam": {
-                "enabled": True,
-                "bind_camera": True,
                 "serial": "phone",
                 "camera_id": "0",
                 "camera_zoom": 1.0,
@@ -604,6 +606,7 @@ def test_apply_lumos_skips_ffmpeg_restart_when_stream_unchanged(monkeypatch):
         "_recreate_source_unlocked",
         lambda: recreates.append(1) or {"ok": True},
     )
+    _use_synthetic_capture(app, monkeypatch)
     app.start()
     try:
         result = app.apply_lumos_cam(
@@ -657,7 +660,6 @@ def test_enable_lumos_skips_capture_until_loopback_ready(monkeypatch):
                 camera_size=cfg.camera_size,
                 camera_fps=cfg.camera_fps,
                 codec=cfg.codec,
-                v4l2_sink=cfg.v4l2_sink,
                 app_version="0.1.0",
                 protocol=1,
                 package_installed=True,
@@ -684,7 +686,7 @@ def test_enable_lumos_skips_capture_until_loopback_ready(monkeypatch):
             "camera": {"source": "synthetic", "replay_fps": 60},
             "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
             "logging": {"stats_interval": 0},
-            "lumos_cam": {"enabled": False, "bind_camera": True, "v4l2_sink": "/dev/video11"},
+            "lumos_cam": {"enabled": False},
         }
     )
     app = Processor(config)
@@ -704,7 +706,7 @@ def test_enable_lumos_skips_capture_until_loopback_ready(monkeypatch):
         app.shutdown()
 
 
-def test_lumos_bind_ignores_loopback_device_when_ffmpeg_down():
+def test_make_source_uses_lumos_pipe_when_source_is_lumos():
     from processor.app import Processor
     from processor.camera.lumos import LumosPipeSource
     from processor.camera.v4l2 import V4l2Source
@@ -742,7 +744,6 @@ def test_lumos_bind_ignores_loopback_device_when_ffmpeg_down():
                 camera_size=cfg.camera_size,
                 camera_fps=cfg.camera_fps,
                 codec=cfg.codec,
-                v4l2_sink=cfg.v4l2_sink,
                 app_version="0.1.0",
                 protocol=1,
                 package_installed=True,
@@ -762,13 +763,13 @@ def test_lumos_bind_ignores_loopback_device_when_ffmpeg_down():
             "logging": {"stats_interval": 0},
             "lumos_cam": {
                 "enabled": True,
-                "bind_camera": True,
-                "v4l2_sink": "/dev/video11",
             },
         }
     )
     app = Processor(config)
     app._lumos = FakeMgr()
+    assert config.camera.source == "lumos"
+    assert config.camera.device == ""
     source = app._make_source_unlocked()
     assert isinstance(source, LumosPipeSource)
     assert not isinstance(source, V4l2Source)
@@ -781,14 +782,14 @@ def test_lumos_primary_skips_scrcpy(monkeypatch):
 
     config = Config.from_dict(
         {
-            "camera": {"source": "synthetic", "replay_fps": 60},
+            "camera": {"source": "lumos"},
             "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
             "logging": {"stats_interval": 0},
-            "lumos_cam": {"enabled": True, "prefer_over_scrcpy": True, "bind_camera": False},
-            "scrcpy": {"enabled": True, "bind_camera": False},
+            "scrcpy": {"enabled": True},
         }
     )
     app = Processor(config)
+    _use_synthetic_capture(app, monkeypatch)
     monkeypatch.setattr(
         app,
         "_start_lumos_unlocked",
@@ -833,7 +834,6 @@ def test_color_cal_toggles_lumos_cal_mode(monkeypatch, tmp_path):
                 camera_size="1920x1080",
                 camera_fps=30,
                 codec="h264",
-                v4l2_sink="/dev/video11",
                 app_version="0.1.0",
                 protocol=1,
                 package_installed=True,
@@ -856,18 +856,18 @@ def test_color_cal_toggles_lumos_cal_mode(monkeypatch, tmp_path):
 
     config = Config.from_dict(
         {
-            "camera": {"source": "synthetic", "replay_fps": 60},
+            "camera": {"source": "lumos"},
             "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
             "logging": {"stats_interval": 0},
             "boundary": {
                 "mode": "manual",
                 "corners": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
             },
-            "lumos_cam": {"enabled": True, "bind_camera": False},
         }
     )
     app = Processor(config, config_path=tmp_path / "config.yaml")
     app._lumos = FakeMgr()
+    _use_synthetic_capture(app, monkeypatch)
     app.start()
     try:
         import numpy as np
@@ -977,11 +977,20 @@ def test_cli_allows_empty_camera_device_when_lumos_owns_capture():
 
     config = Config.from_dict(
         {
+            "camera": {"source": "lumos", "device": ""},
+        }
+    )
+    assert config.camera.source == "lumos"
+    _require_camera_identity(config)
+
+    migrated = Config.from_dict(
+        {
             "camera": {"source": "v4l2", "device": ""},
             "lumos_cam": {"enabled": True, "bind_camera": True},
         }
     )
-    _require_camera_identity(config)
+    assert migrated.camera.source == "lumos"
+    _require_camera_identity(migrated)
 
     bare = Config.from_dict({"camera": {"source": "v4l2", "device": ""}})
     try:
@@ -990,3 +999,84 @@ def test_cli_allows_empty_camera_device_when_lumos_owns_capture():
         assert "USB camera" in str(exc)
     else:
         raise AssertionError("expected SystemExit when Lumos Cam is off")
+
+
+def test_apply_camera_source_lumos_starts_sidecar_and_v4l2_stops_it(monkeypatch):
+    from processor.app import Processor
+    from processor.utils.lumos_cam import LumosCamStatus
+
+    class FakeMgr:
+        def __init__(self):
+            self._running = False
+            self.starts = 0
+
+        @property
+        def running(self):
+            return self._running
+
+        def status(self, cfg):
+            return LumosCamStatus(
+                enabled=cfg.enabled,
+                running=self._running,
+                pid=1 if self._running else None,
+                zoom=cfg.camera_zoom,
+                pan_x=cfg.pan_x,
+                pan_y=cfg.pan_y,
+                af=cfg.af,
+                ae=cfg.ae,
+                awb=cfg.awb,
+                cal_mode=False,
+                camera_id=cfg.camera_id,
+                camera_size=cfg.camera_size,
+                camera_fps=cfg.camera_fps,
+                codec=cfg.codec,
+                app_version="0.1.0",
+                protocol=1,
+                package_installed=True,
+                last_error="",
+                command=[],
+            )
+
+        def stop(self):
+            self._running = False
+            return {"ok": True, "running": False}
+
+        def restart(self, cfg):
+            self._running = True
+            self.starts += 1
+            return {"ok": True, "running": True, "pid": 1, "ready": True}
+
+        def ensure_running(self, cfg):
+            return self.restart(cfg)
+
+        def apply_live(self, cfg):
+            return {"ok": True, "running": True, "live": True}
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "synthetic", "replay_fps": 60},
+            "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+        }
+    )
+    app = Processor(config)
+    app._lumos = FakeMgr()
+    _use_synthetic_capture(app, monkeypatch)
+    app.start()
+    try:
+        result = app.apply_camera_source({"source": "lumos", "serial": "phone"})
+        assert result["ok"] is True
+        assert app.config.camera.source == "lumos"
+        assert app.config.lumos_cam.enabled is True
+        assert app.config.lumos_cam.serial == "phone"
+        assert app._lumos.starts >= 1
+        assert app._lumos.running is True
+
+        again = app.apply_camera_source({"source": "v4l2", "device": "/dev/video2"})
+        assert again["ok"] is True
+        assert app.config.camera.source == "v4l2"
+        assert app.config.lumos_cam.enabled is False
+        assert app._lumos.running is False
+    finally:
+        app.shutdown()
+

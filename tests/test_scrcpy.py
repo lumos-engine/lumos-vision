@@ -17,6 +17,17 @@ from processor.utils.scrcpy import (
 )
 
 
+def _use_synthetic_capture(app, monkeypatch) -> None:
+    from processor.camera.synthetic import SyntheticSource
+    from processor.config.schema import CameraConfig
+
+    monkeypatch.setattr(
+        app,
+        "_make_source_unlocked",
+        lambda: SyntheticSource(CameraConfig(source="synthetic", replay_fps=60)),
+    )
+
+
 def test_sink_has_capture_requires_device_caps_not_idle_output(monkeypatch, tmp_path):
     from processor.utils.scrcpy import sink_has_capture
 
@@ -245,15 +256,16 @@ def test_apply_scrcpy_zoom_restarts(monkeypatch):
 
     config = Config.from_dict(
         {
-            "camera": {"source": "synthetic", "replay_fps": 60},
+            "camera": {"source": "scrcpy"},
             "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
             "logging": {"stats_interval": 0},
-            "scrcpy": {"enabled": True, "bind_camera": False, "camera_zoom": 1.0},
+            "scrcpy": {"camera_zoom": 1.0},
         }
     )
     app = Processor(config)
     app._scrcpy = FakeMgr()
     monkeypatch.setattr(app, "_recreate_source_unlocked", lambda: {"ok": True})
+    _use_synthetic_capture(app, monkeypatch)
     app.start()
     try:
         result = app.apply_scrcpy(action="zoom_in")
@@ -266,8 +278,9 @@ def test_apply_scrcpy_zoom_restarts(monkeypatch):
 
 def test_apply_updates_can_set_scrcpy_zoom():
     config = Config()
-    updated = apply_updates(config, {"scrcpy.enabled": True, "scrcpy.camera_zoom": 2.5})
+    updated = apply_updates(config, {"camera.source": "scrcpy", "scrcpy.camera_zoom": 2.5})
     assert updated.scrcpy.enabled is True
+    assert updated.camera.source == "scrcpy"
     assert updated.scrcpy.camera_zoom == 2.5
 
 
@@ -317,15 +330,15 @@ def test_apply_scrcpy_pan_left(monkeypatch):
 
     config = Config.from_dict(
         {
-            "camera": {"source": "synthetic", "replay_fps": 60},
+            "camera": {"source": "scrcpy"},
             "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
             "logging": {"stats_interval": 0},
-            "scrcpy": {"enabled": True, "bind_camera": False},
         }
     )
     app = Processor(config)
     app._scrcpy = FakeMgr()
     monkeypatch.setattr(app, "_recreate_source_unlocked", lambda: {"ok": True})
+    _use_synthetic_capture(app, monkeypatch)
     app.start()
     try:
         result = app.apply_scrcpy(action="pan_left")

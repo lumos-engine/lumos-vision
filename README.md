@@ -69,13 +69,14 @@ white balance on the UVC sensor). The **Colour (software)** sliders only
 post-process frames after capture.
 
 For an **Android phone camera over USB**, prefer **Lumos Cam** (sibling repo
-`lumos-cam`, needs app ≥ 0.1). Enable the wizard **Lumos Cam** panel or
-`lumos_cam.enabled` in YAML. Lumos Vision launches the APK over adb, forwards
-control/video ports, and writes H.264 into `/dev/video11`. Zoom, pan, and
-AF/AE/AWB locks are live (no process restart). Colour-cal **Start** turns on
-cal mode; **Abort** / **Apply** restore auto. Scrcpy remains a fallback panel
-(`scrcpy.enabled`) if the APK is not installed. Needs a second v4l2loopback
-node (see `config.example.yaml`) and the protocol in
+`lumos-cam`, needs app ≥ 0.1). In the wizard set **Input type** to Lumos Cam,
+or `camera.source: lumos` in YAML. Screen Sight launches the APK over adb,
+forwards control/video ports, and decodes H.264 through an ffmpeg pipe (no
+`/dev/video11`). Zoom, pan, and AF/AE/AWB locks are live (no process restart).
+Colour-cal **Start** turns on cal mode; **Abort** / **Apply** restore auto.
+Scrcpy remains a fallback (`camera.source: scrcpy`) if the APK is not
+installed; that path still needs a v4l2loopback node (see
+`config.example.yaml`) and the protocol in
 [docs/lumos-cam-api.md](docs/lumos-cam-api.md).
 
 For **cinema / letterboxed** content: enable **Black bars**, raise **Darkness

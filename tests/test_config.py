@@ -111,3 +111,43 @@ def test_overrides_are_merged_over_the_file(tmp_path):
     config = load_config(path, {"output": {"fps": 12}})
     assert config.output.fps == 12
     assert config.output.width == 800
+
+
+def test_loader_migrates_old_lumos_bind_yaml():
+    config = Config.from_dict(
+        {
+            "camera": {"source": "v4l2", "device": "/dev/video11"},
+            "lumos_cam": {
+                "enabled": True,
+                "bind_camera": True,
+                "v4l2_sink": "/dev/video11",
+                "prefer_over_scrcpy": True,
+            },
+        }
+    )
+    assert config.camera.source == "lumos"
+    assert config.camera.device == ""
+    assert config.lumos_cam.enabled is True
+    dumped = config_to_dict(config)
+    assert "bind_camera" not in dumped["lumos_cam"]
+    assert "v4l2_sink" not in dumped["lumos_cam"]
+    assert "prefer_over_scrcpy" not in dumped["lumos_cam"]
+
+
+def test_loader_does_not_steal_a_real_usb_device():
+    config = Config.from_dict(
+        {
+            "camera": {"source": "v4l2", "device": "/dev/video4"},
+            "lumos_cam": {"enabled": True},
+        }
+    )
+    assert config.camera.source == "v4l2"
+    assert config.camera.device == "/dev/video4"
+    assert config.lumos_cam.enabled is False
+
+
+def test_camera_source_lumos_mirrors_enabled_flag():
+    config = Config.from_dict({"camera": {"source": "lumos"}})
+    assert config.lumos_cam.enabled is True
+    usb = Config.from_dict({"camera": {"source": "v4l2", "device": "/dev/video2"}})
+    assert usb.lumos_cam.enabled is False

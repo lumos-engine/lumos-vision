@@ -152,6 +152,9 @@ let sourcePanelState = {
   rtsp_saved: false,
   path: '',
   transport: 'tcp',
+  process_width: 0,
+  replay_fps: 0,
+  loop: true,
   devices: [],
 };
 
@@ -161,16 +164,6 @@ function normalizeSourceType(value) {
   if (source === 'image') return 'file';
   if (SOURCE_TYPES.some((item) => item.value === source)) return source;
   return 'v4l2';
-}
-
-function captureKindFromConfig(config) {
-  if (config?.lumos_cam?.enabled && config.lumos_cam.bind_camera !== false) {
-    return 'lumos';
-  }
-  if (config?.scrcpy?.enabled && config.scrcpy.bind_camera !== false) {
-    return 'scrcpy';
-  }
-  return normalizeSourceType(config?.camera?.source);
 }
 
 function syncSourceFieldsVisibility() {
@@ -233,10 +226,13 @@ function fillDeviceSelect(selected) {
 function applySourcePanelFromConfig(config) {
   if (!config || !config.camera) return;
   const camera = config.camera;
-  sourcePanelState.source = captureKindFromConfig(config);
+  sourcePanelState.source = normalizeSourceType(camera.source);
   sourcePanelState.device = camera.device || '';
   sourcePanelState.path = camera.path || '';
   sourcePanelState.transport = camera.transport || 'tcp';
+  sourcePanelState.process_width = Number(camera.process_width || 0);
+  sourcePanelState.replay_fps = Number(camera.replay_fps || 0);
+  sourcePanelState.loop = camera.loop !== false;
   const url = camera.rtsp_url || '';
   sourcePanelState.rtsp_saved = Boolean(url);
   // Redacted URLs must not be re-posted; leave the field empty for edits.
@@ -250,6 +246,12 @@ function applySourcePanelFromConfig(config) {
   if (path) path.value = sourcePanelState.path;
   const transport = $('source-transport');
   if (transport) transport.value = sourcePanelState.transport;
+  const processWidth = $('source-process-width');
+  if (processWidth) processWidth.value = String(sourcePanelState.process_width || 0);
+  const replayFps = $('source-replay-fps');
+  if (replayFps) replayFps.value = String(sourcePanelState.replay_fps || 0);
+  const loop = $('source-loop');
+  if (loop) loop.checked = sourcePanelState.loop !== false;
   const rtsp = $('source-rtsp');
   if (rtsp) {
     rtsp.value = '';
@@ -284,7 +286,6 @@ let lumosPanelState = {
   ae: 'auto',
   awb: 'auto',
   cal_mode: false,
-  v4l2_sink: '/dev/video11',
   last_error: '',
   app_version: '',
 };
@@ -295,6 +296,9 @@ let lumosBusy = false;
 const LUMOS_FIELD_IDS = [
   'lumos-serial',
   'lumos-camera-id',
+  'lumos-camera-size',
+  'lumos-camera-fps',
+  'lumos-codec',
   'lumos-zoom',
 ];
 
@@ -318,7 +322,6 @@ function applyLumosPanelFromConfig(config) {
     af: lc.af || 'auto',
     ae: lc.ae || 'auto',
     awb: lc.awb || 'auto',
-    v4l2_sink: lc.v4l2_sink || '/dev/video11',
   };
   lumosFormDirty = false;
   syncLumosForm({ force: true });
@@ -353,6 +356,9 @@ function syncLumosForm({ force = false } = {}) {
   if (force || !lumosFormDirty) {
     set('lumos-serial', lumosPanelState.serial);
     set('lumos-camera-id', lumosPanelState.camera_id);
+    set('lumos-camera-size', lumosPanelState.camera_size);
+    set('lumos-camera-fps', lumosPanelState.camera_fps);
+    set('lumos-codec', lumosPanelState.codec);
     set('lumos-zoom', lumosPanelState.camera_zoom);
   }
   const zoomLabel = $('lumos-zoom-label');
@@ -379,9 +385,11 @@ function syncLumosForm({ force = false } = {}) {
 
 function readLumosFields() {
   return {
-    enabled: true,
     serial: ($('lumos-serial')?.value || '').trim(),
     camera_id: ($('lumos-camera-id')?.value || '0').trim(),
+    camera_size: ($('lumos-camera-size')?.value || '1920x1080').trim(),
+    camera_fps: Number($('lumos-camera-fps')?.value || 30),
+    codec: ($('lumos-codec')?.value || 'h264').trim(),
     camera_zoom: Number($('lumos-zoom')?.value || 1),
     pan_x: Number(lumosPanelState.pan_x || 0),
     pan_y: Number(lumosPanelState.pan_y || 0),
@@ -441,8 +449,9 @@ async function buildLumosCamPanel() {
     <h3>Lumos Cam</h3>
     <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1). Leave the
     app open on the phone. Wireless adb serial looks like
-    <code>192.168.1.243:37847</code> (the port changes). Live zoom, pan, and AF/AE/AWB locks —
-    no restart. Colour-cal Start turns on cal mode.</p>
+    <code>192.168.1.243:37847</code> (the port changes). No USB device — frames
+    come from an ffmpeg pipe. Live zoom, pan, and AF/AE/AWB locks. Colour-cal
+    Start turns on cal mode.</p>
     <div class="control">
       <label for="lumos-serial">ADB serial (optional)</label>
       <input id="lumos-serial" type="text" spellcheck="false" placeholder="452ee42b0506">
@@ -450,6 +459,21 @@ async function buildLumosCamPanel() {
     <div class="control">
       <label for="lumos-camera-id">Camera id</label>
       <input id="lumos-camera-id" type="text" spellcheck="false" value="0">
+    </div>
+    <div class="control">
+      <label for="lumos-camera-size">Size</label>
+      <input id="lumos-camera-size" type="text" spellcheck="false" placeholder="1920x1080">
+    </div>
+    <div class="control">
+      <label for="lumos-camera-fps">FPS</label>
+      <input id="lumos-camera-fps" type="number" min="1" max="120" step="1" value="30">
+    </div>
+    <div class="control">
+      <label for="lumos-codec">Codec</label>
+      <select id="lumos-codec">
+        <option value="h264">h264</option>
+        <option value="mjpeg">mjpeg</option>
+      </select>
     </div>
     <div class="control">
       <label for="lumos-zoom">Zoom (<span id="lumos-zoom-label">1.00</span>×)</label>
@@ -678,7 +702,6 @@ function syncScrcpyForm({ force = false } = {}) {
 
 function readScrcpyFields() {
   return {
-    enabled: true,
     binary: ($('scrcpy-binary')?.value || 'scrcpy').trim(),
     serial: ($('scrcpy-serial')?.value || '').trim(),
     camera_id: ($('scrcpy-camera-id')?.value || '0').trim(),
@@ -689,7 +712,6 @@ function readScrcpyFields() {
     pan_x: Number(scrcpyPanelState.pan_x || 0),
     pan_y: Number(scrcpyPanelState.pan_y || 0),
     v4l2_sink: ($('scrcpy-sink')?.value || '/dev/video11').trim(),
-    bind_camera: true,
     no_audio: true,
     no_playback: true,
   };
@@ -774,8 +796,8 @@ async function buildScrcpyPanel() {
       <input id="scrcpy-camera-fps" type="number" min="1" max="120" step="1" value="30">
     </div>
     <div class="control">
-      <label for="scrcpy-sink">V4L2 sink</label>
-      <input id="scrcpy-sink" type="text" spellcheck="false" value="/dev/video11">
+      <label for="scrcpy-sink">Loopback sink</label>
+      <input id="scrcpy-sink" type="text" spellcheck="false" value="/dev/video11" readonly>
     </div>
     <div class="control">
       <label for="scrcpy-zoom">Phone zoom (<span id="scrcpy-zoom-label">1.00</span>×)</label>
@@ -1222,7 +1244,18 @@ async function buildSourcePanel() {
       <label for="source-path">File or image path</label>
       <input id="source-path" type="text" spellcheck="false" placeholder="/path/to/clip.mp4">
     </div>
-    <p class="source-meta" id="source-meta" data-source-for="v4l2 rtsp file synthetic"></p>
+    <div class="control" data-source-for="file">
+      <label class="check"><input type="checkbox" id="source-loop"> Loop file</label>
+    </div>
+    <div class="control" data-source-for="file synthetic">
+      <label for="source-replay-fps">Replay FPS (0 = as fast as the pipeline wants)</label>
+      <input id="source-replay-fps" type="number" min="0" max="120" step="1" value="0">
+    </div>
+    <div class="control" data-source-for="lumos v4l2 rtsp file">
+      <label for="source-process-width">Process width (0 = native)</label>
+      <input id="source-process-width" type="number" min="0" max="7680" step="1" value="0">
+    </div>
+    <p class="source-meta" id="source-meta"></p>
     <div class="source-actions">
       <button type="button" class="btn btn-primary" id="btn-source-apply">Apply</button>
       <button type="button" class="btn" id="btn-source-save">Apply &amp; Save</button>
@@ -1247,64 +1280,43 @@ async function buildSourcePanel() {
 async function applySource({ save }) {
   const status = $('tune-status');
   const type = $('source-type')?.value || 'v4l2';
-  if (type === 'lumos') {
-    try {
-      if (status) status.textContent = save ? 'saving Lumos Cam…' : 'switching to Lumos Cam…';
-      const result = await postLumos('apply', readLumosFields(), { save });
-      if (result.config) {
-        applyConfig(result.config, { skipFocused: true });
-        applySourcePanelFromConfig(result.config);
-        applyLumosPanelFromConfig(result.config);
-      }
-      toast(save && result.saved ? `Lumos Cam saved to ${result.saved}` : 'Lumos Cam applied', 'ok');
-      if (status) status.textContent = 'changes apply live';
-    } catch (err) {
-      if (status) status.textContent = 'source update failed';
-      toast(err.message, 'error');
-    }
-    return;
-  }
-  if (type === 'scrcpy') {
-    try {
-      if (status) status.textContent = save ? 'saving scrcpy…' : 'switching to scrcpy…';
-      const result = await postScrcpy('apply', { ...readScrcpyFields(), enabled: true }, { save });
-      if (result.config) {
-        applyConfig(result.config, { skipFocused: true });
-        applySourcePanelFromConfig(result.config);
-        applyScrcpyPanelFromConfig(result.config);
-      }
-      toast(save && result.saved ? `scrcpy saved to ${result.saved}` : 'scrcpy applied', 'ok');
-      if (status) status.textContent = 'changes apply live';
-    } catch (err) {
-      if (status) status.textContent = 'source update failed';
-      toast(err.message, 'error');
-    }
-    return;
-  }
   const body = { source: type, save: Boolean(save) };
+  const processWidth = Number($('source-process-width')?.value || 0);
+  if (['lumos', 'v4l2', 'rtsp', 'file'].includes(type)) {
+    body.process_width = Number.isFinite(processWidth) ? processWidth : 0;
+  }
 
-  if (type === 'v4l2') {
-    const device = ($('source-device').value || '').trim();
+  if (type === 'lumos') {
+    Object.assign(body, readLumosFields());
+  } else if (type === 'scrcpy') {
+    Object.assign(body, readScrcpyFields());
+    body.process_width = Number.isFinite(processWidth) ? processWidth : 0;
+  } else if (type === 'v4l2') {
+    const device = ($('source-device')?.value || '').trim();
     if (!device) {
       toast('Select a USB camera', 'error');
       return;
     }
     body.device = device;
   } else if (type === 'rtsp') {
-    const url = ($('source-rtsp').value || '').trim();
+    const url = ($('source-rtsp')?.value || '').trim();
     if (url) body.rtsp_url = url;
     else if (!sourcePanelState.rtsp_saved) {
       toast('Enter an RTSP URL', 'error');
       return;
     }
-    body.transport = $('source-transport').value || 'tcp';
+    body.transport = $('source-transport')?.value || 'tcp';
   } else if (type === 'file') {
-    const path = ($('source-path').value || '').trim();
+    const path = ($('source-path')?.value || '').trim();
     if (!path) {
       toast('Enter a file or image path', 'error');
       return;
     }
     body.path = path;
+    body.loop = Boolean($('source-loop')?.checked);
+    body.replay_fps = Number($('source-replay-fps')?.value || 0);
+  } else if (type === 'synthetic') {
+    body.replay_fps = Number($('source-replay-fps')?.value || 0);
   }
 
   try {
@@ -1314,6 +1326,8 @@ async function applySource({ save }) {
     if (result.devices) sourcePanelState.devices = result.devices;
     applyConfig(result.config, { skipFocused: true });
     applySourcePanelFromConfig(result.config);
+    applyLumosPanelFromConfig(result.config);
+    applyScrcpyPanelFromConfig(result.config);
     fillDeviceSelect(result.config?.camera?.device || '');
     if (normalizeSourceType(result.config?.camera?.source) === 'v4l2') {
       await buildCameraControls();
@@ -1943,7 +1957,7 @@ async function init() {
     applyLumosPanelFromConfig(config);
     applyScrcpyPanelFromConfig(config);
     fillDeviceSelect(config.camera?.device || '');
-    if (captureKindFromConfig(config) !== 'v4l2') {
+    if (normalizeSourceType(config?.camera?.source) !== 'v4l2') {
       const hw = $('camera-controls');
       if (hw) hw.innerHTML = '';
     }

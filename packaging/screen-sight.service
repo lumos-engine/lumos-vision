@@ -3,7 +3,9 @@ Description=Screen Sight (camera -> rectified virtual webcam)
 Documentation=https://github.com/shivanshBTW/screen-sight
 After=network-online.target
 Wants=network-online.target
-# Load loopback before us if you use the modprobe.d snippet in the README.
+# Optional: create /dev/video10 (and video11 for scrcpy) without unloading
+# an already-loaded module. Needs packaging/sudoers.d/screen-sight-loopback.
+# ExecStartPre=/usr/lib/screen-sight/screen-sight-loopback /dev/video10
 
 [Service]
 Type=simple

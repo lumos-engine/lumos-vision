@@ -32,7 +32,8 @@ accepts a connection on the video port and writes:
 | `h264` (default) | Annex-B H.264 (hardware encoder) | `-f h264 -i tcp://127.0.0.1:<video_host_port>` |
 | `mjpeg` | Concatenated JPEG frames | `-f mjpeg -i tcp://127.0.0.1:<video_host_port>` |
 
-No length prefix. ffmpeg writes YUYV to `/dev/video11` (same bind path as scrcpy).
+No length prefix. Host ffmpeg reads the TCP stream and decodes MJPEG frames
+to stdout (`pipe:1`). Capture does **not** use `/dev/video11`.
 
 ## Control HTTP
 

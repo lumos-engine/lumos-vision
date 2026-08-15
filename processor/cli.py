@@ -87,7 +87,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     source.add_argument(
         "--source",
-        choices=("rtsp", "v4l2", "usb", "file", "image", "synthetic"),
+        choices=("rtsp", "v4l2", "usb", "file", "image", "synthetic", "lumos", "scrcpy"),
         help="input type",
     )
     source.add_argument(
@@ -204,17 +204,25 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
 def _require_camera_identity(config: Config) -> None:
     """Fail fast when the configured source has no URL/device.
 
-    Lumos Cam with ``bind_camera`` owns capture via the ffmpeg pipe, so
-    ``camera.device`` must stay empty (it used to point at the unused loopback).
+    ``lumos`` reads an ffmpeg pipe, so ``camera.device`` stays unused.
+    ``scrcpy`` uses ``scrcpy.v4l2_sink`` (copied onto ``camera.device``).
     """
-    if config.lumos_cam.enabled and config.lumos_cam.bind_camera:
+    source = (config.camera.source or "").strip().lower()
+    if source in {"lumos", "synthetic"}:
         return
-    if config.camera.source == "rtsp" and not config.camera.rtsp_url:
+    if source == "scrcpy":
+        if not (config.scrcpy.v4l2_sink or config.camera.device):
+            raise SystemExit(
+                "scrcpy selected but no v4l2_sink given. Set scrcpy.v4l2_sink "
+                "(default /dev/video11)."
+            )
+        return
+    if source == "rtsp" and not config.camera.rtsp_url:
         raise SystemExit(
             "no camera configured. Pass --rtsp-url, set camera.rtsp_url in the config, "
             "or try --source synthetic / --source v4l2 --camera-device /dev/video2."
         )
-    if config.camera.source in ("v4l2", "usb") and not config.camera.device:
+    if source in ("v4l2", "usb") and not config.camera.device:
         raise SystemExit(
             "USB camera selected but no device given. Pass --camera-device /dev/video2 "
             "(check with: v4l2-ctl --list-devices)."

@@ -282,7 +282,6 @@ class _Handler(BaseHTTPRequestHandler):
                     "v4l2_sink",
                     "no_playback",
                     "no_audio",
-                    "bind_camera",
                     "startup_timeout_sec",
                     "extra_args",
                 )
@@ -324,11 +323,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "af",
                     "ae",
                     "awb",
-                    "v4l2_sink",
-                    "bind_camera",
                     "ffmpeg",
                     "startup_timeout_sec",
-                    "prefer_over_scrcpy",
                 )
                 if key in body
             }
@@ -359,6 +355,20 @@ class _Handler(BaseHTTPRequestHandler):
                 "loop",
                 "replay_fps",
                 "process_width",
+                "serial",
+                "camera_id",
+                "camera_size",
+                "camera_fps",
+                "codec",
+                "camera_zoom",
+                "pan_x",
+                "pan_y",
+                "af",
+                "ae",
+                "awb",
+                "binary",
+                "view_zoom",
+                "v4l2_sink",
             )
             if key in body
         }

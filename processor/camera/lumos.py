@@ -1,8 +1,7 @@
-"""Lumos Cam frames from ffmpeg stdout (raw BGR), not v4l2loopback.
+"""Lumos Cam frames from ffmpeg stdout (MJPEG), not v4l2loopback.
 
-ffmpeg's v4l2 muxer ``write()``s into ``/dev/video11``, but OpenCV and a
-plain ``read()`` on that node often never see those buffers.  Decoding into
-a pipe skips the loopback entirely: one BGR frame in, newest frame out.
+ffmpeg's v4l2 muxer used to write into ``/dev/video11``, but OpenCV often never
+saw those buffers. Decoding into a pipe skips the loopback entirely.
 """
 
 from __future__ import annotations
