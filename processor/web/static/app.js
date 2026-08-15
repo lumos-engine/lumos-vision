@@ -500,8 +500,6 @@ async function buildLumosCamPanel() {
       <button type="button" class="btn" id="btn-lumos-pan-up" title="Pan up">↑</button>
       <button type="button" class="btn" id="btn-lumos-pan-down" title="Pan down">↓</button>
       <button type="button" class="btn" id="btn-lumos-pan-center">Center</button>
-      <button type="button" class="btn btn-primary" id="btn-lumos-apply">Apply</button>
-      <button type="button" class="btn" id="btn-lumos-save">Apply &amp; Save</button>
     </div>`;
   root.append(section);
 
@@ -567,22 +565,6 @@ async function buildLumosCamPanel() {
   $('btn-lumos-pan-up')?.addEventListener('click', pan('pan_up'));
   $('btn-lumos-pan-down')?.addEventListener('click', pan('pan_down'));
   $('btn-lumos-pan-center')?.addEventListener('click', pan('pan_center'));
-  $('btn-lumos-apply')?.addEventListener('click', async () => {
-    try {
-      await postLumos('apply', readLumosFields());
-      toast('Lumos Cam applied');
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
-  $('btn-lumos-save')?.addEventListener('click', async () => {
-    try {
-      await postLumos('apply', readLumosFields(), { save: true });
-      toast('Lumos Cam saved');
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
 }
 
 // ------------------------------------------------------------- scrcpy panel
@@ -816,8 +798,6 @@ async function buildScrcpyPanel() {
       <button type="button" class="btn" id="btn-scrcpy-pan-up" title="Pan up">↑</button>
       <button type="button" class="btn" id="btn-scrcpy-pan-down" title="Pan down">↓</button>
       <button type="button" class="btn" id="btn-scrcpy-pan-center">Center</button>
-      <button type="button" class="btn btn-primary" id="btn-scrcpy-apply">Apply</button>
-      <button type="button" class="btn" id="btn-scrcpy-save">Apply &amp; Save</button>
     </div>`;
   root.append(section);
 
@@ -880,26 +860,6 @@ async function buildScrcpyPanel() {
       }
     });
   }
-  $('btn-scrcpy-apply')?.addEventListener('click', async () => {
-    try {
-      await postScrcpy('apply', readScrcpyFields(), { save: false });
-      toast(scrcpyPanelState.enabled ? 'scrcpy applied' : 'scrcpy disabled');
-      await loadCaptureDevices();
-      fillDeviceSelect(sourcePanelState.device || scrcpyPanelState.v4l2_sink);
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
-  $('btn-scrcpy-save')?.addEventListener('click', async () => {
-    try {
-      await postScrcpy('apply', readScrcpyFields(), { save: true });
-      toast('scrcpy saved to config.yaml');
-      await loadCaptureDevices();
-      fillDeviceSelect(sourcePanelState.device || scrcpyPanelState.v4l2_sink);
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
   syncScrcpyForm({ force: true });
 }
 
@@ -1215,8 +1175,8 @@ async function buildSourcePanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Source</h3>
-    <p class="hint">One capture source at a time. Apply switches live; Save
-    writes config.yaml. Phone options show their settings below.</p>
+    <p class="hint">One capture source at a time. Only settings for this input
+    type are shown. Apply switches live; Save writes config.yaml.</p>
     <div class="control">
       <label for="source-type">Input type</label>
       <select id="source-type">
@@ -1251,10 +1211,12 @@ async function buildSourcePanel() {
       <label for="source-replay-fps">Replay FPS (0 = as fast as the pipeline wants)</label>
       <input id="source-replay-fps" type="number" min="0" max="120" step="1" value="0">
     </div>
-    <div class="control" data-source-for="lumos v4l2 rtsp file">
+    <div class="control" data-source-for="lumos scrcpy v4l2 rtsp file">
       <label for="source-process-width">Process width (0 = native)</label>
       <input id="source-process-width" type="number" min="0" max="7680" step="1" value="0">
     </div>
+    <div id="lumos-cam-panel" class="source-fields" data-source-for="lumos" hidden></div>
+    <div id="scrcpy-panel" class="source-fields" data-source-for="scrcpy" hidden></div>
     <p class="source-meta" id="source-meta"></p>
     <div class="source-actions">
       <button type="button" class="btn btn-primary" id="btn-source-apply">Apply</button>
@@ -1274,6 +1236,8 @@ async function buildSourcePanel() {
 
   await loadCaptureDevices();
   fillDeviceSelect(sourcePanelState.device);
+  const type = $('source-type');
+  if (type) type.value = sourcePanelState.source;
   syncSourceFieldsVisibility();
 }
 
@@ -1282,7 +1246,7 @@ async function applySource({ save }) {
   const type = $('source-type')?.value || 'v4l2';
   const body = { source: type, save: Boolean(save) };
   const processWidth = Number($('source-process-width')?.value || 0);
-  if (['lumos', 'v4l2', 'rtsp', 'file'].includes(type)) {
+  if (['lumos', 'scrcpy', 'v4l2', 'rtsp', 'file'].includes(type)) {
     body.process_width = Number.isFinite(processWidth) ? processWidth : 0;
   }
 
@@ -1290,7 +1254,6 @@ async function applySource({ save }) {
     Object.assign(body, readLumosFields());
   } else if (type === 'scrcpy') {
     Object.assign(body, readScrcpyFields());
-    body.process_width = Number.isFinite(processWidth) ? processWidth : 0;
   } else if (type === 'v4l2') {
     const device = ($('source-device')?.value || '').trim();
     if (!device) {
@@ -1957,6 +1920,7 @@ async function init() {
     applyLumosPanelFromConfig(config);
     applyScrcpyPanelFromConfig(config);
     fillDeviceSelect(config.camera?.device || '');
+    syncSourceFieldsVisibility();
     if (normalizeSourceType(config?.camera?.source) !== 'v4l2') {
       const hw = $('camera-controls');
       if (hw) hw.innerHTML = '';
