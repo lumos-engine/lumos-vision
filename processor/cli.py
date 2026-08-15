@@ -201,6 +201,26 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
     return updates
 
 
+def _require_camera_identity(config: Config) -> None:
+    """Fail fast when the configured source has no URL/device.
+
+    Lumos Cam with ``bind_camera`` owns capture via the ffmpeg pipe, so
+    ``camera.device`` must stay empty (it used to point at the unused loopback).
+    """
+    if config.lumos_cam.enabled and config.lumos_cam.bind_camera:
+        return
+    if config.camera.source == "rtsp" and not config.camera.rtsp_url:
+        raise SystemExit(
+            "no camera configured. Pass --rtsp-url, set camera.rtsp_url in the config, "
+            "or try --source synthetic / --source v4l2 --camera-device /dev/video2."
+        )
+    if config.camera.source in ("v4l2", "usb") and not config.camera.device:
+        raise SystemExit(
+            "USB camera selected but no device given. Pass --camera-device /dev/video2 "
+            "(check with: v4l2-ctl --list-devices)."
+        )
+
+
 def build_config(args: argparse.Namespace) -> tuple[Config, Path | None]:
     """Load YAML (explicit, discovered, or defaults) and apply CLI overrides."""
     path = Path(args.config).expanduser() if getattr(args, "config", None) else find_config()
@@ -235,16 +255,7 @@ def command_run(args: argparse.Namespace) -> int:
         print(f"wrote {target}")
         return 0
 
-    if config.camera.source == "rtsp" and not config.camera.rtsp_url:
-        raise SystemExit(
-            "no camera configured. Pass --rtsp-url, set camera.rtsp_url in the config, "
-            "or try --source synthetic / --source v4l2 --camera-device /dev/video2."
-        )
-    if config.camera.source in ("v4l2", "usb") and not config.camera.device:
-        raise SystemExit(
-            "USB camera selected but no device given. Pass --camera-device /dev/video2 "
-            "(check with: v4l2-ctl --list-devices)."
-        )
+    _require_camera_identity(config)
 
     # Imported here so `screensight --help` and the offline subcommands stay fast and
     # do not need a GUI-capable OpenCV build.

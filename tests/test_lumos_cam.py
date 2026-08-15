@@ -968,3 +968,23 @@ def test_read_bgr_keeps_newest_queued_frame():
             mgr._proc.stdout.close()
         except OSError:
             pass
+
+
+def test_cli_allows_empty_camera_device_when_lumos_owns_capture():
+    from processor.cli import _require_camera_identity
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "v4l2", "device": ""},
+            "lumos_cam": {"enabled": True, "bind_camera": True},
+        }
+    )
+    _require_camera_identity(config)
+
+    bare = Config.from_dict({"camera": {"source": "v4l2", "device": ""}})
+    try:
+        _require_camera_identity(bare)
+    except SystemExit as exc:
+        assert "USB camera" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit when Lumos Cam is off")
