@@ -236,6 +236,15 @@ def test_pop_newest_jpeg_clears_non_soi_junk():
     assert bytes(buf) == b""
 
 
+def test_pop_newest_jpeg_skips_eoi_inside_app_segment():
+    payload = b"EXIF\xff\xd9xxxx"
+    length = (2 + len(payload)).to_bytes(2, "big")
+    jpeg = b"\xff\xd8\xff\xe1" + length + payload + b"\xff\xd9"
+    buf = bytearray(jpeg)
+    assert _pop_newest_jpeg(buf) == jpeg
+    assert bytes(buf) == b""
+
+
 def test_video_candidates_try_adb_before_lan(monkeypatch):
     monkeypatch.setattr(
         "processor.utils.lumos_cam.phone_lan_ipv4",

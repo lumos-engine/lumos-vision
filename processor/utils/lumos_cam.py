@@ -308,7 +308,56 @@ def build_ffmpeg_command(
 
 
 _JPEG_SOI = b"\xff\xd8"
-_JPEG_EOI = b"\xff\xd9"
+
+
+def _jpeg_eoi_index(buf: bytearray | bytes, start: int) -> int:
+    """Return the index after a real EOI, or -1 if the JPEG is still incomplete.
+
+    ``buf.find(FF D9)`` is wrong: Camera2 JPEGs embed EXIF/thumbnails whose
+    payload can contain that pair, so a naive scan pops a truncated frame,
+    ``imdecode`` fails, and the rest of the buffer is discarded.
+    """
+    i = start + 2
+    n = len(buf)
+    while i < n:
+        if buf[i] != 0xFF:
+            i += 1
+            continue
+        while i < n and buf[i] == 0xFF:
+            i += 1
+        if i >= n:
+            return -1
+        marker = buf[i]
+        i += 1
+        if marker == 0xD9:
+            return i
+        if marker == 0xD8 or marker == 0x01 or 0xD0 <= marker <= 0xD7:
+            continue
+        if marker == 0xDA:
+            while i < n:
+                if buf[i] != 0xFF:
+                    i += 1
+                    continue
+                if i + 1 >= n:
+                    return -1
+                nxt = buf[i + 1]
+                if nxt == 0x00 or 0xD0 <= nxt <= 0xD7:
+                    i += 2
+                    continue
+                if nxt == 0xFF:
+                    i += 1
+                    continue
+                if nxt == 0xD9:
+                    return i + 2
+                break
+            continue
+        if i + 1 >= n:
+            return -1
+        seglen = (buf[i] << 8) | buf[i + 1]
+        if seglen < 2:
+            return -1
+        i += seglen
+    return -1
 
 
 def _pop_newest_jpeg(buf: bytearray) -> bytes | None:
@@ -317,7 +366,6 @@ def _pop_newest_jpeg(buf: bytearray) -> bytes | None:
     while True:
         start = buf.find(_JPEG_SOI)
         if start < 0:
-            # Keep a trailing 0xFF so a split SOI (FF | D8) still assembles.
             keep = 1 if buf and buf[-1] == 0xFF else 0
             if keep:
                 del buf[:-1]
@@ -326,11 +374,12 @@ def _pop_newest_jpeg(buf: bytearray) -> bytes | None:
             return newest
         if start:
             del buf[:start]
-        end = buf.find(_JPEG_EOI, 2)
+            start = 0
+        end = _jpeg_eoi_index(buf, start)
         if end < 0:
             return newest
-        newest = bytes(buf[: end + 2])
-        del buf[: end + 2]
+        newest = bytes(buf[:end])
+        del buf[:end]
 
 
 def _enlarge_pipe(fd: int) -> None:
@@ -781,23 +830,37 @@ class LumosCamManager:
             self._last_error = f"{host}:{port} ({via}): {exc}"
             return None
 
-    def _phone_bytes_sent(self) -> int:
+    def _refresh_video_forward(self, cfg: LumosCamConfig) -> None:
+        """Drop a stale adb video forward so a new TCP client actually reaches the phone."""
+        host = int(cfg.video_host_port)
+        device = int(cfg.video_device_port)
         try:
-            return int(self._phone.get("bytes_sent") or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    def _refresh_phone_status(self) -> dict[str, Any]:
-        try:
-            st = self.client.status()
-            self._phone = {**self._phone, **st}
-            return st
-        except RuntimeError:
-            return {}
+            subprocess.run(
+                adb_argv(cfg, "forward", "--remove", f"tcp:{host}"),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=3.0,
+            )
+            subprocess.run(
+                adb_argv(cfg, "forward", f"tcp:{host}", f"tcp:{device}"),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5.0,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def _connect_video(self, cfg: LumosCamConfig) -> socket.socket | None:
+        """Open one video TCP client. Keep it even if the first JPEG is not ready.
+
+        A 0.45s probe that closed 'idle' sockets caused a restart loop: Camera2
+        JPEGs are ~200KiB and EXIF can contain FF D9, so the first read looked
+        empty while the phone was already sending.
+        """
         last = "video connect failed"
-        sent_before = self._phone_bytes_sent()
+        self._refresh_video_forward(cfg)
         for host, port, via in self._video_candidates(cfg):
             sock = self._open_video_socket(host, port, via)
             if sock is None:
@@ -807,23 +870,6 @@ class LumosCamManager:
             self._sock = sock
             self._video_via = via
             self._pending = b""
-            frame = self.read_bgr(timeout=0.45)
-            if frame is not None:
-                self._held_frame = frame
-                return sock
-            self._refresh_phone_status()
-            sent_after = self._phone_bytes_sent()
-            if sent_after > sent_before and len(self._pending) == 0:
-                log.warning(
-                    "Lumos Cam video via %s idle while phone bytes_sent %s -> %s — trying next",
-                    via,
-                    sent_before,
-                    sent_after,
-                )
-                self._close_sock()
-                sent_before = sent_after
-                last = f"{host}:{port} ({via}): no JPEG while phone is sending"
-                continue
             return sock
         self._last_error = last
         return None
@@ -853,7 +899,10 @@ class LumosCamManager:
         else:
             peer_s = str(peer)
         self._command = ["socket", peer_s, f"via {self._video_via or '?'}"]
-        ready = self._wait_until_ready(cfg) if wait else self._held_frame is not None
+        if wait:
+            ready = self._wait_until_ready(cfg)
+        else:
+            ready = True
         if not self.running:
             return {"ok": False, "error": self._last_error or "video socket closed", "running": False}
         if not ready:
@@ -861,10 +910,12 @@ class LumosCamManager:
                 "lumos-cam: JPEG socket open via %s — first frame on capture thread",
                 self._video_via or "?",
             )
+        else:
+            log.info("Lumos Cam JPEG socket via %s", self._video_via or "?")
         return {
             "ok": True,
             "running": True,
-            "ready": bool(ready),
+            "ready": True if not wait else bool(ready),
             "command": list(self._command),
         }
 
