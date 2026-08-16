@@ -317,7 +317,12 @@ def _pop_newest_jpeg(buf: bytearray) -> bytes | None:
     while True:
         start = buf.find(_JPEG_SOI)
         if start < 0:
-            buf.clear()
+            # Keep a trailing 0xFF so a split SOI (FF | D8) still assembles.
+            keep = 1 if buf and buf[-1] == 0xFF else 0
+            if keep:
+                del buf[:-1]
+            else:
+                buf.clear()
             return newest
         if start:
             del buf[:start]
@@ -607,6 +612,7 @@ class LumosCamManager:
         self._stream_transform: tuple[int, bool, bool] = (0, False, False)
         self._sock: socket.socket | None = None
         self._host_transform = False
+        self._video_via = ""
 
     @property
     def running(self) -> bool:
@@ -726,6 +732,9 @@ class LumosCamManager:
             self.client.set_camera(cfg.camera_id)
             self.client.set_zoom(clamp_zoom(cfg.camera_zoom, cfg))
             self.client.set_pan(clamp_pan(cfg.pan_x), clamp_pan(cfg.pan_y))
+            # ffmpeg must be gone before the phone opens a new listener, or it
+            # reconnects via adb forward and steals the MJPEG client.
+            self._kill_ffmpeg_unlocked()
             self.client.set_stream(cfg, enabled=True)
             self.client.set_locks(**_capture_lock_kwargs(cfg))
             phone = {**phone, **self.client.status()}
@@ -736,7 +745,7 @@ class LumosCamManager:
 
         codec = (cfg.codec or "mjpeg").strip().lower()
         if codec == "mjpeg":
-            return self._start_jpeg_socket(cfg, phone)
+            return self._start_jpeg_socket(cfg, phone, wait=False)
         return self._start_ffmpeg(cfg, phone)
 
     def _close_sock(self) -> None:
@@ -748,29 +757,79 @@ class LumosCamManager:
         except OSError:
             pass
 
-    def _connect_video(self, cfg: LumosCamConfig) -> socket.socket | None:
-        candidates: list[tuple[str, int, str]] = []
+    def _video_candidates(self, cfg: LumosCamConfig) -> list[tuple[str, int, str]]:
+        # Same path as h264 ffmpeg (adb) first. LAN is a fallback: preferring it
+        # let a leftover ffmpeg on the adb forward steal StreamServer.client.
+        candidates: list[tuple[str, int, str]] = [
+            ("127.0.0.1", int(cfg.video_host_port), "adb"),
+        ]
         lan = phone_lan_ipv4(cfg)
         if lan:
             candidates.append((lan, int(cfg.video_device_port), "lan"))
-        candidates.append(("127.0.0.1", int(cfg.video_host_port), "adb"))
+        return candidates
+
+    def _open_video_socket(self, host: str, port: int, via: str) -> socket.socket | None:
+        try:
+            sock = socket.create_connection((host, port), timeout=2.0)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
+            sock.setblocking(False)
+            log.info("Lumos Cam video %s:%s via %s", host, port, via)
+            return sock
+        except OSError as exc:
+            log.warning("Lumos Cam video %s:%s (%s): %s", host, port, via, exc)
+            self._last_error = f"{host}:{port} ({via}): {exc}"
+            return None
+
+    def _phone_bytes_sent(self) -> int:
+        try:
+            return int(self._phone.get("bytes_sent") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _refresh_phone_status(self) -> dict[str, Any]:
+        try:
+            st = self.client.status()
+            self._phone = {**self._phone, **st}
+            return st
+        except RuntimeError:
+            return {}
+
+    def _connect_video(self, cfg: LumosCamConfig) -> socket.socket | None:
         last = "video connect failed"
-        for host, port, via in candidates:
-            try:
-                sock = socket.create_connection((host, port), timeout=2.0)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
-                sock.setblocking(False)
-                log.info("Lumos Cam video %s:%s via %s", host, port, via)
+        sent_before = self._phone_bytes_sent()
+        for host, port, via in self._video_candidates(cfg):
+            sock = self._open_video_socket(host, port, via)
+            if sock is None:
+                last = self._last_error or last
+                continue
+            self._close_sock()
+            self._sock = sock
+            self._video_via = via
+            self._pending = b""
+            frame = self.read_bgr(timeout=0.45)
+            if frame is not None:
+                self._held_frame = frame
                 return sock
-            except OSError as exc:
-                last = f"{host}:{port} ({via}): {exc}"
-                log.warning("Lumos Cam video %s", last)
+            self._refresh_phone_status()
+            sent_after = self._phone_bytes_sent()
+            if sent_after > sent_before and len(self._pending) == 0:
+                log.warning(
+                    "Lumos Cam video via %s idle while phone bytes_sent %s -> %s — trying next",
+                    via,
+                    sent_before,
+                    sent_after,
+                )
+                self._close_sock()
+                sent_before = sent_after
+                last = f"{host}:{port} ({via}): no JPEG while phone is sending"
+                continue
+            return sock
         self._last_error = last
         return None
 
     def _start_jpeg_socket(
-        self, cfg: LumosCamConfig, phone: dict[str, Any], *, wait: bool = True
+        self, cfg: LumosCamConfig, phone: dict[str, Any], *, wait: bool = False
     ) -> dict[str, Any]:
         """Read Camera2 JPEGs ourselves so ffmpeg cannot queue H.264/TCP."""
         self._kill_ffmpeg_unlocked()
@@ -785,26 +844,27 @@ class LumosCamManager:
         sock = self._connect_video(cfg)
         if sock is None:
             return {"ok": False, "error": self._last_error, "running": False}
-        self._sock = sock
-        self._command = ["socket", f"{sock.getpeername()[0]}:{sock.getpeername()[1]}"]
-        ready = self._wait_until_ready(cfg) if wait else True
+        try:
+            peer = sock.getpeername()
+        except OSError:
+            peer = "?"
+        if isinstance(peer, tuple) and len(peer) >= 2:
+            peer_s = f"{peer[0]}:{peer[1]}"
+        else:
+            peer_s = str(peer)
+        self._command = ["socket", peer_s, f"via {self._video_via or '?'}"]
+        ready = self._wait_until_ready(cfg) if wait else self._held_frame is not None
         if not self.running:
             return {"ok": False, "error": self._last_error or "video socket closed", "running": False}
         if not ready:
-            log.warning(
-                "lumos-cam: no JPEG yet after %.0fs — leaving socket open",
-                float(cfg.startup_timeout_sec),
+            log.info(
+                "lumos-cam: JPEG socket open via %s — first frame on capture thread",
+                self._video_via or "?",
             )
-            return {
-                "ok": True,
-                "running": True,
-                "ready": False,
-                "command": list(self._command),
-            }
         return {
             "ok": True,
             "running": True,
-            "ready": True,
+            "ready": bool(ready),
             "command": list(self._command),
         }
 
@@ -1298,10 +1358,15 @@ class LumosCamManager:
             now = time.monotonic()
             if now - last_log > 2.0:
                 last_log = now
+                kind = "socket" if self._sock is not None else "ffmpeg"
                 log.info(
-                    "Lumos Cam waiting for ffmpeg JPEG (%d bytes buffered, phone bytes_sent=%s)",
+                    "Lumos Cam waiting for %s JPEG (%d bytes buffered, via %s, "
+                    "phone bytes_sent=%s video_clients=%s)",
+                    kind,
                     len(self._pending),
+                    self._video_via or "-",
                     st.get("bytes_sent", "?"),
+                    st.get("video_clients", "?"),
                 )
         return False
 

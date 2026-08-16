@@ -12,6 +12,7 @@ from processor.utils.lumos_cam import (
     MIN_APP_VERSION,
     PROTOCOL_VERSION,
     LumosCamManager,
+    _pop_newest_jpeg,
     build_ffmpeg_command,
     step_lumos_pan,
     step_lumos_zoom,
@@ -219,6 +220,34 @@ def test_config_round_trip_includes_lumos_cam():
     assert PROTOCOL_VERSION == 1
 
 
+def test_pop_newest_jpeg_keeps_trailing_ff():
+    buf = bytearray(b"junk\xff")
+    assert _pop_newest_jpeg(buf) is None
+    assert bytes(buf) == b"\xff"
+    buf += b"\xd8\x00\xff\xd9"
+    jpeg = _pop_newest_jpeg(buf)
+    assert jpeg == b"\xff\xd8\x00\xff\xd9"
+    assert bytes(buf) == b""
+
+
+def test_pop_newest_jpeg_clears_non_soi_junk():
+    buf = bytearray(b"not-a-jpeg")
+    assert _pop_newest_jpeg(buf) is None
+    assert bytes(buf) == b""
+
+
+def test_video_candidates_try_adb_before_lan(monkeypatch):
+    monkeypatch.setattr(
+        "processor.utils.lumos_cam.phone_lan_ipv4",
+        lambda cfg: "192.168.1.9",
+    )
+    mgr = LumosCamManager()
+    cfg = LumosCamConfig(video_host_port=18766, video_device_port=8766)
+    candidates = mgr._video_candidates(cfg)
+    assert candidates[0] == ("127.0.0.1", 18766, "adb")
+    assert candidates[1] == ("192.168.1.9", 8766, "lan")
+
+
 def _fake_live_client(calls, *, cal_mode):
     class FakeClient:
         def configure(self, cfg):
@@ -380,6 +409,66 @@ def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
     assert result["running"] is True
     assert "-f" in spawned["cmd"]
     assert mgr.stop()["running"] is False
+
+
+def test_mjpeg_start_does_not_block_for_first_jpeg(monkeypatch):
+    import socket
+
+    def fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "package:/data/app/dev.lumos.cam.apk\n"
+            stderr = ""
+
+        text = " ".join(str(c) for c in cmd)
+        if "devices" in text:
+            Result.stdout = "List of devices attached\nphone\tdevice\n"
+        return Result()
+
+    monkeypatch.setattr("processor.utils.lumos_cam.subprocess.run", fake_run)
+    monkeypatch.setattr("processor.utils.lumos_cam.adb_device_ready", lambda *a, **k: True)
+    monkeypatch.setattr("processor.utils.lumos_cam.package_installed", lambda cfg: True)
+    monkeypatch.setattr("processor.utils.lumos_cam.phone_lan_ipv4", lambda cfg: "")
+
+    left, right = socket.socketpair()
+    left.setblocking(False)
+    mgr = LumosCamManager()
+
+    def fake_status():
+        return {
+            "ok": True,
+            "protocol": 1,
+            "app_version": "0.1.0",
+            "bytes_sent": 0,
+            "video_clients": 1,
+        }
+
+    mgr.client.status = fake_status
+    mgr.client.set_camera = lambda camera_id: fake_status()
+    mgr.client.set_zoom = lambda ratio: fake_status()
+    mgr.client.set_pan = lambda x, y: fake_status()
+    mgr.client.set_locks = lambda **k: fake_status()
+    mgr.client.set_stream = lambda cfg, enabled=True: fake_status()
+
+    def fake_connect(cfg):
+        mgr._sock = left
+        mgr._video_via = "adb"
+        return left
+
+    mgr._connect_video = fake_connect
+    started = time.monotonic()
+    try:
+        result = mgr.start(
+            LumosCamConfig(enabled=True, codec="mjpeg", startup_timeout_sec=15.0)
+        )
+        elapsed = time.monotonic() - started
+        assert result["ok"] is True
+        assert result["running"] is True
+        assert elapsed < 3.0
+    finally:
+        mgr.stop()
+        left.close()
+        right.close()
 
 
 def test_manager_start_fails_when_loopback_has_no_producer(monkeypatch, tmp_path):
