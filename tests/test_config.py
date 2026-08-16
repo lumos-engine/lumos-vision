@@ -160,15 +160,16 @@ def test_explicit_scrcpy_source_stays_scrcpy_when_lumos_is_off():
     assert config.lumos_cam.enabled is False
 
 
-def test_loader_prefers_lumos_over_stale_scrcpy_source():
+def test_explicit_scrcpy_source_wins_over_leftover_lumos_enabled():
     config = Config.from_dict(
         {
             "camera": {"source": "scrcpy", "device": "/dev/video11"},
-            "lumos_cam": {"enabled": True},
+            "lumos_cam": {"enabled": True, "serial": "phone"},
             "scrcpy": {"enabled": True, "auto_restart": True},
         }
     )
-    assert config.camera.source == "lumos"
-    assert config.camera.device == ""
-    assert config.lumos_cam.enabled is True
-    assert config.scrcpy.enabled is False
+    assert config.camera.source == "scrcpy"
+    assert config.camera.device == "/dev/video11"
+    assert config.scrcpy.enabled is True
+    assert config.lumos_cam.enabled is False
+    assert config.lumos_cam.serial == "phone"

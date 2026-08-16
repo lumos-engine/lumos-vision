@@ -1040,9 +1040,10 @@ async function buildScrcpyPanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Android cam (scrcpy fallback)</h3>
-    <p class="hint">Legacy phone path. Prefer Lumos Cam when the APK is
-    installed — it locks AF/AE/AWB and zooms live. Scrcpy still restarts
-    the child for zoom/crop.</p>
+    <p class="hint">Phone camera via scrcpy → /dev/video11. Apply this source
+    to switch to it; Lumos Cam stays configured and you can switch back.
+    Only one phone capture runs at a time. Zoom/crop restarts the scrcpy
+    child.</p>
     <div class="control">
       <label for="scrcpy-binary">Binary</label>
       <input id="scrcpy-binary" type="text" spellcheck="false" placeholder="/opt/scrcpy/scrcpy">
@@ -1681,8 +1682,8 @@ async function buildSourcePanel() {
   section.className = 'control-group';
   section.innerHTML = `
     <h3>Source</h3>
-    <p class="hint">One capture source at a time. Only settings for this input
-    type are shown. Apply switches live; Save writes config.yaml.</p>
+    <p class="hint">Lumos Cam and scrcpy are both kept in config. Apply picks
+    which one captures; only that producer runs. Save writes config.yaml.</p>
     <div class="control">
       <label for="source-type">Input type</label>
       <select id="source-type">

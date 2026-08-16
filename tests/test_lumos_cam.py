@@ -1310,3 +1310,47 @@ def test_apply_camera_source_lumos_starts_sidecar_and_v4l2_stops_it(monkeypatch)
     finally:
         app.shutdown()
 
+
+def test_apply_scrcpy_source_does_not_snap_back_to_lumos(monkeypatch):
+    from processor.app import Processor
+
+    scrcpy_starts = []
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "lumos"},
+            "lumos_cam": {"serial": "phone"},
+            "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+        }
+    )
+    app = Processor(config)
+    _use_synthetic_capture(app, monkeypatch)
+    monkeypatch.setattr(
+        app,
+        "_start_lumos_unlocked",
+        lambda restart=False: {"ok": True, "running": True, "pid": 1},
+    )
+    monkeypatch.setattr(
+        app,
+        "_start_scrcpy_unlocked",
+        lambda restart=False: scrcpy_starts.append(restart) or {
+            "ok": True,
+            "running": True,
+            "pid": 2,
+        },
+    )
+    monkeypatch.setattr(app, "_recreate_source_unlocked", lambda: {"ok": True})
+    app.start()
+    try:
+        assert app.config.camera.source == "lumos"
+        result = app.apply_camera_source({"source": "scrcpy", "camera_size": "1920x1080"})
+        assert result["ok"] is True
+        assert app.config.camera.source == "scrcpy"
+        assert app.config.scrcpy.enabled is True
+        assert app.config.lumos_cam.enabled is False
+        assert app.config.lumos_cam.serial == "phone"
+        assert scrcpy_starts == [True]
+    finally:
+        app.shutdown()
+

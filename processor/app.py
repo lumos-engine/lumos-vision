@@ -1034,6 +1034,7 @@ class Processor:
             updates["scrcpy.v4l2_sink"] = sink
             updates["camera.device"] = sink
             updates["scrcpy.enabled"] = True
+            updates["lumos_cam.enabled"] = False
             updates["scrcpy.no_audio"] = True
             updates["scrcpy.no_playback"] = True
         if not any(k != "camera.source" for k in updates) and "source" not in fields:
@@ -1219,6 +1220,7 @@ class Processor:
             if updates:
                 if updates.get("scrcpy.enabled") is True:
                     updates["camera.source"] = "scrcpy"
+                    updates["lumos_cam.enabled"] = False
                 self.config = apply_updates(self.config, updates)
 
             scrcpy_result: dict[str, Any]
@@ -1400,6 +1402,7 @@ class Processor:
             if updates:
                 if updates.get("lumos_cam.enabled") is True:
                     updates["camera.source"] = "lumos"
+                    updates["scrcpy.enabled"] = False
                 self.config = apply_updates(self.config, updates)
             stream_changed = _lumos_stream_changed(old_lumos, self.config.lumos_cam)
             lumos_result: dict[str, Any]
