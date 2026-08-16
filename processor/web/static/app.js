@@ -706,9 +706,9 @@ async function buildLumosCamPanel() {
   section.innerHTML = `
     <h3>Lumos Cam</h3>
     <p class="hint">Direct Camera2 control (needs Lumos Cam ≥ 0.1.13). Leave the
-    app open on the phone. The phone UI stays portrait; the preview and host
-    feed follow how you hold the phone. <strong>Frame ⟳</strong> / Flip are
-    extra offsets on top of that. Wireless adb serial looks like
+    app open on the phone. The phone UI follows portrait/landscape; the preview
+    letterboxes into the safe area. <strong>Frame ⟳</strong> / Flip are extra
+    offsets on top of that. Wireless adb serial looks like
     <code>192.168.1.243:37847</code> (the port changes).</p>
     <div class="control">
       <label for="lumos-serial">ADB serial (optional)</label>
