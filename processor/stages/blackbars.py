@@ -1,7 +1,11 @@
 """Automatic letterbox / pillarbox removal.
 
-No aspect-ratio profiles and no per-film configuration: the bars are measured
-from the picture itself, every frame, and then aggressively stabilised.
+Default is still measured from the picture every frame, then aggressively
+stabilised (no per-film profiles required).
+
+``direction`` can pin an axis when Dolby Vision brightness pumping or
+subtitles sitting on the bars fool auto. ``target_aspect`` (e.g. 2.39 or
+21:9) skips measurement and crops the 16:9 panel to that rectangle.
 
 Measurement combines an absolute/few-bright row mask (clean blacks) with a
 luma-profile edge finder (USB cams that render cinema bars as dark red/gray).
@@ -23,6 +27,68 @@ from processor.pipeline.stage import Stage
 from processor.utils.smoothing import StableValue
 
 EDGES = ("top", "bottom", "left", "right")
+_DIRECTION_LETTERBOX = {"top_bottom", "topbottom", "letterbox", "horizontal"}
+_DIRECTION_PILLARBOX = {"left_right", "leftright", "pillarbox", "vertical"}
+
+
+def parse_aspect_ratio(value: Any) -> float | None:
+    """``2.39``, ``2.39:1``, ``21:9``, ``16/9`` to width/height, or None."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if 0.5 <= number <= 4.0 else None
+    text = str(value).strip().lower().replace(" ", "")
+    if not text or text in {"off", "auto", "none", "0"}:
+        return None
+    if ":" in text or "/" in text:
+        sep = ":" if ":" in text else "/"
+        left, right = text.split(sep, 1)
+        try:
+            num, den = float(left), float(right)
+        except ValueError:
+            return None
+        if den == 0:
+            return None
+        number = num / den
+    else:
+        try:
+            number = float(text)
+        except ValueError:
+            return None
+    if not (0.5 <= number <= 4.0):
+        return None
+    return number
+
+
+def crop_fractions_for_aspect(
+    width: int, height: int, target: float
+) -> dict[str, float]:
+    """Symmetric bar sizes that leave ``target`` on a ``width`` x ``height`` panel."""
+    result = {edge: 0.0 for edge in EDGES}
+    if width < 8 or height < 8 or target <= 0:
+        return result
+    panel = width / height
+    if target > panel * 1.002:
+        remaining_h = panel / target
+        bar = max(0.0, (1.0 - remaining_h) / 2.0)
+        result["top"] = result["bottom"] = bar
+    elif target < panel / 1.002:
+        remaining_w = target / panel
+        bar = max(0.0, (1.0 - remaining_w) / 2.0)
+        result["left"] = result["right"] = bar
+    return result
+
+
+def detect_axes(config: BlackBarsConfig) -> tuple[bool, bool]:
+    """Return (letterbox, pillarbox) detection flags from ``direction``."""
+    mode = str(getattr(config, "direction", "auto") or "auto").strip().lower()
+    mode = mode.replace("-", "_").replace(" ", "_")
+    if mode in _DIRECTION_LETTERBOX:
+        return True, False
+    if mode in _DIRECTION_PILLARBOX:
+        return False, True
+    return bool(config.detect_top_bottom), bool(config.detect_left_right)
 
 
 def _leading_run(is_bar: np.ndarray) -> int:
@@ -188,6 +254,7 @@ class BlackBarStage(Stage):
         self._raw: dict[str, float] = {edge: 0.0 for edge in EDGES}
         self._pixels: dict[str, int] = {edge: 0 for edge in EDGES}
         self._dark_frames = 0
+        self._frame_wh: tuple[int, int] = (16, 9)
         self._build_filters()
 
     # -- lifecycle ---------------------------------------------------------
@@ -233,6 +300,7 @@ class BlackBarStage(Stage):
         self._raw = {edge: 0.0 for edge in EDGES}
         self._pixels = {edge: 0 for edge in EDGES}
         self._dark_frames = 0
+        self._frame_wh = (16, 9)
         self._letterbox_locked = False
         self._pillarbox_locked = False
         self._vertical_misses = 0
@@ -242,7 +310,8 @@ class BlackBarStage(Stage):
 
     def on_config_changed(self) -> None:
         # Keep the current crop so a slider nudge does not make the picture
-        # jump; only the filter behaviour changes.
+        # jump; only the filter behaviour changes.  Pinning an axis (or an
+        # aspect) does drop the disabled side immediately.
         previous_v = self._filters["top"].value
         previous_h = self._filters["left"].value
         previous = {edge: f.value for edge, f in self._filters.items()}
@@ -253,6 +322,11 @@ class BlackBarStage(Stage):
         else:
             for edge, value in previous.items():
                 self._filters[edge].force(value)
+        detect_v, detect_h = detect_axes(self.config)
+        if not detect_v:
+            self._force_axis("vertical", 0.0)
+        if not detect_h:
+            self._force_axis("horizontal", 0.0)
 
     def status(self) -> dict[str, Any]:
         applied = self._applied_fractions()
@@ -263,6 +337,8 @@ class BlackBarStage(Stage):
             "pixels": dict(self._pixels),
             "content_aspect": self._content_aspect(),
             "letterbox_locked": self._letterbox_locked,
+            "direction": str(self.config.direction or "auto"),
+            "target_aspect": parse_aspect_ratio(self.config.target_aspect),
         }
 
     def _applied_fractions(self) -> dict[str, float]:
@@ -274,7 +350,32 @@ class BlackBarStage(Stage):
         remaining_w = 1.0 - applied["left"] - applied["right"]
         if remaining_h <= 0 or remaining_w <= 0:
             return None
-        return round((16.0 / 9.0) * (remaining_w / remaining_h), 3)
+        width, height = self._frame_wh
+        panel = width / max(height, 1)
+        return round(panel * (remaining_w / remaining_h), 3)
+
+    def _force_axis(self, axis: str, value: float) -> None:
+        clipped = float(max(0.0, value))
+        if axis == "vertical":
+            if self._vertical is not None:
+                self._vertical.force(clipped)
+            else:
+                self._filters["top"].force(clipped)
+                self._filters["bottom"].force(clipped)
+            if clipped < 0.02:
+                self._letterbox_locked = False
+                self._vertical_misses = 0
+                self._vertical_shrinks = 0
+        else:
+            if self._horizontal is not None:
+                self._horizontal.force(clipped)
+            else:
+                self._filters["left"].force(clipped)
+                self._filters["right"].force(clipped)
+            if clipped < 0.02:
+                self._pillarbox_locked = False
+                self._horizontal_misses = 0
+                self._horizontal_shrinks = 0
 
     # -- main --------------------------------------------------------------
 
@@ -284,9 +385,12 @@ class BlackBarStage(Stage):
         if height < 16 or width < 16:
             ctx.skipped[self.name] = "image too small"
             return
+        self._frame_wh = (width, height)
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         bright = float(np.percentile(gray[::4, ::4], 99.0))
+        detect_v, detect_h = detect_axes(self.config)
+        target = parse_aspect_ratio(self.config.target_aspect)
 
         # Until the TV quad is trusted, the warp invents fake letterbox and
         # sticky filters freeze it.  Unit tests (no boundary stage) leave
@@ -295,8 +399,22 @@ class BlackBarStage(Stage):
             self.state.corners is None and self.state.corners_source == "none"
         )
 
+        forced = None
+        if target is not None:
+            forced = crop_fractions_for_aspect(width, height, target)
+            if not detect_v:
+                forced = {**forced, "top": 0.0, "bottom": 0.0}
+            if not detect_h:
+                forced = {**forced, "left": 0.0, "right": 0.0}
+
         if not boundary_ready:
             measured = None
+        elif forced is not None:
+            # Pinned aspect: do not let DV fades or subtitle-on-bar rows
+            # override the geometry.
+            self._dark_frames = 0
+            measured = self._postprocess(forced)
+            self._raw = measured
         elif bright < self.config.dark_frame_luma:
             # Fade to black, or the TV is off.  Every row looks like a bar, so
             # measuring now would collapse the crop; hold what we have.
@@ -308,34 +426,50 @@ class BlackBarStage(Stage):
                 gray,
                 self.config.luma_threshold,
                 self.config.percentile,
-                self.config.detect_top_bottom,
-                self.config.detect_left_right,
+                detect_v,
+                detect_h,
             )
             measured = self._postprocess(measured)
             self._raw = measured
 
         v_limit, h_limit = self._crop_limits()
         if self.config.symmetric and self._vertical and self._horizontal:
-            if measured is None:
-                v_sample = self._vertical.committed
-                h_sample = self._horizontal.committed
+            if forced is not None and measured is not None:
+                v_sample = measured["top"] if detect_v else 0.0
+                h_sample = measured["left"] if detect_h else 0.0
+                self._force_axis("vertical", float(np.clip(v_sample, 0.0, v_limit)))
+                self._force_axis("horizontal", float(np.clip(h_sample, 0.0, h_limit)))
+                vertical = float(np.clip(self._vertical.value, 0.0, v_limit))
+                horizontal = float(np.clip(self._horizontal.value, 0.0, h_limit))
             else:
-                v_sample = self._sticky_sample(
-                    measured["top"],
-                    self._vertical,
-                    locked=self._letterbox_locked,
-                    misses_attr="_vertical_misses",
-                    shrinks_attr="_vertical_shrinks",
-                )
-                h_sample = self._sticky_sample(
-                    measured["left"],
-                    self._horizontal,
-                    locked=self._pillarbox_locked,
-                    misses_attr="_horizontal_misses",
-                    shrinks_attr="_horizontal_shrinks",
-                )
-            vertical = float(np.clip(self._vertical.update(v_sample), 0.0, v_limit))
-            horizontal = float(np.clip(self._horizontal.update(h_sample), 0.0, h_limit))
+                if not detect_v:
+                    v_sample = 0.0
+                    self._force_axis("vertical", 0.0)
+                elif measured is None:
+                    v_sample = self._vertical.committed
+                else:
+                    v_sample = self._sticky_sample(
+                        measured["top"],
+                        self._vertical,
+                        locked=self._letterbox_locked,
+                        misses_attr="_vertical_misses",
+                        shrinks_attr="_vertical_shrinks",
+                    )
+                if not detect_h:
+                    h_sample = 0.0
+                    self._force_axis("horizontal", 0.0)
+                elif measured is None:
+                    h_sample = self._horizontal.committed
+                else:
+                    h_sample = self._sticky_sample(
+                        measured["left"],
+                        self._horizontal,
+                        locked=self._pillarbox_locked,
+                        misses_attr="_horizontal_misses",
+                        shrinks_attr="_horizontal_shrinks",
+                    )
+                vertical = float(np.clip(self._vertical.update(v_sample), 0.0, v_limit))
+                horizontal = float(np.clip(self._horizontal.update(h_sample), 0.0, h_limit))
             vertical, horizontal = self._exclusive_axis(vertical, horizontal)
             applied = {
                 "top": vertical,
@@ -353,8 +487,16 @@ class BlackBarStage(Stage):
                 sample = (
                     self._raw[edge] if measured is not None else self._filters[edge].committed
                 )
+                if edge in ("top", "bottom") and not detect_v:
+                    sample = 0.0
+                if edge in ("left", "right") and not detect_h:
+                    sample = 0.0
                 limit = v_limit if edge in ("top", "bottom") else h_limit
-                applied[edge] = float(np.clip(self._filters[edge].update(sample), 0.0, limit))
+                if forced is not None:
+                    self._filters[edge].force(float(np.clip(sample, 0.0, limit)))
+                    applied[edge] = float(np.clip(self._filters[edge].value, 0.0, limit))
+                else:
+                    applied[edge] = float(np.clip(self._filters[edge].update(sample), 0.0, limit))
             # Same either/or rule when per-edge filters are used.
             v = max(applied["top"], applied["bottom"])
             h = max(applied["left"], applied["right"])

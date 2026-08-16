@@ -75,8 +75,25 @@ const CONTROLS = [
   },
   {
     group: 'Black bars',
+    hint: 'Dolby Vision and subtitles on the bars often fool auto. Pin top/bottom for scope, or type 2.39 / 21:9 to force the crop.',
     items: [
       { path: 'blackbars.enabled', type: 'toggle', label: 'Remove black bars' },
+      {
+        path: 'blackbars.direction',
+        type: 'select',
+        label: 'Bar direction',
+        options: [
+          { value: 'auto', label: 'Auto detect' },
+          { value: 'top_bottom', label: 'Top / bottom' },
+          { value: 'left_right', label: 'Left / right' },
+        ],
+      },
+      {
+        path: 'blackbars.target_aspect',
+        type: 'text',
+        label: 'Content aspect (optional)',
+        placeholder: 'e.g. 2.39 or 21:9',
+      },
       {
         path: 'blackbars.luma_threshold',
         label: 'Darkness threshold',
@@ -1868,7 +1885,9 @@ function buildControls() {
   for (const group of CONTROLS) {
     const section = document.createElement('div');
     section.className = 'control-group';
-    section.innerHTML = `<h3>${group.group}</h3>`;
+    section.innerHTML = `<h3>${group.group}</h3>${
+      group.hint ? `<p class="hint">${group.hint}</p>` : ''
+    }`;
 
     for (const item of group.items) {
       const row = document.createElement('div');
@@ -1890,13 +1909,36 @@ function buildControls() {
         row.innerHTML = `<label>${label}</label><output></output>`;
         const select = document.createElement('select');
         select.innerHTML = item.options
-          .map((o) => `<option value="${o}">${o}</option>`)
+          .map((o) => {
+            if (o && typeof o === 'object') {
+              const value = String(o.value ?? '');
+              const text = o.label || value;
+              return `<option value="${value}">${text}</option>`;
+            }
+            return `<option value="${o}">${o}</option>`;
+          })
           .join('');
         select.addEventListener('change', () =>
           queueUpdate(item.path, select.value),
         );
         row.append(select);
         boundInputs.set(item.path, { input: select, kind: 'select' });
+      } else if (item.type === 'text') {
+        row.innerHTML = `<label>${label}</label>`;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.spellcheck = false;
+        input.placeholder = item.placeholder || '';
+        const commit = () => queueUpdate(item.path, input.value.trim());
+        input.addEventListener('change', commit);
+        input.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            input.blur();
+          }
+        });
+        row.append(input);
+        boundInputs.set(item.path, { input, kind: 'text' });
       } else {
         row.innerHTML = `<label>${label}</label><output></output>`;
         const input = document.createElement('input');
@@ -1935,8 +1977,8 @@ function applyConfig(config, { skipFocused = false } = {}) {
     if (skipFocused && document.activeElement === bound.input) continue;
     if (bound.kind === 'toggle') {
       bound.input.checked = Boolean(value);
-    } else if (bound.kind === 'select') {
-      bound.input.value = String(value);
+    } else if (bound.kind === 'select' || bound.kind === 'text') {
+      bound.input.value = value == null ? '' : String(value);
     } else {
       bound.input.value = value;
       bound.out.textContent = format(value, bound.item);

@@ -85,6 +85,10 @@ blackbars:
   enabled: true
   # Blue-black letterbox on Vimicro: #051138 low light, #201C58 room light
   luma_threshold: 55
+  # auto | top_bottom | left_right — pin an axis when DV / subs fool auto
+  direction: auto
+  # Optional content aspect. Empty = measure. Quote so YAML keeps a string.
+  target_aspect: ""                 # e.g. "2.39" or "21:9"
   max_crop_top_bottom_percent: 16   # letterbox; covers up to ~2.76:1 on 16:9
   max_crop_left_right_percent: 12.5 # pillarbox; 4:3 on 16:9
   window: 21

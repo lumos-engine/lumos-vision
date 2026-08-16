@@ -82,9 +82,11 @@ installed; that path still needs a v4l2loopback node (see
 `config.example.yaml`) and the protocol in
 [docs/lumos-cam-api.md](docs/lumos-cam-api.md).
 
-For **cinema / letterboxed** content: enable **Black bars**, raise **Darkness
-threshold** to ~50–70 until **Result → output** has no bars, then point
-HyperHDR at that clean frame.
+For **cinema / letterboxed** content: enable **Black bars**. If Dolby Vision
+or subtitles on the bars confuse auto, set **Bar direction** to Top / bottom
+(or Left / right) and optionally type the content aspect (`2.39`, `21:9`).
+Otherwise raise **Darkness threshold** to ~50–70 until **Result → output**
+has no bars, then point HyperHDR at that clean frame.
 
 **Colour calibrate** (occasional, HDMI TV): in the wizard pick the
 **Environment profile** (day/night × room lights) first, freeze phone AE/AWB
@@ -261,7 +263,7 @@ constructed but passive, so the debug UI can switch it back on at runtime.
 | `boundary`    | Locates the TV and publishes its four corners.                          |
 | `perspective` | Warps that quadrilateral into a true rectangle.                         |
 | `crop`        | Trims a fixed inset — bezel, and the glowing rim of the panel.          |
-| `blackbars`   | Finds and removes letterbox/pillarbox bars, with heavy anti-flicker.    |
+| `blackbars`   | Finds and removes letterbox/pillarbox bars, with heavy anti-flicker. Optional direction pin and content-aspect override. |
 | `reflection`  | Ignores a margin at each edge; optionally blanks static logos.          |
 | `color`       | White balance, exposure, gamma, contrast, brightness, saturation.       |
 | `resize`      | Scales to the output resolution.                                        |

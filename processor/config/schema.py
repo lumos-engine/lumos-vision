@@ -160,6 +160,13 @@ class BlackBarsConfig:
     percentile: float = 96.0
     detect_top_bottom: bool = True
     detect_left_right: bool = True
+    #: Which axis to look at. ``auto`` measures both and keeps letterbox *or*
+    #: pillarbox (never a windowbox). Pin ``top_bottom`` / ``left_right`` when
+    #: Dolby Vision pumping or subtitles sitting on the bars fool auto.
+    direction: str = "auto"
+    #: Optional content aspect, e.g. ``"2.39"`` or ``"21:9"``. Empty = measure
+    #: from the picture. Quote in YAML so ``21:9`` stays a string.
+    target_aspect: str | float = ""
     #: Never crop away more than this fraction of height per side (letterbox).
     #: 16% covers 2.76:1 on a 16:9 panel; common 2.39:1 needs ~13%.
     max_crop_top_bottom_percent: float = 16.0
