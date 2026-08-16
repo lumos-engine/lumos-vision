@@ -11,7 +11,9 @@ const $ = (id) => document.getElementById(id);
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 
 function get(obj, path) {
-  return path.split('.').reduce((node, key) => (node == null ? undefined : node[key]), obj);
+  return path
+    .split('.')
+    .reduce((node, key) => (node == null ? undefined : node[key]), obj);
 }
 
 let toastTimer = null;
@@ -20,18 +22,30 @@ function toast(message, kind = '') {
   el.textContent = message;
   el.className = `toast show ${kind}`;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2600);
+  toastTimer = setTimeout(() => {
+    el.className = 'toast';
+  }, 2600);
 }
 
 async function api(path, body) {
-  const options = body === undefined
-    ? {}
-    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const options =
+    body === undefined
+      ? {}
+      : {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        };
   const response = await fetch(path, options);
   const text = await response.text();
   let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON error page */ }
-  if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    /* non-JSON error page */
+  }
+  if (!response.ok)
+    throw new Error(data.error || `${response.status} ${response.statusText}`);
   return data;
 }
 
@@ -41,56 +55,232 @@ const CONTROLS = [
   {
     group: 'Crop & reflections',
     items: [
-      { path: 'crop.inset_percent', label: 'Panel inset', min: 0, max: 15, step: 0.1, unit: '%' },
-      { path: 'reflection.margin_percent', label: 'Reflection margin', min: 0, max: 15, step: 0.1, unit: '%' },
+      {
+        path: 'crop.inset_percent',
+        label: 'Panel inset',
+        min: 0,
+        max: 15,
+        step: 0.1,
+        unit: '%',
+      },
+      {
+        path: 'reflection.margin_percent',
+        label: 'Reflection margin',
+        min: 0,
+        max: 15,
+        step: 0.1,
+        unit: '%',
+      },
     ],
   },
   {
     group: 'Black bars',
     items: [
       { path: 'blackbars.enabled', type: 'toggle', label: 'Remove black bars' },
-      { path: 'blackbars.luma_threshold', label: 'Darkness threshold', min: 2, max: 80, step: 1 },
-      { path: 'blackbars.percentile', label: 'Tolerance percentile', min: 60, max: 100, step: 0.5 },
-      { path: 'blackbars.max_crop_top_bottom_percent', label: 'Max letterbox (top/bottom)', min: 0, max: 25, step: 0.5, unit: '%' },
-      { path: 'blackbars.max_crop_left_right_percent', label: 'Max pillarbox (left/right)', min: 0, max: 25, step: 0.5, unit: '%' },
-      { path: 'blackbars.window', label: 'Median window', min: 1, max: 60, step: 1, unit: ' fr' },
-      { path: 'blackbars.hold_frames', label: 'Hysteresis hold', min: 1, max: 60, step: 1, unit: ' fr' },
-      { path: 'blackbars.max_step_percent', label: 'Animation speed', min: 0.05, max: 5, step: 0.05, unit: '%/fr' },
-      { path: 'blackbars.symmetric', type: 'toggle', label: 'Assume symmetric bars' },
+      {
+        path: 'blackbars.luma_threshold',
+        label: 'Darkness threshold',
+        min: 2,
+        max: 80,
+        step: 1,
+      },
+      {
+        path: 'blackbars.percentile',
+        label: 'Tolerance percentile',
+        min: 60,
+        max: 100,
+        step: 0.5,
+      },
+      {
+        path: 'blackbars.max_crop_top_bottom_percent',
+        label: 'Max letterbox (top/bottom)',
+        min: 0,
+        max: 25,
+        step: 0.5,
+        unit: '%',
+      },
+      {
+        path: 'blackbars.max_crop_left_right_percent',
+        label: 'Max pillarbox (left/right)',
+        min: 0,
+        max: 25,
+        step: 0.5,
+        unit: '%',
+      },
+      {
+        path: 'blackbars.window',
+        label: 'Median window',
+        min: 1,
+        max: 60,
+        step: 1,
+        unit: ' fr',
+      },
+      {
+        path: 'blackbars.hold_frames',
+        label: 'Hysteresis hold',
+        min: 1,
+        max: 60,
+        step: 1,
+        unit: ' fr',
+      },
+      {
+        path: 'blackbars.max_step_percent',
+        label: 'Animation speed',
+        min: 0.05,
+        max: 5,
+        step: 0.05,
+        unit: '%/fr',
+      },
+      {
+        path: 'blackbars.symmetric',
+        type: 'toggle',
+        label: 'Assume symmetric bars',
+      },
     ],
   },
   {
     group: 'Colour (software — after the camera)',
     items: [
-      { path: 'color.white_balance', type: 'select', label: 'White balance', options: ['off', 'auto', 'manual'] },
-      { path: 'color.wb_strength', label: 'White balance strength', min: 0, max: 1, step: 0.01 },
-      { path: 'color.gamma', label: 'Gamma (higher = brighter)', min: 0.4, max: 2.5, step: 0.01 },
-      { path: 'color.saturation', label: 'Saturation', min: 0, max: 2.5, step: 0.01 },
-      { path: 'color.brightness', label: 'Brightness', min: 0.3, max: 2, step: 0.01 },
-      { path: 'color.contrast', label: 'Contrast', min: 0.3, max: 2, step: 0.01 },
-      { path: 'color.exposure.enabled', type: 'toggle', label: 'Software auto exposure' },
-      { path: 'color.exposure.target_luma', label: 'Exposure target', min: 20, max: 220, step: 1 },
+      {
+        path: 'color.white_balance',
+        type: 'select',
+        label: 'White balance',
+        options: ['off', 'auto', 'manual'],
+      },
+      {
+        path: 'color.wb_strength',
+        label: 'White balance strength',
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
+      {
+        path: 'color.gamma',
+        label: 'Gamma (higher = brighter)',
+        min: 0.4,
+        max: 2.5,
+        step: 0.01,
+      },
+      {
+        path: 'color.saturation',
+        label: 'Saturation',
+        min: 0,
+        max: 2.5,
+        step: 0.01,
+      },
+      {
+        path: 'color.brightness',
+        label: 'Brightness',
+        min: 0.3,
+        max: 2,
+        step: 0.01,
+      },
+      {
+        path: 'color.contrast',
+        label: 'Contrast',
+        min: 0.3,
+        max: 2,
+        step: 0.01,
+      },
+      {
+        path: 'color.exposure.enabled',
+        type: 'toggle',
+        label: 'Software auto exposure',
+      },
+      {
+        path: 'color.exposure.target_luma',
+        label: 'Exposure target',
+        min: 20,
+        max: 220,
+        step: 1,
+      },
     ],
   },
   {
     group: 'Detection',
     items: [
-      { path: 'boundary.min_confidence', label: 'Min confidence', min: 0, max: 1, step: 0.01 },
-      { path: 'boundary.smoothing_alpha', label: 'Corner smoothing', min: 0.01, max: 1, step: 0.01 },
-      { path: 'boundary.corner_deadband_px', label: 'Corner deadband', min: 0, max: 10, step: 0.1, unit: ' px' },
-      { path: 'boundary.auto_recalibrate', type: 'toggle', label: 'Recalibrate when bumped' },
-      { path: 'movement.enabled', type: 'toggle', label: 'Watch for camera movement' },
-      { path: 'movement.ncc_threshold', label: 'Movement sensitivity', min: 0.1, max: 10, step: 0.1 },
-      { path: 'movement.check_interval', label: 'Movement check every', min: 0.1, max: 5, step: 0.1, unit: ' s' },
+      {
+        path: 'boundary.min_confidence',
+        label: 'Min confidence',
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
+      {
+        path: 'boundary.smoothing_alpha',
+        label: 'Corner smoothing',
+        min: 0.01,
+        max: 1,
+        step: 0.01,
+      },
+      {
+        path: 'boundary.corner_deadband_px',
+        label: 'Corner deadband',
+        min: 0,
+        max: 10,
+        step: 0.1,
+        unit: ' px',
+      },
+      {
+        path: 'boundary.auto_recalibrate',
+        type: 'toggle',
+        label: 'Recalibrate when bumped',
+      },
+      {
+        path: 'movement.enabled',
+        type: 'toggle',
+        label: 'Watch for camera movement',
+      },
+      {
+        path: 'movement.ncc_threshold',
+        label: 'Movement sensitivity',
+        min: 0.1,
+        max: 10,
+        step: 0.1,
+      },
+      {
+        path: 'movement.check_interval',
+        label: 'Movement check every',
+        min: 0.1,
+        max: 5,
+        step: 0.1,
+        unit: ' s',
+      },
     ],
   },
   {
     group: 'Output',
     items: [
-      { path: 'output.fps', label: 'Target frame rate', min: 1, max: 60, step: 1, unit: ' fps' },
-      { path: 'perspective.width', label: 'Working width', min: 320, max: 1920, step: 16, unit: ' px' },
-      { path: 'perspective.height', label: 'Working height', min: 180, max: 1080, step: 9, unit: ' px' },
-      { path: 'resize.mode', type: 'select', label: 'Fit mode', options: ['stretch', 'letterbox', 'crop'] },
+      {
+        path: 'output.fps',
+        label: 'Target frame rate',
+        min: 1,
+        max: 60,
+        step: 1,
+        unit: ' fps',
+      },
+      {
+        path: 'perspective.width',
+        label: 'Working width',
+        min: 320,
+        max: 1920,
+        step: 16,
+        unit: ' px',
+      },
+      {
+        path: 'perspective.height',
+        label: 'Working height',
+        min: 180,
+        max: 1080,
+        step: 9,
+        unit: ' px',
+      },
+      {
+        path: 'resize.mode',
+        type: 'select',
+        label: 'Fit mode',
+        options: ['stretch', 'letterbox', 'crop'],
+      },
     ],
   },
 ];
@@ -206,15 +396,18 @@ function fillDeviceSelect(selected) {
     const bus = device.bus_info ? ` · ${device.bus_info}` : '';
     opt.textContent = `${device.name}${bus}`;
     if (
-      device.selected
-      || device.id_path === selected
-      || device.video_path === selected
+      device.selected ||
+      device.id_path === selected ||
+      device.video_path === selected
     ) {
       opt.selected = true;
     }
     select.append(opt);
   }
-  if (selected && !devices.some((d) => d.id_path === selected || d.video_path === selected)) {
+  if (
+    selected &&
+    !devices.some((d) => d.id_path === selected || d.video_path === selected)
+  ) {
     const opt = document.createElement('option');
     opt.value = selected;
     opt.textContent = `${selected} (configured)`;
@@ -241,13 +434,15 @@ function applySourcePanelFromConfig(config) {
   const type = $('source-type');
   if (type) type.value = sourcePanelState.source;
   const device = $('source-device');
-  if (device && sourcePanelState.device) fillDeviceSelect(sourcePanelState.device);
+  if (device && sourcePanelState.device)
+    fillDeviceSelect(sourcePanelState.device);
   const path = $('source-path');
   if (path) path.value = sourcePanelState.path;
   const transport = $('source-transport');
   if (transport) transport.value = sourcePanelState.transport;
   const processWidth = $('source-process-width');
-  if (processWidth) processWidth.value = String(sourcePanelState.process_width || 0);
+  if (processWidth)
+    processWidth.value = String(sourcePanelState.process_width || 0);
   const replayFps = $('source-replay-fps');
   if (replayFps) replayFps.value = String(sourcePanelState.replay_fps || 0);
   const loop = $('source-loop');
@@ -313,22 +508,6 @@ function markLumosDirty() {
   lumosFormDirty = true;
 }
 
-function applyLumosLocks(phone, config) {
-  const cal = Boolean(phone?.cal_mode);
-  lumosPanelState.cal_mode = cal;
-  const persisted = config?.lumos_cam || {};
-  if (cal) {
-    // Colour-cal freeze locks the sensor; the boxes are profile intent.
-    lumosPanelState.af = persisted.af || 'auto';
-    lumosPanelState.ae = persisted.ae || 'auto';
-    lumosPanelState.awb = persisted.awb || 'auto';
-    return;
-  }
-  if (phone?.af) lumosPanelState.af = phone.af;
-  if (phone?.ae) lumosPanelState.ae = phone.ae;
-  if (phone?.awb) lumosPanelState.awb = phone.awb;
-}
-
 function applyLumosPanelFromConfig(config) {
   const lc = config?.lumos_cam || {};
   lumosPanelState = {
@@ -358,14 +537,17 @@ function syncLumosMeta() {
     `${Number(lumosPanelState.camera_zoom).toFixed(2)}×`,
     `pan ${Number(lumosPanelState.pan_x).toFixed(2)},${Number(lumosPanelState.pan_y).toFixed(2)}`,
     `AF ${lumosPanelState.af}`,
-    lumosPanelState.iso ? `AE ${lumosPanelState.ae} ISO ${lumosPanelState.iso}` : `AE ${lumosPanelState.ae}`,
+    lumosPanelState.iso
+      ? `AE ${lumosPanelState.ae} ISO ${lumosPanelState.iso}`
+      : `AE ${lumosPanelState.ae}`,
     `AWB ${lumosPanelState.awb}`,
   ];
   if (lumosPanelState.cal_mode) bits.push('cal mode');
   bits.push(`frame ${Number(lumosPanelState.frame_rotation || 0)}°`);
   if (lumosPanelState.flip_h) bits.push('flip H');
   if (lumosPanelState.flip_v) bits.push('flip V');
-  if (lumosPanelState.app_version) bits.push(`app ${lumosPanelState.app_version}`);
+  if (lumosPanelState.app_version)
+    bits.push(`app ${lumosPanelState.app_version}`);
   if (lumosPanelState.last_error) bits.push(lumosPanelState.last_error);
   if (lumosFormDirty) bits.push('unsaved edits');
   meta.textContent = bits.join(' · ');
@@ -376,7 +558,8 @@ function syncLumosForm({ force = false } = {}) {
   const set = (id, value) => {
     const el = $(id);
     if (!el) return;
-    if (el.type === 'checkbox' || el.type === 'radio') el.checked = Boolean(value);
+    if (el.type === 'checkbox' || el.type === 'radio')
+      el.checked = Boolean(value);
     else el.value = value;
   };
   if (force || !lumosFormDirty) {
@@ -392,14 +575,12 @@ function syncLumosForm({ force = false } = {}) {
     zoomLabel.textContent = Number(
       force || !lumosFormDirty
         ? lumosPanelState.camera_zoom
-        : ($('lumos-zoom')?.value || lumosPanelState.camera_zoom)
+        : $('lumos-zoom')?.value || lumosPanelState.camera_zoom,
     ).toFixed(2);
   }
   const setLock = (id, value) => {
     const el = $(id);
-    if (!el) return;
-    el.checked = value === 'locked';
-    el.disabled = Boolean(lumosPanelState.cal_mode);
+    if (el) el.checked = value === 'locked';
   };
   if (force || !lumosFormDirty) {
     setLock('lumos-af', lumosPanelState.af);
@@ -439,31 +620,51 @@ async function postLumos(action, fields, { save = false } = {}) {
     const result = await response.json();
     if (result.lumos_cam) {
       lumosPanelState.running = Boolean(result.lumos_cam.running);
-      lumosPanelState.last_error = result.lumos_cam.last_error || result.error || '';
-      lumosPanelState.camera_zoom = Number(result.lumos_cam.zoom || lumosPanelState.camera_zoom);
-      lumosPanelState.pan_x = Number(result.lumos_cam.pan_x ?? lumosPanelState.pan_x);
-      lumosPanelState.pan_y = Number(result.lumos_cam.pan_y ?? lumosPanelState.pan_y);
+      lumosPanelState.last_error =
+        result.lumos_cam.last_error || result.error || '';
+      lumosPanelState.camera_zoom = Number(
+        result.lumos_cam.zoom || lumosPanelState.camera_zoom,
+      );
+      lumosPanelState.pan_x = Number(
+        result.lumos_cam.pan_x ?? lumosPanelState.pan_x,
+      );
+      lumosPanelState.pan_y = Number(
+        result.lumos_cam.pan_y ?? lumosPanelState.pan_y,
+      );
       lumosPanelState.app_version = result.lumos_cam.app_version || '';
-      if (result.lumos_cam.ui_rotation != null) lumosPanelState.ui_rotation = Number(result.lumos_cam.ui_rotation);
-      if (result.lumos_cam.frame_rotation != null) lumosPanelState.frame_rotation = Number(result.lumos_cam.frame_rotation);
+      if (result.lumos_cam.ui_rotation != null)
+        lumosPanelState.ui_rotation = Number(result.lumos_cam.ui_rotation);
+      if (result.lumos_cam.frame_rotation != null)
+        lumosPanelState.frame_rotation = Number(
+          result.lumos_cam.frame_rotation,
+        );
       lumosPanelState.flip_h = Boolean(result.lumos_cam.flip_h);
       lumosPanelState.flip_v = Boolean(result.lumos_cam.flip_v);
     }
     if (result.config) {
       applyLumosPanelFromConfig(result.config);
     }
-    // Phone 3A wins over YAML, except during colour-cal freeze — that
-    // overlay locks the sensor without changing the profile checkboxes.
+    // Phone 3A wins over YAML. Cal mode locks the sensor without writing
+    // lumos_cam.af/ae/awb, so echoing config would uncheck the lock boxes.
     if (result.lumos_cam) {
-      applyLumosLocks(result.lumos_cam, result.config);
+      if (result.lumos_cam.af) lumosPanelState.af = result.lumos_cam.af;
+      if (result.lumos_cam.ae) lumosPanelState.ae = result.lumos_cam.ae;
+      if (result.lumos_cam.awb) lumosPanelState.awb = result.lumos_cam.awb;
+      lumosPanelState.cal_mode = Boolean(result.lumos_cam.cal_mode);
       lumosPanelState.iso = result.lumos_cam.iso ?? lumosPanelState.iso;
-      lumosPanelState.exposure_ns = result.lumos_cam.exposure_ns ?? lumosPanelState.exposure_ns;
-      lumosPanelState.focus_distance = result.lumos_cam.focus_distance ?? lumosPanelState.focus_distance;
+      lumosPanelState.exposure_ns =
+        result.lumos_cam.exposure_ns ?? lumosPanelState.exposure_ns;
+      lumosPanelState.focus_distance =
+        result.lumos_cam.focus_distance ?? lumosPanelState.focus_distance;
     }
     lumosFormDirty = false;
     syncLumosForm({ force: true });
     if (!response.ok || result.ok === false) {
-      throw new Error(result.error || result.lumos_cam?.last_error || 'Lumos Cam action failed');
+      throw new Error(
+        result.error ||
+          result.lumos_cam?.last_error ||
+          'Lumos Cam action failed',
+      );
     }
     return result;
   } finally {
@@ -526,9 +727,9 @@ async function buildLumosCamPanel() {
     <p class="hint">Locks freeze the current exposure / focus / white balance into the
     active environment profile. Switching profiles restores those numbers.
     Uncheck to let the phone hunt; it will not auto-lock again until you tick
-    it or switch profiles. Colour calibrate → Start freezes the sensor for that
-    run only; the boxes stay as this profile's saved locks and re-enable after
-    Abort / Apply.</p>
+    it or switch profiles. Colour calibrate → Start also freezes 3A for that
+    run only (so black/white patches do not pump AE) — that is not a substitute
+    for these checkboxes.</p>
     <p class="source-meta" id="lumos-meta"></p>
     <div class="source-actions">
       <button type="button" class="btn" id="btn-lumos-zoom-out">Zoom −</button>
@@ -588,7 +789,9 @@ async function buildLumosCamPanel() {
   const pan = (action) => async () => {
     try {
       await postLumos(action, {});
-      toast(`Pan ${Number(lumosPanelState.pan_x).toFixed(2)}, ${Number(lumosPanelState.pan_y).toFixed(2)}`);
+      toast(
+        `Pan ${Number(lumosPanelState.pan_x).toFixed(2)}, ${Number(lumosPanelState.pan_y).toFixed(2)}`,
+      );
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -714,7 +917,7 @@ function syncScrcpyForm({ force = false } = {}) {
     zoomLabel.textContent = Number(
       force || !scrcpyFormDirty
         ? scrcpyPanelState.camera_zoom
-        : ($('scrcpy-zoom')?.value || scrcpyPanelState.camera_zoom)
+        : $('scrcpy-zoom')?.value || scrcpyPanelState.camera_zoom,
     ).toFixed(2);
   }
   const viewLabel = $('scrcpy-view-zoom-label');
@@ -722,7 +925,7 @@ function syncScrcpyForm({ force = false } = {}) {
     viewLabel.textContent = Number(
       force || !scrcpyFormDirty
         ? scrcpyPanelState.view_zoom
-        : ($('scrcpy-view-zoom')?.value || scrcpyPanelState.view_zoom)
+        : $('scrcpy-view-zoom')?.value || scrcpyPanelState.view_zoom,
     ).toFixed(2);
   }
   syncScrcpyMeta();
@@ -761,15 +964,28 @@ async function postScrcpy(action, fields, { save = false } = {}) {
     });
     const text = await response.text();
     let result = {};
-    try { result = text ? JSON.parse(text) : {}; } catch { /* ignore */ }
+    try {
+      result = text ? JSON.parse(text) : {};
+    } catch {
+      /* ignore */
+    }
 
     if (result.scrcpy) {
       scrcpyPanelState.running = Boolean(result.scrcpy.running);
-      scrcpyPanelState.last_error = result.scrcpy.last_error || result.error || '';
-      scrcpyPanelState.camera_zoom = Number(result.scrcpy.zoom || scrcpyPanelState.camera_zoom);
-      scrcpyPanelState.view_zoom = Number(result.scrcpy.view_zoom ?? scrcpyPanelState.view_zoom);
-      scrcpyPanelState.pan_x = Number(result.scrcpy.pan_x ?? scrcpyPanelState.pan_x);
-      scrcpyPanelState.pan_y = Number(result.scrcpy.pan_y ?? scrcpyPanelState.pan_y);
+      scrcpyPanelState.last_error =
+        result.scrcpy.last_error || result.error || '';
+      scrcpyPanelState.camera_zoom = Number(
+        result.scrcpy.zoom || scrcpyPanelState.camera_zoom,
+      );
+      scrcpyPanelState.view_zoom = Number(
+        result.scrcpy.view_zoom ?? scrcpyPanelState.view_zoom,
+      );
+      scrcpyPanelState.pan_x = Number(
+        result.scrcpy.pan_x ?? scrcpyPanelState.pan_x,
+      );
+      scrcpyPanelState.pan_y = Number(
+        result.scrcpy.pan_y ?? scrcpyPanelState.pan_y,
+      );
       scrcpyPanelState.crop = result.scrcpy.crop || '';
     }
     if (result.config) {
@@ -783,7 +999,9 @@ async function postScrcpy(action, fields, { save = false } = {}) {
     }
     if (status) status.textContent = 'changes apply live';
     if (!response.ok || result.ok === false) {
-      throw new Error(result.error || result.scrcpy?.last_error || 'scrcpy action failed');
+      throw new Error(
+        result.error || result.scrcpy?.last_error || 'scrcpy action failed',
+      );
     }
     return result;
   } finally {
@@ -866,9 +1084,9 @@ async function buildScrcpyPanel() {
 
   const panToast = () => {
     toast(
-      `Pan ${Number(scrcpyPanelState.pan_x).toFixed(2)}, `
-      + `${Number(scrcpyPanelState.pan_y).toFixed(2)} · frame `
-      + `${Number(scrcpyPanelState.view_zoom).toFixed(2)}×`
+      `Pan ${Number(scrcpyPanelState.pan_x).toFixed(2)}, ` +
+        `${Number(scrcpyPanelState.pan_y).toFixed(2)} · frame ` +
+        `${Number(scrcpyPanelState.view_zoom).toFixed(2)}×`,
     );
   };
 
@@ -933,7 +1151,9 @@ const PATCH_TARGET_RGB = {
 
 function bgrToCss(bgr) {
   if (!bgr || bgr.length < 3) return 'rgb(0,0,0)';
-  const [b, g, r] = bgr.map((v) => Math.max(0, Math.min(255, Math.round(Number(v)))));
+  const [b, g, r] = bgr.map((v) =>
+    Math.max(0, Math.min(255, Math.round(Number(v)))),
+  );
   return `rgb(${r},${g},${b})`;
 }
 
@@ -963,16 +1183,24 @@ function renderColorCal(status) {
   $('color-cal-meta').textContent = bits.join(' · ');
 
   const settleInput = $('color-cal-settle');
-  if (settleInput && !active && cal.settle_sec != null
-      && document.activeElement !== settleInput) {
+  if (
+    settleInput &&
+    !active &&
+    cal.settle_sec != null &&
+    document.activeElement !== settleInput
+  ) {
     settleInput.value = String(Number(cal.settle_sec));
   }
   if (settleInput) settleInput.disabled = active;
 
   const modeManual = $('color-cal-mode-manual');
   const modeAuto = $('color-cal-mode-auto');
-  if (modeManual && modeAuto && document.activeElement !== modeManual
-      && document.activeElement !== modeAuto) {
+  if (
+    modeManual &&
+    modeAuto &&
+    document.activeElement !== modeManual &&
+    document.activeElement !== modeAuto
+  ) {
     modeManual.checked = mode !== 'auto';
     modeAuto.checked = mode === 'auto';
   }
@@ -1000,12 +1228,16 @@ function renderColorCal(status) {
     captureBtn.hidden = mode !== 'manual';
   }
   if (prevBtn) {
-    prevBtn.disabled = !active || mode !== 'manual' || sampling || Number(cal.index) <= 0;
+    prevBtn.disabled =
+      !active || mode !== 'manual' || sampling || Number(cal.index) <= 0;
     prevBtn.hidden = mode !== 'manual';
   }
   if (nextBtn) {
-    nextBtn.disabled = !active || mode !== 'manual' || sampling
-      || Number(cal.index) >= Number(cal.total) - 1;
+    nextBtn.disabled =
+      !active ||
+      mode !== 'manual' ||
+      sampling ||
+      Number(cal.index) >= Number(cal.total) - 1;
     nextBtn.hidden = mode !== 'manual';
   }
   if (solveBtn) {
@@ -1020,16 +1252,18 @@ function renderColorCal(status) {
     const measurements = cal.measurements || {};
     const names = Object.keys(PATCH_TARGET_RGB);
     const current = cal.patch;
-    swatches.innerHTML = names.map((name) => {
-      const target = PATCH_TARGET_RGB[name];
-      const measured = measurements[name];
-      const targetCss = `rgb(${target[0]},${target[1]},${target[2]})`;
-      const measuredCss = measured ? bgrToCss(measured) : 'transparent';
-      const cls = ['cal-swatch'];
-      if (name === current) cls.push('current');
-      if (measured) cls.push('measured');
-      return `<button type="button" class="${cls.join(' ')}" data-patch="${name}"><div class="pair"><i style="background:${targetCss}"></i><i style="background:${measuredCss};outline:1px solid var(--line)"></i></div>${name}</button>`;
-    }).join('');
+    swatches.innerHTML = names
+      .map((name) => {
+        const target = PATCH_TARGET_RGB[name];
+        const measured = measurements[name];
+        const targetCss = `rgb(${target[0]},${target[1]},${target[2]})`;
+        const measuredCss = measured ? bgrToCss(measured) : 'transparent';
+        const cls = ['cal-swatch'];
+        if (name === current) cls.push('current');
+        if (measured) cls.push('measured');
+        return `<button type="button" class="${cls.join(' ')}" data-patch="${name}"><div class="pair"><i style="background:${targetCss}"></i><i style="background:${measuredCss};outline:1px solid var(--line)"></i></div>${name}</button>`;
+      })
+      .join('');
   }
 
   const sol = $('color-cal-solution');
@@ -1041,11 +1275,12 @@ function renderColorCal(status) {
       const matrixBits = cal.solution.matrix
         ? `3×3 matrix + gamma ${cal.solution.gamma}`
         : `gains R${g.r} G${g.g} B${g.b} · gamma ${cal.solution.gamma}`;
-      const blackBits = (bl.r != null && (Number(bl.r) + Number(bl.g) + Number(bl.b)) > 0.5)
-        ? ` · black floor R${Number(bl.r).toFixed(1)} G${Number(bl.g).toFixed(1)} B${Number(bl.b).toFixed(1)}`
-        : '';
-      sol.textContent = `Proposed ${matrixBits}${blackBits}`
-        + (notes ? ` · ${notes}` : '');
+      const blackBits =
+        bl.r != null && Number(bl.r) + Number(bl.g) + Number(bl.b) > 0.5
+          ? ` · black floor R${Number(bl.r).toFixed(1)} G${Number(bl.g).toFixed(1)} B${Number(bl.b).toFixed(1)}`
+          : '';
+      sol.textContent =
+        `Proposed ${matrixBits}${blackBits}` + (notes ? ` · ${notes}` : '');
     } else {
       sol.textContent = '';
     }
@@ -1057,9 +1292,10 @@ function renderColorCal(status) {
     const [wb, wg, wr] = measured.white.map(Number);
     const whiteLuma = 0.114 * wb + 0.587 * wg + 0.299 * wr;
     if (whiteLuma < 40 && sol && !cal.solution) {
-      sol.textContent = `White looks almost black (luma ${whiteLuma.toFixed(0)}) — `
-        + 're-capture white; check TV is showing the patch, perspective ROI is on-panel, '
-        + 'and phone AE has settled.';
+      sol.textContent =
+        `White looks almost black (luma ${whiteLuma.toFixed(0)}) — ` +
+        're-capture white; check TV is showing the patch, perspective ROI is on-panel, ' +
+        'and phone AE has settled.';
     }
   }
 }
@@ -1089,8 +1325,13 @@ async function postColorProfile(selection) {
     const result = await api('/api/color/profile', { selection });
     renderColorProfiles(result);
     if (result.config) applyConfig(result.config, { skipFocused: true });
-    const mode = result.calibrated ? 'calibrated' : 'no calibration (passthrough)';
-    toast(`${result.label || 'Profile'} — ${mode}`, result.calibrated ? 'ok' : '');
+    const mode = result.calibrated
+      ? 'calibrated'
+      : 'no calibration (passthrough)';
+    toast(
+      `${result.label || 'Profile'} — ${mode}`,
+      result.calibrated ? 'ok' : '',
+    );
     return result;
   } finally {
     colorProfileBusy = false;
@@ -1120,15 +1361,21 @@ function renderColorProfiles(p) {
   }
   const chips = $('color-profile-combos');
   if (chips) {
-    chips.innerHTML = (p.combos || []).map((combo) => {
-      const cls = [
-        'profile-chip',
-        combo.calibrated ? 'calibrated' : '',
-        combo.active ? 'active' : '',
-      ].filter(Boolean).join(' ');
-      const title = combo.calibrated ? 'Calibrated' : 'Not calibrated — passthrough';
-      return `<button type="button" class="${cls}" data-profile-key="${combo.key}" title="${title}"><span class="dot"></span>${combo.label}</button>`;
-    }).join('');
+    chips.innerHTML = (p.combos || [])
+      .map((combo) => {
+        const cls = [
+          'profile-chip',
+          combo.calibrated ? 'calibrated' : '',
+          combo.active ? 'active' : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
+        const title = combo.calibrated
+          ? 'Calibrated'
+          : 'Not calibrated — passthrough';
+        return `<button type="button" class="${cls}" data-profile-key="${combo.key}" title="${title}"><span class="dot"></span>${combo.label}</button>`;
+      })
+      .join('');
   }
 }
 
@@ -1137,16 +1384,20 @@ function fillColorProfileStructure(p) {
   if (!root) return;
   const dims = p.dimensions || [];
   const sel = p.selection || {};
-  const selects = dims.map((d) => {
-    const options = (d.options || []).map((o) => {
-      const chosen = sel[d.id] === o.id ? ' selected' : '';
-      return `<option value="${o.id}"${chosen}>${o.label || o.id}</option>`;
-    }).join('');
-    return `<div class="control">
+  const selects = dims
+    .map((d) => {
+      const options = (d.options || [])
+        .map((o) => {
+          const chosen = sel[d.id] === o.id ? ' selected' : '';
+          return `<option value="${o.id}"${chosen}>${o.label || o.id}</option>`;
+        })
+        .join('');
+      return `<div class="control">
       <label for="color-profile-${d.id}">${d.label || d.id}</label>
       <select id="color-profile-${d.id}" data-profile-dim="${d.id}">${options}</select>
     </div>`;
-  }).join('');
+    })
+    .join('');
   const html = `${selects}
     <p class="source-meta" id="color-profile-meta"></p>
     <div class="profile-combos" id="color-profile-combos"></div>`;
@@ -1154,7 +1405,9 @@ function fillColorProfileStructure(p) {
   const head = section.querySelector('h3');
   const hint = section.querySelector('.hint');
   if (!head || !hint) return;
-  section.querySelectorAll('.control, .source-meta, .profile-combos').forEach((el) => el.remove());
+  section
+    .querySelectorAll('.control, .source-meta, .profile-combos')
+    .forEach((el) => el.remove());
   hint.insertAdjacentHTML('afterend', html);
 }
 
@@ -1187,10 +1440,12 @@ async function buildColorProfilePanel() {
     if (!btn) return;
     const key = btn.getAttribute('data-profile-key');
     const parts = {};
-    String(key || '').split('|').forEach((chunk) => {
-      const idx = chunk.indexOf('=');
-      if (idx > 0) parts[chunk.slice(0, idx)] = chunk.slice(idx + 1);
-    });
+    String(key || '')
+      .split('|')
+      .forEach((chunk) => {
+        const idx = chunk.indexOf('=');
+        if (idx > 0) parts[chunk.slice(0, idx)] = chunk.slice(idx + 1);
+      });
     try {
       await postColorProfile(parts);
     } catch (err) {
@@ -1210,8 +1465,8 @@ async function buildColorCalPanel() {
     <h3>Colour calibrate</h3>
     <p class="hint">Saves into the <strong>active environment profile</strong> above.
     Open the patch page fullscreen on the HDMI TV. Lock AE/AWB on mid-grey first
-    if you want that freeze in this profile. <strong>Start</strong> freezes the
-    sensor for the patch run (boxes above stay as saved profile locks).
+    if you want that freeze in this profile. <strong>Start</strong> also freezes
+    3A for the patch run so black/white patches do not pump exposure.
     Uncalibrated combos stay passthrough (no matrix).</p>
     <div class="control">
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-manual" value="manual" checked> Manual capture</label>
@@ -1241,9 +1496,8 @@ async function buildColorCalPanel() {
     <p class="cal-solution" id="color-cal-solution"></p>`;
   root.append(section);
 
-  const selectedMode = () => (
-    $('color-cal-mode-auto')?.checked ? 'auto' : 'manual'
-  );
+  const selectedMode = () =>
+    $('color-cal-mode-auto')?.checked ? 'auto' : 'manual';
 
   $('btn-color-cal-start')?.addEventListener('click', async () => {
     try {
@@ -1255,11 +1509,13 @@ async function buildColorCalPanel() {
         advance_after_capture: Boolean($('color-cal-advance')?.checked),
       });
       if (!result.ok) throw new Error(result.error || 'start failed');
-      toast(result.mode === 'manual'
-        ? (result.lumos_cal_mode
-          ? 'Manual calibration — camera locked, Capture when ready'
-          : 'Manual calibration — Capture when focus looks good')
-        : `Auto calibration (settle ${Number(result.settle_sec).toFixed(1)}s)`);
+      toast(
+        result.mode === 'manual'
+          ? result.lumos_cal_mode
+            ? 'Manual calibration — camera locked, Capture when ready'
+            : 'Manual calibration — Capture when focus looks good'
+          : `Auto calibration (settle ${Number(result.settle_sec).toFixed(1)}s)`,
+      );
       renderColorCal(result);
     } catch (err) {
       toast(err.message, 'error');
@@ -1276,7 +1532,9 @@ async function buildColorCalPanel() {
   });
   $('btn-color-cal-prev')?.addEventListener('click', async () => {
     try {
-      const result = await api('/api/calibrate/color/navigate', { action: 'prev' });
+      const result = await api('/api/calibrate/color/navigate', {
+        action: 'prev',
+      });
       if (!result.ok) throw new Error(result.error || 'prev failed');
       renderColorCal(result);
     } catch (err) {
@@ -1285,7 +1543,9 @@ async function buildColorCalPanel() {
   });
   $('btn-color-cal-next')?.addEventListener('click', async () => {
     try {
-      const result = await api('/api/calibrate/color/navigate', { action: 'next' });
+      const result = await api('/api/calibrate/color/navigate', {
+        action: 'next',
+      });
       if (!result.ok) throw new Error(result.error || 'next failed');
       renderColorCal(result);
     } catch (err) {
@@ -1316,7 +1576,9 @@ async function buildColorCalPanel() {
     const btn = ev.target.closest('[data-patch]');
     if (!btn) return;
     try {
-      const result = await api('/api/calibrate/color/navigate', { patch: btn.dataset.patch });
+      const result = await api('/api/calibrate/color/navigate', {
+        patch: btn.dataset.patch,
+      });
       if (!result.ok) throw new Error(result.error || 'goto failed');
       renderColorCal(result);
     } catch (err) {
@@ -1334,7 +1596,9 @@ async function buildColorCalPanel() {
   });
   const applyCal = async (save) => {
     try {
-      const result = await api('/api/calibrate/color/apply', { save: Boolean(save) });
+      const result = await api('/api/calibrate/color/apply', {
+        save: Boolean(save),
+      });
       if (!result.ok) throw new Error(result.error || 'apply failed');
       if (result.config) applyConfig(result.config);
       toast(save ? 'Colour calibration saved' : 'Colour calibration applied');
@@ -1345,7 +1609,12 @@ async function buildColorCalPanel() {
   };
   $('btn-color-cal-apply')?.addEventListener('click', () => applyCal(false));
   $('btn-color-cal-save')?.addEventListener('click', () => applyCal(true));
-  renderColorCal({ state: 'idle', mode: 'manual', progress: 0, measurements: {} });
+  renderColorCal({
+    state: 'idle',
+    mode: 'manual',
+    progress: 0,
+    measurements: {},
+  });
 }
 
 async function buildSourcePanel() {
@@ -1413,8 +1682,12 @@ async function buildSourcePanel() {
     fillDeviceSelect(sourcePanelState.device || $('source-device').value);
     toast('USB device list refreshed');
   });
-  $('btn-source-apply').addEventListener('click', () => applySource({ save: false }));
-  $('btn-source-save').addEventListener('click', () => applySource({ save: true }));
+  $('btn-source-apply').addEventListener('click', () =>
+    applySource({ save: false }),
+  );
+  $('btn-source-save').addEventListener('click', () =>
+    applySource({ save: true }),
+  );
 
   await loadCaptureDevices();
   fillDeviceSelect(sourcePanelState.device);
@@ -1465,7 +1738,8 @@ async function applySource({ save }) {
   }
 
   try {
-    if (status) status.textContent = save ? 'saving source…' : 'switching source…';
+    if (status)
+      status.textContent = save ? 'saving source…' : 'switching source…';
     const result = await api('/api/camera/source', body);
     if (!result.ok && result.error) throw new Error(result.error);
     if (result.devices) sourcePanelState.devices = result.devices;
@@ -1480,7 +1754,12 @@ async function applySource({ save }) {
       const root = $('camera-controls');
       if (root) root.innerHTML = '';
     }
-    toast(save && result.saved ? `Source saved to ${result.saved}` : 'Source applied', 'ok');
+    toast(
+      save && result.saved
+        ? `Source saved to ${result.saved}`
+        : 'Source applied',
+      'ok',
+    );
     if (status) status.textContent = save ? 'source saved' : 'source applied';
   } catch (err) {
     if (status) status.textContent = 'source update failed';
@@ -1496,7 +1775,8 @@ function queueCameraControl(name, value) {
 
 async function pushCameraControls() {
   const controls = { ...pendingCameraControls };
-  for (const key of Object.keys(pendingCameraControls)) delete pendingCameraControls[key];
+  for (const key of Object.keys(pendingCameraControls))
+    delete pendingCameraControls[key];
   if (!Object.keys(controls).length) return;
   const status = $('tune-status');
   try {
@@ -1556,7 +1836,10 @@ async function buildCameraControls() {
         queueCameraControl(ctrl.name, parseInt(select.value, 10));
       });
       row.append(select);
-    } else if (ctrl.type === 'bool' || (ctrl.min === 0 && ctrl.max === 1 && ctrl.step === 1)) {
+    } else if (
+      ctrl.type === 'bool' ||
+      (ctrl.min === 0 && ctrl.max === 1 && ctrl.step === 1)
+    ) {
       const wrap = document.createElement('label');
       wrap.className = 'switch';
       const input = document.createElement('input');
@@ -1607,25 +1890,36 @@ function buildControls() {
         wrap.className = 'switch';
         const input = document.createElement('input');
         input.type = 'checkbox';
-        input.addEventListener('change', () => queueUpdate(item.path, input.checked));
+        input.addEventListener('change', () =>
+          queueUpdate(item.path, input.checked),
+        );
         wrap.append(input, document.createTextNode(label));
         row.append(wrap);
         boundInputs.set(item.path, { input, kind: 'toggle' });
       } else if (item.type === 'select') {
         row.innerHTML = `<label>${label}</label><output></output>`;
         const select = document.createElement('select');
-        select.innerHTML = item.options.map((o) => `<option value="${o}">${o}</option>`).join('');
-        select.addEventListener('change', () => queueUpdate(item.path, select.value));
+        select.innerHTML = item.options
+          .map((o) => `<option value="${o}">${o}</option>`)
+          .join('');
+        select.addEventListener('change', () =>
+          queueUpdate(item.path, select.value),
+        );
         row.append(select);
         boundInputs.set(item.path, { input: select, kind: 'select' });
       } else {
         row.innerHTML = `<label>${label}</label><output></output>`;
         const input = document.createElement('input');
         input.type = 'range';
-        input.min = item.min; input.max = item.max; input.step = item.step;
+        input.min = item.min;
+        input.max = item.max;
+        input.step = item.step;
         const out = row.querySelector('output');
         input.addEventListener('input', () => {
-          const value = item.step >= 1 ? parseInt(input.value, 10) : parseFloat(input.value);
+          const value =
+            item.step >= 1
+              ? parseInt(input.value, 10)
+              : parseFloat(input.value);
           out.textContent = format(value, item);
           queueUpdate(item.path, value);
         });
@@ -1639,7 +1933,7 @@ function buildControls() {
 }
 
 function format(value, item) {
-  const decimals = item.step >= 1 ? 0 : (item.step >= 0.1 ? 1 : 2);
+  const decimals = item.step >= 1 ? 0 : item.step >= 0.1 ? 1 : 2;
   return `${Number(value).toFixed(decimals)}${item.unit || ''}`;
 }
 
@@ -1659,7 +1953,8 @@ function applyConfig(config, { skipFocused = false } = {}) {
     }
   }
   const mode = $('boundary-mode');
-  if (document.activeElement !== mode) mode.value = get(config, 'boundary.mode') || 'hybrid';
+  if (document.activeElement !== mode)
+    mode.value = get(config, 'boundary.mode') || 'hybrid';
 }
 
 // ------------------------------------------------------------ corner picker
@@ -1668,7 +1963,7 @@ const picker = {
   canvas: null,
   ctx: null,
   img: null,
-  corners: [],      // normalised [x, y]
+  corners: [], // normalised [x, y]
   dragging: -1,
   hover: -1,
   pointer: null,
@@ -1684,13 +1979,17 @@ function orderCorners(points) {
   const cx = points.reduce((s, p) => s + p[0], 0) / points.length;
   const cy = points.reduce((s, p) => s + p[1], 0) / points.length;
   const sorted = [...points].sort(
-    (a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx)
+    (a, b) =>
+      Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx),
   );
   let start = 0;
   let best = Infinity;
   sorted.forEach((p, i) => {
     const score = p[0] + p[1];
-    if (score < best) { best = score; start = i; }
+    if (score < best) {
+      best = score;
+      start = i;
+    }
   });
   return sorted.slice(start).concat(sorted.slice(0, start));
 }
@@ -1716,8 +2015,10 @@ function setupPicker() {
 
   const toNormalised = (event) => {
     const rect = picker.canvas.getBoundingClientRect();
-    return [clamp01((event.clientX - rect.left) / rect.width),
-            clamp01((event.clientY - rect.top) / rect.height)];
+    return [
+      clamp01((event.clientX - rect.left) / rect.width),
+      clamp01((event.clientY - rect.top) / rect.height),
+    ];
   };
 
   const nearest = (point) => {
@@ -1725,7 +2026,10 @@ function setupPicker() {
     let best = 0.035; // grab radius in normalised units
     picker.corners.forEach((corner, i) => {
       const d = Math.hypot(corner[0] - point[0], corner[1] - point[1]);
-      if (d < best) { best = d; index = i; }
+      if (d < best) {
+        best = d;
+        index = i;
+      }
     });
     return index;
   };
@@ -1737,7 +2041,8 @@ function setupPicker() {
       picker.dragging = index;
     } else if (picker.corners.length < 4) {
       picker.corners.push(point);
-      if (picker.corners.length === 4) picker.corners = orderCorners(picker.corners);
+      if (picker.corners.length === 4)
+        picker.corners = orderCorners(picker.corners);
       picker.dirty = true;
       $('btn-apply').disabled = picker.corners.length !== 4;
     } else {
@@ -1765,7 +2070,11 @@ function setupPicker() {
       picker.corners = orderCorners(picker.corners);
     }
     picker.dragging = -1;
-    if (event && event.pointerId !== undefined && picker.canvas.hasPointerCapture(event.pointerId)) {
+    if (
+      event &&
+      event.pointerId !== undefined &&
+      picker.canvas.hasPointerCapture(event.pointerId)
+    ) {
       picker.canvas.releasePointerCapture(event.pointerId);
     }
     drawPicker();
@@ -1773,10 +2082,14 @@ function setupPicker() {
   picker.canvas.addEventListener('pointerup', release);
   picker.canvas.addEventListener('pointercancel', release);
   picker.canvas.addEventListener('pointerleave', () => {
-    picker.pointer = null; picker.hover = -1; drawPicker();
+    picker.pointer = null;
+    picker.hover = -1;
+    drawPicker();
   });
 
-  setInterval(() => { if (picker.dragging >= 0) drawPicker(); }, 100);
+  setInterval(() => {
+    if (picker.dragging >= 0) drawPicker();
+  }, 100);
 }
 
 function drawPicker() {
@@ -1798,7 +2111,9 @@ function drawPicker() {
     ctx.lineWidth = 2;
     ctx.stroke();
     if (pts.length === 4) {
-      ctx.fillStyle = picker.dirty ? 'rgba(255,176,32,.10)' : 'rgba(24,160,251,.10)';
+      ctx.fillStyle = picker.dirty
+        ? 'rgba(255,176,32,.10)'
+        : 'rgba(24,160,251,.10)';
       ctx.fill();
     }
   }
@@ -1818,7 +2133,8 @@ function drawPicker() {
     ctx.fillText(CORNER_LABELS[i] || String(i + 1), x + 11, y - 9);
   });
 
-  if (picker.dragging >= 0 && picker.pointer) drawLoupe(ctx, w, h, picker.pointer);
+  if (picker.dragging >= 0 && picker.pointer)
+    drawLoupe(ctx, w, h, picker.pointer);
 }
 
 function drawLoupe(ctx, w, h, [nx, ny]) {
@@ -1844,7 +2160,9 @@ function drawLoupe(ctx, w, h, [nx, ny]) {
   ctx.fillRect(x, y, size, size);
   try {
     ctx.drawImage(img, sx, sy, sw, sh, x, y, size, size);
-  } catch { /* stream frame not decodable yet */ }
+  } catch {
+    /* stream frame not decodable yet */
+  }
   ctx.restore();
 
   ctx.strokeStyle = '#232c3d';
@@ -1852,14 +2170,19 @@ function drawLoupe(ctx, w, h, [nx, ny]) {
   ctx.strokeRect(x + 0.5, y + 0.5, size, size);
   ctx.strokeStyle = '#ffb020';
   ctx.beginPath();
-  ctx.moveTo(x + size / 2, y); ctx.lineTo(x + size / 2, y + size);
-  ctx.moveTo(x, y + size / 2); ctx.lineTo(x + size, y + size / 2);
+  ctx.moveTo(x + size / 2, y);
+  ctx.lineTo(x + size / 2, y + size);
+  ctx.moveTo(x, y + size / 2);
+  ctx.lineTo(x + size, y + size / 2);
   ctx.stroke();
 }
 
 function setCorners(corners, { dirty = false } = {}) {
-  picker.corners = corners ? corners.map(([x, y]) => [clamp01(x), clamp01(y)]) : [];
-  if (picker.corners.length === 4) picker.corners = orderCorners(picker.corners);
+  picker.corners = corners
+    ? corners.map(([x, y]) => [clamp01(x), clamp01(y)])
+    : [];
+  if (picker.corners.length === 4)
+    picker.corners = orderCorners(picker.corners);
   picker.dirty = dirty;
   $('btn-apply').disabled = picker.corners.length !== 4;
   drawPicker();
@@ -1874,7 +2197,9 @@ function renderViewSelect(views) {
   knownViews = views;
   const select = $('view-select');
   const current = select.value || 'boundary';
-  select.innerHTML = views.map((v) => `<option value="${v}">${v}</option>`).join('');
+  select.innerHTML = views
+    .map((v) => `<option value="${v}">${v}</option>`)
+    .join('');
   select.value = views.includes(current) ? current : views[0];
   $('view-img').src = `/stream/${select.value}`;
 }
@@ -1882,7 +2207,7 @@ function renderViewSelect(views) {
 function renderStages(status) {
   const list = $('stage-list');
   const descriptions = Object.fromEntries(
-    (status.stages_available || []).map((s) => [s.name, s.description])
+    (status.stages_available || []).map((s) => [s.name, s.description]),
   );
   const stages = status.pipeline.stages || [];
 
@@ -1900,7 +2225,9 @@ function renderStages(status) {
       input.addEventListener('change', async () => {
         try {
           await api('/api/stage', { name: stage.name, enabled: input.checked });
-        } catch (err) { toast(err.message, 'error'); }
+        } catch (err) {
+          toast(err.message, 'error');
+        }
       });
       wrap.append(input);
       li.append(wrap);
@@ -1909,7 +2236,8 @@ function renderStages(status) {
   }
   for (const stage of stages) {
     const input = list.querySelector(`input[data-stage="${stage.name}"]`);
-    if (input && document.activeElement !== input) input.checked = stage.enabled;
+    if (input && document.activeElement !== input)
+      input.checked = stage.enabled;
   }
 }
 
@@ -1917,30 +2245,49 @@ function renderTimings(timings) {
   const entries = Object.entries(timings || {});
   const max = Math.max(0.01, ...entries.map(([, v]) => v));
   $('timing-list').innerHTML = entries
-    .map(([name, ms]) => `<li><span>${name}</span>
+    .map(
+      ([name, ms]) => `<li><span>${name}</span>
       <span class="bar" style="width:${Math.max(2, (ms / max) * 100)}%"></span>
-      <span class="ms">${ms.toFixed(2)}</span></li>`)
+      <span class="ms">${ms.toFixed(2)}</span></li>`,
+    )
     .join('');
 }
 
 function renderDetected(status) {
-  const stages = Object.fromEntries((status.pipeline.stages || []).map((s) => [s.name, s]));
+  const stages = Object.fromEntries(
+    (status.pipeline.stages || []).map((s) => [s.name, s]),
+  );
   const bars = stages.blackbars || {};
   const boundary = stages.boundary || {};
   const colour = stages.color || {};
   const rows = [
     ['TV source', boundary.origin || '–'],
-    ['Confidence', boundary.confidence != null ? boundary.confidence.toFixed(2) : '–'],
-    ['Content', bars.content_aspect ? `${bars.content_aspect.toFixed(2)}:1` : '–'],
-    ['Bars (px)', bars.pixels
-      ? `t${bars.pixels.top} b${bars.pixels.bottom} l${bars.pixels.left} r${bars.pixels.right}`
-      : '–'],
-    ['Exposure', colour.exposure_gain != null ? `${colour.exposure_gain.toFixed(2)}x` : '–'],
+    [
+      'Confidence',
+      boundary.confidence != null ? boundary.confidence.toFixed(2) : '–',
+    ],
+    [
+      'Content',
+      bars.content_aspect ? `${bars.content_aspect.toFixed(2)}:1` : '–',
+    ],
+    [
+      'Bars (px)',
+      bars.pixels
+        ? `t${bars.pixels.top} b${bars.pixels.bottom} l${bars.pixels.left} r${bars.pixels.right}`
+        : '–',
+    ],
+    [
+      'Exposure',
+      colour.exposure_gain != null
+        ? `${colour.exposure_gain.toFixed(2)}x`
+        : '–',
+    ],
     ['Mean luma', colour.mean_luma != null ? colour.mean_luma.toFixed(0) : '–'],
     ['Frames', `${status.frames_out} out / ${status.frames_dropped} dropped`],
   ];
   $('detected').innerHTML = rows
-    .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+    .join('');
 }
 
 async function refresh() {
@@ -1954,19 +2301,23 @@ async function refresh() {
 
   const connected = Boolean(status.source && status.source.connected);
   const locked = (status.pipeline.state || {}).confidence > 0;
-  $('health-dot').className = `dot ${connected ? (locked ? 'ok' : 'warn') : 'bad'}`;
+  $('health-dot').className =
+    `dot ${connected ? (locked ? 'ok' : 'warn') : 'bad'}`;
 
   $('stat-in').textContent = `${status.input_fps.toFixed(1)} fps`;
   $('stat-out').textContent = `${status.output_fps.toFixed(1)} fps`;
   $('stat-latency').textContent = `${status.latency_ms.toFixed(0)} ms`;
-  $('stat-cpu').textContent = `${(status.pipeline.total_ms || 0).toFixed(1)} ms`;
+  $('stat-cpu').textContent =
+    `${(status.pipeline.total_ms || 0).toFixed(1)} ms`;
 
   const state = status.pipeline.state || {};
-  $('stat-lock').textContent = state.corners_source === 'none'
-    ? 'searching'
-    : `${state.corners_source} ${(state.confidence || 0).toFixed(2)}`;
+  $('stat-lock').textContent =
+    state.corners_source === 'none'
+      ? 'searching'
+      : `${state.corners_source} ${(state.confidence || 0).toFixed(2)}`;
 
-  $('output-size').textContent = `${status.output_size[0]}x${status.output_size[1]}`;
+  $('output-size').textContent =
+    `${status.output_size[0]}x${status.output_size[1]}`;
 
   renderViewSelect(status.views || []);
   renderStages(status);
@@ -1974,7 +2325,11 @@ async function refresh() {
   renderDetected(status);
   // Do not re-push config into the sliders every second: it races with
   // in-flight tuner updates and makes picture controls feel broken.
-  if (!suppressEcho && !Object.keys(pendingUpdates).length && pushTimer == null) {
+  if (
+    !suppressEcho &&
+    !Object.keys(pendingUpdates).length &&
+    pushTimer == null
+  ) {
     applyConfig(status.config, { skipFocused: true });
   }
   if (status.lumos_cam) {
@@ -1982,15 +2337,22 @@ async function refresh() {
     lumosPanelState.last_error = status.lumos_cam.last_error || '';
     lumosPanelState.cal_mode = Boolean(status.lumos_cam.cal_mode);
     lumosPanelState.app_version = status.lumos_cam.app_version || '';
-    if (status.lumos_cam.ui_rotation != null) lumosPanelState.ui_rotation = Number(status.lumos_cam.ui_rotation);
-    if (status.lumos_cam.frame_rotation != null) lumosPanelState.frame_rotation = Number(status.lumos_cam.frame_rotation);
+    if (status.lumos_cam.ui_rotation != null)
+      lumosPanelState.ui_rotation = Number(status.lumos_cam.ui_rotation);
+    if (status.lumos_cam.frame_rotation != null)
+      lumosPanelState.frame_rotation = Number(status.lumos_cam.frame_rotation);
     lumosPanelState.flip_h = Boolean(status.lumos_cam.flip_h);
     lumosPanelState.flip_v = Boolean(status.lumos_cam.flip_v);
     if (!lumosFormDirty && !lumosBusy) {
-      if (status.lumos_cam.zoom != null) lumosPanelState.camera_zoom = Number(status.lumos_cam.zoom);
-      if (status.lumos_cam.pan_x != null) lumosPanelState.pan_x = Number(status.lumos_cam.pan_x);
-      if (status.lumos_cam.pan_y != null) lumosPanelState.pan_y = Number(status.lumos_cam.pan_y);
-      applyLumosLocks(status.lumos_cam, status.config);
+      if (status.lumos_cam.zoom != null)
+        lumosPanelState.camera_zoom = Number(status.lumos_cam.zoom);
+      if (status.lumos_cam.pan_x != null)
+        lumosPanelState.pan_x = Number(status.lumos_cam.pan_x);
+      if (status.lumos_cam.pan_y != null)
+        lumosPanelState.pan_y = Number(status.lumos_cam.pan_y);
+      if (status.lumos_cam.af) lumosPanelState.af = status.lumos_cam.af;
+      if (status.lumos_cam.ae) lumosPanelState.ae = status.lumos_cam.ae;
+      if (status.lumos_cam.awb) lumosPanelState.awb = status.lumos_cam.awb;
       lumosPanelState.iso = status.lumos_cam.iso ?? null;
       lumosPanelState.exposure_ns = status.lumos_cam.exposure_ns ?? null;
       lumosPanelState.focus_distance = status.lumos_cam.focus_distance ?? null;
@@ -2001,10 +2363,6 @@ async function refresh() {
       }
       syncLumosForm();
     } else {
-      ['lumos-af', 'lumos-ae', 'lumos-awb'].forEach((id) => {
-        const el = $(id);
-        if (el) el.disabled = Boolean(lumosPanelState.cal_mode);
-      });
       syncLumosMeta();
     }
   }
@@ -2020,8 +2378,10 @@ async function refresh() {
       if (status.scrcpy.view_zoom != null) {
         scrcpyPanelState.view_zoom = Number(status.scrcpy.view_zoom);
       }
-      if (status.scrcpy.pan_x != null) scrcpyPanelState.pan_x = Number(status.scrcpy.pan_x);
-      if (status.scrcpy.pan_y != null) scrcpyPanelState.pan_y = Number(status.scrcpy.pan_y);
+      if (status.scrcpy.pan_x != null)
+        scrcpyPanelState.pan_x = Number(status.scrcpy.pan_x);
+      if (status.scrcpy.pan_y != null)
+        scrcpyPanelState.pan_y = Number(status.scrcpy.pan_y);
       if (status.config?.scrcpy) {
         scrcpyPanelState.enabled = Boolean(status.config.scrcpy.enabled);
       } else if (status.scrcpy.enabled != null) {
@@ -2040,7 +2400,12 @@ async function refresh() {
   }
 
   // Adopt the pipeline's corners only while the user is not editing them.
-  if (!picker.dirty && picker.dragging < 0 && state.corners && state.frame_size) {
+  if (
+    !picker.dirty &&
+    picker.dragging < 0 &&
+    state.corners &&
+    state.frame_size
+  ) {
     const [w, h] = state.frame_size;
     if (w && h) setCorners(state.corners.map(([x, y]) => [x / w, y / h]));
   }
@@ -2054,14 +2419,29 @@ function wireButtons() {
       const result = await api('/api/calibrate/auto', {});
       if (!result.ok) return toast(result.error || 'detection failed', 'error');
       setCorners(result.corners, { dirty: true });
-      toast(`Detected with confidence ${result.confidence.toFixed(2)} — press Apply to keep it`, 'ok');
-    } catch (err) { toast(err.message, 'error'); }
+      toast(
+        `Detected with confidence ${result.confidence.toFixed(2)} — press Apply to keep it`,
+        'ok',
+      );
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
-  $('btn-clear').addEventListener('click', () => setCorners([], { dirty: false }));
+  $('btn-clear').addEventListener('click', () =>
+    setCorners([], { dirty: false }),
+  );
 
   $('btn-full').addEventListener('click', () => {
-    setCorners([[0, 0], [1, 0], [1, 1], [0, 1]], { dirty: true });
+    setCorners(
+      [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+      ],
+      { dirty: true },
+    );
   });
 
   $('btn-apply').addEventListener('click', async () => {
@@ -2071,7 +2451,9 @@ function wireButtons() {
       picker.dirty = false;
       drawPicker();
       toast('Calibration applied — remember to save', 'ok');
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   $('btn-recal').addEventListener('click', async () => {
@@ -2079,14 +2461,20 @@ function wireButtons() {
       await api('/api/recalibrate', {});
       setCorners([], { dirty: false });
       toast('Looking for the TV again…');
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   $('btn-save').addEventListener('click', async () => {
     try {
-      const result = await api('/api/config/save', { path: $('save-path').value || null });
+      const result = await api('/api/config/save', {
+        path: $('save-path').value || null,
+      });
       toast(`Saved to ${result.path}`, 'ok');
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   $('boundary-mode').addEventListener('change', (event) => {

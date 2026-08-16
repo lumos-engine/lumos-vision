@@ -232,36 +232,6 @@ def camera_from_lumos(cfg: Any) -> ProfileCameraState:
     )
 
 
-def camera_after_cal_freeze(
-    intended: ProfileCameraState, frozen: ProfileCameraState
-) -> ProfileCameraState:
-    """Keep the user's lock checkboxes; copy measurement numbers for locked axes.
-
-    Colour-cal mode locks AF/AE/AWB on the phone without writing YAML. Applying
-    that snapshot would force all three locks on after Start/Apply.
-    """
-    af = _lock_name(intended.af)
-    ae = _lock_name(intended.ae)
-    awb = _lock_name(intended.awb)
-    return ProfileCameraState(
-        af=af,
-        ae=ae,
-        awb=awb,
-        iso=int(frozen.iso or 0) if ae == "locked" else int(intended.iso or 0),
-        exposure_ns=(
-            int(frozen.exposure_ns or 0) if ae == "locked" else int(intended.exposure_ns or 0)
-        ),
-        focus_distance=(
-            float(frozen.focus_distance) if af == "locked" else float(intended.focus_distance)
-        ),
-        awb_gains=(
-            [float(v) for v in (frozen.awb_gains or [])][:4]
-            if awb == "locked"
-            else [float(v) for v in (intended.awb_gains or [])][:4]
-        ),
-    )
-
-
 def slot_has_camera(slot: ColorProfileSlot | None) -> bool:
     if slot is None:
         return False

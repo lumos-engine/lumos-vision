@@ -38,8 +38,6 @@ from processor.stages.boundary import BoundaryStage
 from processor.utils.color_calibrate import ColorCalibrationSession, iso_now
 from processor.utils.color_profiles import (
     bind_config,
-    camera_after_cal_freeze,
-    camera_from_lumos,
     camera_from_phone,
     camera_live_updates,
     empty_slot,
@@ -1543,11 +1541,7 @@ class Processor:
 
     def _merge_phone_camera_into_slot_unlocked(self) -> None:
         """Write the phone's current 3A freeze onto the active profile slot."""
-        phone = self._lumos.status(self.config.lumos_cam).as_dict()
-        if phone.get("cal_mode"):
-            # Colour-cal freeze reports all three locked; do not persist that.
-            return
-        cam = camera_from_phone(phone)
+        cam = camera_from_phone(self._lumos.status(self.config.lumos_cam).as_dict())
         key = slot_key(self.config.color.profiles)
         existing = lookup_slot(self.config.color.profiles) or empty_slot()
         merged = replace(existing, camera=cam)
@@ -1670,19 +1664,9 @@ class Processor:
             black_enabled = any(v > 0.5 for v in solution.black_level_bgr)
             slot = slot_from_solution(solution)
             phone = self._lumos.status(self.config.lumos_cam).as_dict()
-            frozen = camera_from_phone(phone)
-            intended = camera_from_lumos(self.config.lumos_cam)
-            cam = (
-                camera_after_cal_freeze(intended, frozen)
-                if phone.get("cal_mode")
-                else frozen
-            )
+            cam = camera_from_phone(phone)
             existing = lookup_slot(self.config.color.profiles)
-            if (
-                not phone.get("cal_mode")
-                and not slot_has_camera(replace(slot, camera=cam))
-                and existing is not None
-            ):
+            if not slot_has_camera(replace(slot, camera=cam)) and existing is not None:
                 cam = existing.camera
             slot = replace(slot, camera=cam)
             key = slot_key(self.config.color.profiles)
