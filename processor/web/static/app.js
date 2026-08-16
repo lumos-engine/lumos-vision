@@ -387,8 +387,6 @@ function syncLumosForm({ force = false } = {}) {
     setLock('lumos-af', lumosPanelState.af);
     setLock('lumos-ae', lumosPanelState.ae);
     setLock('lumos-awb', lumosPanelState.awb);
-    const cal = $('lumos-cal-mode');
-    if (cal) cal.checked = Boolean(lumosPanelState.cal_mode);
   }
   syncLumosMeta();
 }
@@ -427,10 +425,6 @@ async function postLumos(action, fields, { save = false } = {}) {
       lumosPanelState.camera_zoom = Number(result.lumos_cam.zoom || lumosPanelState.camera_zoom);
       lumosPanelState.pan_x = Number(result.lumos_cam.pan_x ?? lumosPanelState.pan_x);
       lumosPanelState.pan_y = Number(result.lumos_cam.pan_y ?? lumosPanelState.pan_y);
-      lumosPanelState.af = result.lumos_cam.af || lumosPanelState.af;
-      lumosPanelState.ae = result.lumos_cam.ae || lumosPanelState.ae;
-      lumosPanelState.awb = result.lumos_cam.awb || lumosPanelState.awb;
-      lumosPanelState.cal_mode = Boolean(result.lumos_cam.cal_mode);
       lumosPanelState.app_version = result.lumos_cam.app_version || '';
       if (result.lumos_cam.ui_rotation != null) lumosPanelState.ui_rotation = Number(result.lumos_cam.ui_rotation);
       if (result.lumos_cam.frame_rotation != null) lumosPanelState.frame_rotation = Number(result.lumos_cam.frame_rotation);
@@ -439,10 +433,20 @@ async function postLumos(action, fields, { save = false } = {}) {
     }
     if (result.config) {
       applyLumosPanelFromConfig(result.config);
-      lumosFormDirty = false;
-    } else {
-      syncLumosForm({ force: true });
     }
+    // Phone 3A wins over YAML. Cal mode locks the sensor without writing
+    // lumos_cam.af/ae/awb, so echoing config would uncheck the lock boxes.
+    if (result.lumos_cam) {
+      if (result.lumos_cam.af) lumosPanelState.af = result.lumos_cam.af;
+      if (result.lumos_cam.ae) lumosPanelState.ae = result.lumos_cam.ae;
+      if (result.lumos_cam.awb) lumosPanelState.awb = result.lumos_cam.awb;
+      lumosPanelState.cal_mode = Boolean(result.lumos_cam.cal_mode);
+      lumosPanelState.iso = result.lumos_cam.iso ?? lumosPanelState.iso;
+      lumosPanelState.exposure_ns = result.lumos_cam.exposure_ns ?? lumosPanelState.exposure_ns;
+      lumosPanelState.focus_distance = result.lumos_cam.focus_distance ?? lumosPanelState.focus_distance;
+    }
+    lumosFormDirty = false;
+    syncLumosForm({ force: true });
     if (!response.ok || result.ok === false) {
       throw new Error(result.error || result.lumos_cam?.last_error || 'Lumos Cam action failed');
     }
@@ -507,10 +511,9 @@ async function buildLumosCamPanel() {
     <p class="hint">Locks freeze the current exposure / focus / white balance into the
     active environment profile. Switching profiles restores those numbers.
     Uncheck to let the phone hunt; it will not auto-lock again until you tick
-    it or switch profiles.</p>
-    <div class="control">
-      <label class="check"><input type="checkbox" id="lumos-cal-mode"> Cal mode</label>
-    </div>
+    it or switch profiles. Colour calibrate → Start also freezes 3A for that
+    run only (so black/white patches do not pump AE) — that is not a substitute
+    for these checkboxes.</p>
     <p class="source-meta" id="lumos-meta"></p>
     <div class="source-actions">
       <button type="button" class="btn" id="btn-lumos-zoom-out">Zoom −</button>
@@ -550,14 +553,6 @@ async function buildLumosCamPanel() {
   liveLock('lumos-af', 'lock_af', 'unlock_af');
   liveLock('lumos-ae', 'lock_ae', 'unlock_ae');
   liveLock('lumos-awb', 'lock_awb', 'unlock_awb');
-  $('lumos-cal-mode')?.addEventListener('change', async (ev) => {
-    try {
-      await postLumos(ev.target.checked ? 'cal_mode_on' : 'cal_mode_off', {});
-      toast(ev.target.checked ? 'Cal mode on' : 'Cal mode off');
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
 
   $('btn-lumos-zoom-in')?.addEventListener('click', async () => {
     try {
@@ -1199,7 +1194,9 @@ async function buildColorCalPanel() {
   section.innerHTML = `
     <h3>Colour calibrate</h3>
     <p class="hint">Saves into the <strong>active environment profile</strong> above.
-    Open the patch page fullscreen on the HDMI TV. Freeze AE/AWB on mid-grey first.
+    Open the patch page fullscreen on the HDMI TV. Lock AE/AWB on mid-grey first
+    if you want that freeze in this profile. <strong>Start</strong> also freezes
+    3A for the patch run so black/white patches do not pump exposure.
     Uncalibrated combos stay passthrough (no matrix).</p>
     <div class="control">
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-manual" value="manual" checked> Manual capture</label>

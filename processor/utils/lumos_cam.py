@@ -460,6 +460,22 @@ def _capture_lock_kwargs(cfg: LumosCamConfig) -> dict[str, Any]:
     return kwargs
 
 
+def _locks_compatible_with_cal_mode(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop auto/unlock flags so profile bind cannot undo a colour-cal freeze.
+
+    Cal mode is a temporary overlay: the phone snapshots prior 3A, locks all
+    three, and restores the snapshot when cal mode ends. YAML often still says
+    ``auto``; posting that via ``/locks`` used to clear the freeze.
+    """
+    out = dict(kwargs)
+    for key in ("af", "ae", "awb"):
+        if str(out.get(key) or "").lower() != "locked":
+            out.pop(key, None)
+    if not any(key in out for key in ("af", "ae", "awb")):
+        return {}
+    return out
+
+
 class LumosCamClient:
     """HTTP client for the phone control port (after adb forward)."""
 
@@ -978,7 +994,11 @@ class LumosCamManager:
         try:
             self.client.set_zoom(clamp_zoom(cfg.camera_zoom, cfg))
             self.client.set_pan(clamp_pan(cfg.pan_x), clamp_pan(cfg.pan_y))
-            self.client.set_locks(**_capture_lock_kwargs(cfg))
+            lock_kwargs = _capture_lock_kwargs(cfg)
+            if self._phone.get("cal_mode"):
+                lock_kwargs = _locks_compatible_with_cal_mode(lock_kwargs)
+            if lock_kwargs:
+                self.client.set_locks(**lock_kwargs)
             self._phone = {**self._phone, **self.client.status()}
         except RuntimeError as exc:
             self._last_error = str(exc)

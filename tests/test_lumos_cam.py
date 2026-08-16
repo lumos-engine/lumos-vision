@@ -219,6 +219,86 @@ def test_config_round_trip_includes_lumos_cam():
     assert PROTOCOL_VERSION == 1
 
 
+def _fake_live_client(calls, *, cal_mode):
+    class FakeClient:
+        def configure(self, cfg):
+            return None
+
+        def set_zoom(self, ratio):
+            calls.append(("zoom", ratio))
+
+        def set_pan(self, x, y):
+            calls.append(("pan", x, y))
+
+        def set_locks(self, **kwargs):
+            calls.append(("locks", dict(kwargs)))
+
+        def status(self):
+            return {
+                "ok": True,
+                "cal_mode": cal_mode,
+                "af": "locked" if cal_mode else "auto",
+                "ae": "locked" if cal_mode else "auto",
+                "awb": "locked" if cal_mode else "auto",
+                "zoom": 1.0,
+                "pan_x": 0.0,
+                "pan_y": 0.0,
+            }
+
+    return FakeClient()
+
+
+def test_apply_live_does_not_unlock_during_cal_mode():
+    from processor.utils.lumos_cam import LumosCamManager
+
+    calls = []
+    mgr = LumosCamManager()
+    mgr.client = _fake_live_client(calls, cal_mode=True)
+    mgr._phone = {"cal_mode": True, "af": "locked", "ae": "locked", "awb": "locked"}
+    result = mgr.apply_live(LumosCamConfig(enabled=True, af="auto", ae="auto", awb="auto"))
+    assert result["ok"] is True
+    assert [c[0] for c in calls] == ["zoom", "pan"]
+
+
+def test_apply_live_sends_locks_when_cal_mode_off():
+    from processor.utils.lumos_cam import LumosCamManager
+
+    calls = []
+    mgr = LumosCamManager()
+    mgr.client = _fake_live_client(calls, cal_mode=False)
+    mgr._phone = {"cal_mode": False}
+    result = mgr.apply_live(LumosCamConfig(enabled=True, af="auto", ae="locked", awb="auto"))
+    assert result["ok"] is True
+    locks = next(c[1] for c in calls if c[0] == "locks")
+    assert locks["ae"] == "locked"
+    assert locks["af"] == "auto"
+    assert locks["awb"] == "auto"
+
+
+def test_apply_live_can_lock_one_axis_during_cal_mode():
+    from processor.utils.lumos_cam import LumosCamManager
+
+    calls = []
+    mgr = LumosCamManager()
+    mgr.client = _fake_live_client(calls, cal_mode=True)
+    mgr._phone = {"cal_mode": True, "af": "locked", "ae": "locked", "awb": "locked"}
+    result = mgr.apply_live(
+        LumosCamConfig(
+            enabled=True,
+            af="auto",
+            ae="locked",
+            awb="auto",
+            iso=100,
+            exposure_ns=10_000_000,
+        )
+    )
+    assert result["ok"] is True
+    locks = next(c[1] for c in calls if c[0] == "locks")
+    assert locks["ae"] == "locked"
+    assert "af" not in locks
+    assert "awb" not in locks
+
+
 def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
     sink = tmp_path / "video11"
     sink.write_text("")

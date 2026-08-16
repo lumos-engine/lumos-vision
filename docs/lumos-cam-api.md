@@ -148,11 +148,15 @@ or `{"mode": "manual", "iso": 100, "exposure_ns": 10000000}`.
 {"enabled": true}
 ```
 
-Atomic preset:
+Atomic preset used by colour-cal **Start** (not a user-facing lock control):
 
-- `enabled: true` — lock AF, AE, AWB; freeze current zoom/pan; remember prior
-  auto/lock state.
+- `enabled: true` — snapshot prior AF/AE/AWB, then lock all three and freeze
+  current ISO/exposure/focus/WB gains. Does **not** persist into host YAML.
 - `enabled: false` — restore the remembered state.
+
+While `cal_mode` is true, `POST /locks` with `af`/`ae`/`awb: auto` must not
+unlock; the host also omits those auto flags from live zoom/pan/profile
+pushes so an uncalibrated combo cannot pump AE mid-patch.
 
 ### `POST /stream`
 
