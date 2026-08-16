@@ -255,6 +255,31 @@ def test_legacy_ae_lock_is_absorbed_into_the_active_slot():
     assert cfg.lumos_cam.ae == "locked"
 
 
+def test_camera_for_slot_follows_checkboxes_not_phone_overlay():
+    from processor.config.schema import LumosCamConfig
+    from processor.utils.color_profiles import camera_for_slot
+
+    cam = camera_for_slot(
+        {
+            "af": "locked",
+            "ae": "locked",
+            "awb": "locked",
+            "iso": 200,
+            "exposure_ns": 1_000_000,
+            "focus_distance": 0.2,
+            "awb_gains": [1.5, 1.0, 1.0, 1.2],
+        },
+        LumosCamConfig(af="auto", ae="locked", awb="auto"),
+    )
+    assert cam.ae == "locked"
+    assert cam.af == "auto"
+    assert cam.awb == "auto"
+    assert cam.iso == 200
+    assert cam.exposure_ns == 1_000_000
+    assert cam.focus_distance == -1.0
+    assert cam.awb_gains == []
+
+
 def test_processor_switches_between_slot_and_passthrough():
     from processor.app import Processor
 

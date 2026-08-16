@@ -232,6 +232,28 @@ def camera_from_lumos(cfg: Any) -> ProfileCameraState:
     )
 
 
+def camera_for_slot(phone: Mapping[str, Any] | None, cfg: Any) -> ProfileCameraState:
+    """Keep the user's AF/AE/AWB checkboxes; copy numbers only for locked axes.
+
+    Phone status can report all three locked (colour-cal used to force that).
+    Slot storage must follow ``lumos_cam.*`` from the wizard, not that overlay.
+    """
+    locks = camera_from_lumos(cfg)
+    snap = camera_from_phone(phone)
+    ae_locked = _lock_name(locks.ae) == "locked"
+    af_locked = _lock_name(locks.af) == "locked"
+    awb_locked = _lock_name(locks.awb) == "locked"
+    return ProfileCameraState(
+        af=_lock_name(locks.af),
+        ae=_lock_name(locks.ae),
+        awb=_lock_name(locks.awb),
+        iso=snap.iso if ae_locked else 0,
+        exposure_ns=snap.exposure_ns if ae_locked else 0,
+        focus_distance=snap.focus_distance if af_locked else -1.0,
+        awb_gains=list(snap.awb_gains) if awb_locked else [],
+    )
+
+
 def slot_has_camera(slot: ColorProfileSlot | None) -> bool:
     if slot is None:
         return False

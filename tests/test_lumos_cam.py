@@ -934,7 +934,7 @@ def test_lumos_primary_skips_scrcpy(monkeypatch):
         app.shutdown()
 
 
-def test_color_cal_toggles_lumos_cal_mode(monkeypatch, tmp_path):
+def test_color_cal_does_not_force_lumos_cal_mode(monkeypatch, tmp_path):
     from processor.app import Processor
 
     calls = []
@@ -1008,12 +1008,12 @@ def test_color_cal_toggles_lumos_cal_mode(monkeypatch, tmp_path):
         )
         started = app.start_color_calibration(mode="manual")
         assert started["ok"] is True
-        assert started["lumos_cal_mode"] is True
-        assert started["settle_sec"] == 0.5
-        assert calls == [True]
+        assert started["lumos_cal_mode"] is False
+        assert started["settle_sec"] == 3.5
+        assert calls == [False]
         aborted = app.abort_color_calibration()
         assert aborted["ok"] is True
-        assert calls == [True, False]
+        assert calls == [False, False]
     finally:
         app.shutdown()
 

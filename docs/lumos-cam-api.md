@@ -148,7 +148,8 @@ or `{"mode": "manual", "iso": 100, "exposure_ns": 10000000}`.
 {"enabled": true}
 ```
 
-Atomic preset used by colour-cal **Start** (not a user-facing lock control):
+Atomic preset on the phone (Screen Sight colour-cal no longer enables this;
+the wizard AF/AE/AWB checkboxes are the 3A control):
 
 - `enabled: true` — snapshot prior AF/AE/AWB, then lock all three and freeze
   current ISO/exposure/focus/WB gains. Does **not** persist into host YAML.

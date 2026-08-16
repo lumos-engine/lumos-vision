@@ -38,7 +38,7 @@ from processor.stages.boundary import BoundaryStage
 from processor.utils.color_calibrate import ColorCalibrationSession, iso_now
 from processor.utils.color_profiles import (
     bind_config,
-    camera_from_phone,
+    camera_for_slot,
     camera_live_updates,
     empty_slot,
     lookup_slot,
@@ -46,7 +46,6 @@ from processor.utils.color_profiles import (
     profiles_touch_selection,
     resolve_selection,
     slot_from_solution,
-    slot_has_camera,
     slot_key,
     store_slot_updates,
 )
@@ -1414,7 +1413,14 @@ class Processor:
                 except Exception as exc:
                     source_result = {"ok": False, "error": str(exc)}
 
-            if action_name in {"lock_af", "lock_ae", "lock_awb"} and lumos_result.get("ok"):
+            if action_name in {
+                "lock_af",
+                "unlock_af",
+                "lock_ae",
+                "unlock_ae",
+                "lock_awb",
+                "unlock_awb",
+            } and lumos_result.get("ok"):
                 self._merge_phone_camera_into_slot_unlocked()
 
             saved_path = None
@@ -1486,18 +1492,17 @@ class Processor:
                     },
                 )
                 apply_pipeline_config(self.pipeline, self.config)
-            lumos_cal = self._set_lumos_cal_mode(True)
-            effective_settle = settle_sec
-            if effective_settle is None and lumos_cal.get("ok") and not lumos_cal.get("skipped"):
-                effective_settle = 0.5
+            # Do not force AF/AE/AWB — the wizard checkboxes are the 3A control.
+            # Clear leftover cal-mode so a previous run cannot keep all three locked.
+            self._set_lumos_cal_mode(False)
+            self._apply_profile_camera_unlocked()
             try:
                 status = self._color_cal.start(
-                    settle_sec=effective_settle,
+                    settle_sec=settle_sec,
                     mode=mode,
                     advance_after_capture=advance_after_capture,
                 )
             except (TypeError, ValueError) as exc:
-                self._set_lumos_cal_mode(False)
                 return {"ok": False, "error": str(exc)}
             log.info(
                 "Colour calibration started (%s, %d patches, settle %.1fs)",
@@ -1508,7 +1513,7 @@ class Processor:
             return {
                 "ok": True,
                 **status,
-                "lumos_cal_mode": bool(lumos_cal.get("ok") and not lumos_cal.get("skipped")),
+                "lumos_cal_mode": False,
                 "color_profiles": profile_status(self.config.color),
             }
 
@@ -1540,8 +1545,11 @@ class Processor:
                 log.warning("Profile camera apply failed: %s", result.get("error"))
 
     def _merge_phone_camera_into_slot_unlocked(self) -> None:
-        """Write the phone's current 3A freeze onto the active profile slot."""
-        cam = camera_from_phone(self._lumos.status(self.config.lumos_cam).as_dict())
+        """Store checkbox lock flags plus phone numbers onto the active slot."""
+        cam = camera_for_slot(
+            self._lumos.status(self.config.lumos_cam).as_dict(),
+            self.config.lumos_cam,
+        )
         key = slot_key(self.config.color.profiles)
         existing = lookup_slot(self.config.color.profiles) or empty_slot()
         merged = replace(existing, camera=cam)
@@ -1549,9 +1557,6 @@ class Processor:
             self.config,
             {
                 **store_slot_updates(key, merged),
-                "lumos_cam.af": cam.af,
-                "lumos_cam.ae": cam.ae,
-                "lumos_cam.awb": cam.awb,
                 "lumos_cam.iso": cam.iso,
                 "lumos_cam.exposure_ns": cam.exposure_ns,
                 "lumos_cam.focus_distance": cam.focus_distance,
@@ -1663,11 +1668,9 @@ class Processor:
             matrix = solution.matrix_flat()
             black_enabled = any(v > 0.5 for v in solution.black_level_bgr)
             slot = slot_from_solution(solution)
+            self._set_lumos_cal_mode(False)
             phone = self._lumos.status(self.config.lumos_cam).as_dict()
-            cam = camera_from_phone(phone)
-            existing = lookup_slot(self.config.color.profiles)
-            if not slot_has_camera(replace(slot, camera=cam)) and existing is not None:
-                cam = existing.camera
+            cam = camera_for_slot(phone, self.config.lumos_cam)
             slot = replace(slot, camera=cam)
             key = slot_key(self.config.color.profiles)
             updates = {
@@ -1707,7 +1710,6 @@ class Processor:
                 solution.gamma,
                 f" → {saved_path}" if saved_path else "",
             )
-            self._set_lumos_cal_mode(False)
             self._apply_profile_camera_unlocked()
             return {
                 "ok": True,

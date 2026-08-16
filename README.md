@@ -73,10 +73,10 @@ For an **Android phone camera over USB**, prefer **Lumos Cam** (sibling repo
 or `camera.source: lumos` in YAML. Screen Sight launches the APK over adb,
 forwards control/video ports, and decodes H.264 through an ffmpeg pipe (no
 `/dev/video11`). Zoom, pan, and AF/AE/AWB locks are live (no process restart).
-Colour-cal **Start** temporarily freezes phone 3A so black/white patches
-do not pump AE; **Abort** / **Apply** end that freeze and restore the
-active environment profile. Use the AF/AE/AWB lock checkboxes to persist
-a freeze into the profile — that is separate from the colour-cal freeze.
+Colour-cal **Start** does not change AF/AE/AWB locks — use the wizard
+checkboxes. **Apply** stores those locks (and ISO/exposure/focus/WB gains)
+into the active environment profile; switching back to a calibrated combo
+restores them.
 Scrcpy remains a fallback (`camera.source: scrcpy`) if the APK is not
 installed; that path still needs a v4l2loopback node (see
 `config.example.yaml`) and the protocol in

@@ -14,9 +14,11 @@ Live `color.*` (matrix, manual WB, gamma, black level) is a **view** of
 `color.profiles.selection` + `color.profiles.slots`. The colour stage does not
 know about profiles.
 
-While locked, the phone must not hunt. Unlock is manual only. Each slot
-stores ISO / exposure_ns / focus_distance / awb_gains and restores them on
-profile switch via `POST /locks` with those numbers.
+While locked, the phone must not hunt. Unlock is manual only (wizard
+checkboxes). Colour-cal Start does not force AF/AE/AWB. Each slot stores
+ISO / exposure_ns / focus_distance / awb_gains and restores them on profile
+switch via `POST /locks` with those numbers. Calibrated combos keep that
+freeze; uncalibrated combos with no stored freeze go back to auto.
 
 ## Camera 3A on a slot
 
