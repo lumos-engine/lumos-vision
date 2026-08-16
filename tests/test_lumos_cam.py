@@ -1028,6 +1028,8 @@ def test_lumos_primary_skips_scrcpy(monkeypatch):
     try:
         assert scrcpy_starts == []
         assert app._lumos_is_primary() is True
+        app._tick_scrcpy_watchdog()
+        assert scrcpy_starts == []
     finally:
         app.shutdown()
 
@@ -1295,6 +1297,7 @@ def test_apply_camera_source_lumos_starts_sidecar_and_v4l2_stops_it(monkeypatch)
         assert result["ok"] is True
         assert app.config.camera.source == "lumos"
         assert app.config.lumos_cam.enabled is True
+        assert app.config.scrcpy.enabled is False
         assert app.config.lumos_cam.serial == "phone"
         assert app._lumos.starts >= 1
         assert app._lumos.running is True

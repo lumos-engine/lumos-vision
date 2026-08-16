@@ -151,3 +151,24 @@ def test_camera_source_lumos_mirrors_enabled_flag():
     assert config.lumos_cam.enabled is True
     usb = Config.from_dict({"camera": {"source": "v4l2", "device": "/dev/video2"}})
     assert usb.lumos_cam.enabled is False
+
+
+def test_explicit_scrcpy_source_stays_scrcpy_when_lumos_is_off():
+    config = Config.from_dict({"camera": {"source": "scrcpy"}})
+    assert config.camera.source == "scrcpy"
+    assert config.scrcpy.enabled is True
+    assert config.lumos_cam.enabled is False
+
+
+def test_loader_prefers_lumos_over_stale_scrcpy_source():
+    config = Config.from_dict(
+        {
+            "camera": {"source": "scrcpy", "device": "/dev/video11"},
+            "lumos_cam": {"enabled": True},
+            "scrcpy": {"enabled": True, "auto_restart": True},
+        }
+    )
+    assert config.camera.source == "lumos"
+    assert config.camera.device == ""
+    assert config.lumos_cam.enabled is True
+    assert config.scrcpy.enabled is False

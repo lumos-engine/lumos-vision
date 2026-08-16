@@ -620,7 +620,7 @@ class Processor:
 
     def _bind_camera_to_sink(self, sink: str) -> None:
         sink = (sink or "").strip()
-        if not sink:
+        if not sink or self._lumos_is_primary():
             return
         updates: dict[str, Any] = {}
         if self._capture_source_kind() != "scrcpy":
@@ -699,7 +699,12 @@ class Processor:
     def _tick_scrcpy_watchdog(self) -> None:
         """Restart scrcpy after phone unplug/replug when auto_restart is on."""
         cfg = self.config.scrcpy
-        if self._idle or self._lumos_is_primary() or not cfg.enabled or not cfg.auto_restart:
+        if (
+            self._idle
+            or self._capture_source_kind() != "scrcpy"
+            or not cfg.enabled
+            or not cfg.auto_restart
+        ):
             return
         if self._scrcpy.running:
             return
@@ -1018,6 +1023,7 @@ class Processor:
                 if key in lumos_fields:
                     updates[f"lumos_cam.{key}"] = value
             updates["lumos_cam.enabled"] = True
+            updates["scrcpy.enabled"] = False
         elif source == "scrcpy":
             for key, value in fields.items():
                 if key in scrcpy_fields:

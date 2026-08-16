@@ -705,6 +705,13 @@ def normalize_capture_dict(data: dict[str, Any]) -> dict[str, Any]:
 
     if source == "lumos":
         pass
+    elif lumos_on and source == "scrcpy":
+        # Stale YAML: Lumos Cam was turned on but camera.source was left as
+        # scrcpy. camera.source is the switch; prefer the explicit lumos flag
+        # so the scrcpy watchdog cannot fight Lumos Cam for the phone.
+        source = "lumos"
+        if _legacy_loopback_device(device):
+            device = ""
     elif source == "scrcpy":
         pass
     elif lumos_on and _source_has_no_capture_identity(camera, source):
