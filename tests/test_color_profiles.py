@@ -314,3 +314,71 @@ def test_processor_switches_between_slot_and_passthrough():
         assert app.config.color.gamma == pytest.approx(1.07)
     finally:
         app.shutdown()
+
+
+def test_bind_config_restores_slot_led_brightness():
+    cfg = Config.from_dict(
+        {
+            "lumos_os": {"url": "http://192.168.1.230", "led_brightness": 128},
+            "color": {
+                "profiles": {
+                    "selection": {
+                        "time_of_day": "night",
+                        "lighting": "bed",
+                        "brightness": "full",
+                    },
+                    "slots": {
+                        "time_of_day=night|lighting=bed|brightness=full": {
+                            "led_brightness": 40,
+                        },
+                        "time_of_day=night|lighting=large|brightness=full": {
+                            "led_brightness": 200,
+                        },
+                    },
+                }
+            },
+        }
+    )
+    assert cfg.lumos_os.led_brightness == 40
+    assert profile_status(cfg.color)["led_brightness"] == 40
+    cfg = apply_updates(cfg, {"color.profiles.selection.lighting": "large"})
+    cfg = bind_config(cfg)
+    assert cfg.lumos_os.led_brightness == 200
+    assert profile_status(cfg.color)["led_brightness"] == 200
+
+
+def test_processor_slider_stores_led_brightness_on_active_slot(monkeypatch):
+    from processor.app import Processor
+
+    seen = []
+    monkeypatch.setattr(
+        "processor.app.apply_led_brightness",
+        lambda url, value, **kwargs: seen.append((url, value)) or {"ok": True},
+    )
+    app = Processor(
+        Config.from_dict(
+            {
+                "output": {"v4l2": {"enabled": False}},
+                "lumos_os": {"url": "http://192.168.1.230"},
+                "color": {
+                    "profiles": {
+                        "selection": {"time_of_day": "night", "lighting": "bed"},
+                    }
+                },
+            }
+        )
+    )
+    try:
+        app.update_config({"lumos_os.led_brightness": 77})
+        key = slot_key(app.config.color.profiles)
+        assert app.config.lumos_os.led_brightness == 77
+        assert app.config.color.profiles.slots[key].led_brightness == 77
+        assert seen[-1] == ("http://192.168.1.230", 77)
+
+        app.set_color_profile({"lighting": "large"})
+        assert app.config.lumos_os.led_brightness == 128
+        app.set_color_profile({"lighting": "bed"})
+        assert app.config.lumos_os.led_brightness == 77
+        assert seen[-1] == ("http://192.168.1.230", 77)
+    finally:
+        app.shutdown()

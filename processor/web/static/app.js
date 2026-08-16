@@ -156,6 +156,18 @@ const CONTROLS = [
     ],
   },
   {
+    group: 'Lumos OS (LED box)',
+    hint: 'IP of the Lumos OS device that runs HyperHDR. LED brightness lives on each environment profile and is sent only while HyperHDR is the active plugin.',
+    items: [
+      {
+        path: 'lumos_os.url',
+        type: 'text',
+        label: 'Device URL',
+        placeholder: 'http://192.168.1.230',
+      },
+    ],
+  },
+  {
     group: 'Colour (software — after the camera)',
     items: [
       {
@@ -1367,8 +1379,11 @@ function renderColorProfiles(p) {
   if (meta) {
     const mode = p.calibrated ? 'calibrated' : 'no calibration (passthrough)';
     const cam = p.camera_locked ? '3A frozen' : '3A auto';
-    meta.textContent = `${p.label || '—'} · ${mode} · ${cam} · ${p.calibrated_count || 0}/${p.combo_count || 0} combos`;
+    const led =
+      p.led_brightness == null ? '' : ` · LED ${p.led_brightness}`;
+    meta.textContent = `${p.label || '—'} · ${mode} · ${cam}${led} · ${p.calibrated_count || 0}/${p.combo_count || 0} combos`;
   }
+  syncLedBrightnessSlider(p.led_brightness);
   const chips = $('color-profile-combos');
   if (chips) {
     chips.innerHTML = (p.combos || [])
@@ -1409,6 +1424,11 @@ function fillColorProfileStructure(p) {
     })
     .join('');
   const html = `${selects}
+    <div class="control">
+      <label for="lumos-os-led-brightness">LED brightness (Lumos OS)</label>
+      <output id="lumos-os-led-brightness-out">128</output>
+      <input id="lumos-os-led-brightness" type="range" min="0" max="255" step="1" value="128">
+    </div>
     <p class="source-meta" id="color-profile-meta"></p>
     <div class="profile-combos" id="color-profile-combos"></div>`;
   const section = root.querySelector('.control-group') || root;
@@ -1419,6 +1439,33 @@ function fillColorProfileStructure(p) {
     .querySelectorAll('.control, .source-meta, .profile-combos')
     .forEach((el) => el.remove());
   hint.insertAdjacentHTML('afterend', html);
+  bindLedBrightnessSlider();
+}
+
+function bindLedBrightnessSlider() {
+  const input = $('lumos-os-led-brightness');
+  const out = $('lumos-os-led-brightness-out');
+  if (!input || !out) return;
+  const item = {
+    path: 'lumos_os.led_brightness',
+    min: 0,
+    max: 255,
+    step: 1,
+  };
+  boundInputs.set(item.path, { input, out, kind: 'range', item });
+  input.addEventListener('input', () => {
+    const value = parseInt(input.value, 10);
+    out.textContent = String(value);
+    queueUpdate(item.path, value);
+  });
+}
+
+function syncLedBrightnessSlider(value) {
+  const input = $('lumos-os-led-brightness');
+  const out = $('lumos-os-led-brightness-out');
+  if (!input || value == null || document.activeElement === input) return;
+  input.value = String(value);
+  if (out) out.textContent = String(value);
 }
 
 async function buildColorProfilePanel() {
@@ -1430,9 +1477,10 @@ async function buildColorProfilePanel() {
   section.innerHTML = `
     <h3>Environment profile</h3>
     <p class="hint">Pick the room as it is now. Switching restores that combo's
-    frozen exposure / focus / WB (and colour matrix if calibrated). Uncalibrated
-    combos are colour-passthrough and 3A auto. Locks do not hunt after that
-    unless you unlock them.</p>
+    frozen exposure / focus / WB, LED brightness, and colour matrix if
+    calibrated. Uncalibrated combos are colour-passthrough and 3A auto. LED
+    brightness is still stored per combo and sent to Lumos OS only while
+    HyperHDR is the active plugin.</p>
     <p class="source-meta" id="color-profile-meta">idle</p>
     <div class="profile-combos" id="color-profile-combos"></div>`;
   root.appendChild(section);

@@ -92,8 +92,10 @@ has no bars, then point HyperHDR at that clean frame.
 **Environment profile** (day/night × room lights) first, freeze phone AE/AWB
 on mid-grey, then open `/calibrate/display` fullscreen on the HDMI output and
 **Colour calibrate → Start**. Apply & Save stores the matrix in that combo.
-Uncalibrated combos stay passthrough (no software correction). Add more axes
-via `.agents/skills/color-profiles/SKILL.md`.
+Uncalibrated combos stay passthrough (no software correction). Each combo
+also stores Lumos OS LED brightness (0–255); the wizard slider writes the
+active slot and POSTs it only while HyperHDR is the active plugin on the
+LED box (`lumos_os.url`). Add more axes via `.agents/skills/color-profiles/SKILL.md`.
 
 If ports are busy from a previous run:
 

@@ -49,6 +49,7 @@ from processor.utils.color_profiles import (
     slot_key,
     store_slot_updates,
 )
+from processor.utils.lumos_os import apply_led_brightness, clamp_led_brightness
 from processor.utils.hyperhdr_leds import refresh_video_grabber, set_led_device, set_video_grabber
 from processor.utils.logging import get_logger
 from processor.utils.loopback import (
@@ -259,6 +260,7 @@ class Processor:
             self._start_phone_capture_unlocked()
             self.source = self._make_source_unlocked().start()
             self._set_leds_unlocked(True)
+            self._apply_lumos_os_brightness_unlocked()
             log.info(
                 "Pipeline: %s -> %dx%d @ %.0f fps",
                 " -> ".join(self.pipeline.stage_names) or "(empty)",
@@ -501,6 +503,7 @@ class Processor:
         try:
             self._start_phone_capture_unlocked()
             self._recreate_source_unlocked()
+            self._apply_lumos_os_brightness_unlocked()
         except Exception:
             log.exception("Failed to reopen capture source after idle")
             self._idle = True
@@ -850,6 +853,19 @@ class Processor:
 
         def apply() -> dict[str, Any]:
             new_config = apply_updates(self.config, updates)
+            if "lumos_os.led_brightness" in updates:
+                value = clamp_led_brightness(new_config.lumos_os.led_brightness)
+                key = slot_key(new_config.color.profiles)
+                existing = lookup_slot(new_config.color.profiles) or empty_slot()
+                new_config = apply_updates(
+                    new_config,
+                    {
+                        "lumos_os.led_brightness": value,
+                        **store_slot_updates(
+                            key, replace(existing, led_brightness=value)
+                        ),
+                    },
+                )
             if profiles_touch_selection(updates):
                 new_config = bind_config(new_config)
             old_lumos = self.config.lumos_cam
@@ -895,6 +911,10 @@ class Processor:
                 # Hardware UVC knobs live on the camera, not in the colour stage.
                 self._apply_camera_controls(dict(new_config.camera.controls))
             log.info("Config updated: %s", ", ".join(sorted(updates)))
+            if any(
+                key == "lumos_os" or key.startswith("lumos_os.") for key in updates
+            ) or profiles_touch_selection(updates):
+                self._apply_lumos_os_brightness_unlocked()
             return config_to_dict(new_config)
 
         return self.call(apply)
@@ -1537,12 +1557,20 @@ class Processor:
         self.config = bind_config(self.config)
         apply_pipeline_config(self.pipeline, self.config)
         self._apply_profile_camera_unlocked()
+        self._apply_lumos_os_brightness_unlocked()
 
     def _apply_profile_camera_unlocked(self) -> None:
         if self.config.lumos_cam.enabled and self._lumos.running and not self._idle:
             result = self._lumos.apply_live(self.config.lumos_cam)
             if not result.get("ok"):
                 log.warning("Profile camera apply failed: %s", result.get("error"))
+
+    def _apply_lumos_os_brightness_unlocked(self) -> dict[str, Any]:
+        """Push the active slot's LED brightness to Lumos OS if HyperHDR is on."""
+        if self._idle:
+            return {"ok": True, "skipped": True, "reason": "idle"}
+        value = clamp_led_brightness(self.config.lumos_os.led_brightness)
+        return apply_led_brightness(self.config.lumos_os.url, value)
 
     def _merge_phone_camera_into_slot_unlocked(self) -> None:
         """Store checkbox lock flags plus phone numbers onto the active slot."""
@@ -1671,7 +1699,13 @@ class Processor:
             self._set_lumos_cal_mode(False)
             phone = self._lumos.status(self.config.lumos_cam).as_dict()
             cam = camera_for_slot(phone, self.config.lumos_cam)
-            slot = replace(slot, camera=cam)
+            slot = replace(
+                slot,
+                camera=cam,
+                led_brightness=clamp_led_brightness(
+                    self.config.lumos_os.led_brightness
+                ),
+            )
             key = slot_key(self.config.color.profiles)
             updates = {
                 "color.white_balance": "manual",

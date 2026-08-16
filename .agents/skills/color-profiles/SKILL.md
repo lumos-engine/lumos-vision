@@ -20,6 +20,15 @@ ISO / exposure_ns / focus_distance / awb_gains and restores them on profile
 switch via `POST /locks` with those numbers. Calibrated combos keep that
 freeze; uncalibrated combos with no stored freeze go back to auto.
 
+Each slot also stores **Lumos OS LED brightness** (`led_brightness`, 0–255).
+That is the LED box (`lumos_os.url`), not HyperHDR JSON-RPC and not
+`color.brightness` (software post-process). `bind_config` copies it onto
+`lumos_os.led_brightness`; the processor POSTs `/api/v1/brightness` only
+when Lumos OS reports HyperHDR in use (`hyperhdr_active` or
+`active_plugin == "hyperhdr"`, and not `in_fallback` / `local_override`).
+Uncalibrated combos still keep their LED value. Do not put this on
+`ColorStage`.
+
 ## Camera 3A on a slot
 
 Do not put 3A on `ColorStage`. `ColorProfileSlot.camera` (`ProfileCameraState`)
@@ -93,8 +102,9 @@ axis in the colour stage.
 |---|---|
 | Dimensions / default selection | `processor/utils/color_profiles.py` |
 | Slot helpers / bind | same |
-| Dataclasses | `processor/config/schema.py` (`ColorProfilesConfig`) |
+| Dataclasses | `processor/config/schema.py` (`ColorProfilesConfig`, `ColorProfileSlot`, `LumosOsConfig`) |
 | Apply / switch | `processor/app.py` `set_color_profile`, `apply_color_calibration` |
+| Lumos OS HTTP | `processor/utils/lumos_os.py` |
 | HTTP | `processor/web/server.py` `GET/POST /api/color/profile` |
 | Tests | `tests/test_color_profiles.py` |
 

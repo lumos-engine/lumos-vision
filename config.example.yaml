@@ -179,6 +179,14 @@ logging:
 #   auto_restart: true              # restart scrcpy when phone USB reconnects
 #   restart_interval_sec: 5.0
 
+# Lumos OS LED box (the device that runs HyperHDR as a plugin). Distinct
+# from power.hyperhdr_url (HyperHDR JSON-RPC on the PC). Empty url skips
+# brightness API calls. LED brightness 0–255 is stored per environment
+# profile and only POSTed while HyperHDR is the active plugin.
+# lumos_os:
+#   url: "http://192.168.1.230"
+#   led_brightness: 128
+
 # When the TV is offline, release the USB camera, pause the pipeline, keep
 # writing black frames to /dev/video10 (HyperHDR grabber stays up), and
 # disable HyperHDR's LEDDEVICE for true LED power-off.  Empty tv_host disables.

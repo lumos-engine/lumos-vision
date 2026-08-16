@@ -30,6 +30,10 @@ from processor.config.schema import (
     ProfileOption,
 )
 from processor.utils.color_calibrate import IDENTITY_MATRIX_FLAT, iso_now
+from processor.utils.lumos_os import (
+    DEFAULT_LED_BRIGHTNESS,
+    clamp_led_brightness,
+)
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _YAML_BOOLEAN_WORDS = frozenset({"on", "off", "yes", "no", "true", "false"})
@@ -278,6 +282,12 @@ def auto_camera_updates() -> dict[str, Any]:
     }
 
 
+def led_brightness_live_updates(slot: ColorProfileSlot | None) -> dict[str, Any]:
+    """Copy this combo's Lumos OS LED brightness onto the live config view."""
+    value = DEFAULT_LED_BRIGHTNESS if slot is None else slot.led_brightness
+    return {"lumos_os.led_brightness": clamp_led_brightness(value)}
+
+
 def camera_live_updates(slot: ColorProfileSlot | None) -> dict[str, Any]:
     """Restore a slot's phone 3A, or auto if this combo has no freeze."""
     if not slot_has_camera(slot) or slot is None:
@@ -483,6 +493,7 @@ def bind_config(config: Config) -> Config:
     elif live_looks_calibrated(config.color):
         updates.update(bypass_live_updates())
     updates.update(camera_live_updates(slot))
+    updates.update(led_brightness_live_updates(slot))
     if not updates:
         return config
     return apply_updates(config, updates)
@@ -602,6 +613,9 @@ def profile_status(color: ColorConfig) -> dict[str, Any]:
         "combo_count": len(combos),
         "camera": asdict(slot.camera) if slot is not None else asdict(ProfileCameraState()),
         "camera_locked": slot_has_camera(slot),
+        "led_brightness": clamp_led_brightness(
+            slot.led_brightness if slot is not None else DEFAULT_LED_BRIGHTNESS
+        ),
     }
 
 

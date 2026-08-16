@@ -313,6 +313,8 @@ class ColorProfileSlot:
     notes: list[str] = field(default_factory=list)
     patch_means_bgr: dict[str, list[float]] = field(default_factory=dict)
     camera: ProfileCameraState = field(default_factory=ProfileCameraState)
+    #: Lumos OS LED strip brightness (0–255). Independent of colour cal.
+    led_brightness: int = 128
 
 
 @dataclass
@@ -514,6 +516,21 @@ class PowerConfig:
 
 
 @dataclass
+class LumosOsConfig:
+    """Lumos OS LED box (HyperHDR plugin host).
+
+    Distinct from ``power.hyperhdr_url`` (HyperHDR JSON-RPC on the PC).
+    Empty ``url`` skips brightness API calls. LED brightness lives on the
+    active colour-profile slot and is copied here as a live view.
+    """
+
+    #: Base URL or host, e.g. ``http://192.168.1.230``. Empty = skip.
+    url: str = ""
+    #: Live LED brightness 0–255 (view of the active profile slot).
+    led_brightness: int = 128
+
+
+@dataclass
 class ScrcpyConfig:
     """Optional Android phone camera via scrcpy → v4l2loopback.
 
@@ -620,6 +637,7 @@ class Config:
     web: WebConfig = field(default_factory=WebConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     power: PowerConfig = field(default_factory=PowerConfig)
+    lumos_os: LumosOsConfig = field(default_factory=LumosOsConfig)
     scrcpy: ScrcpyConfig = field(default_factory=ScrcpyConfig)
     lumos_cam: LumosCamConfig = field(default_factory=LumosCamConfig)
 
