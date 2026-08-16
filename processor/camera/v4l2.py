@@ -86,6 +86,34 @@ def yuyv_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) 
     return cv2.cvtColor(yuyv, cv2.COLOR_YUV2BGR_YUYV)
 
 
+def i420_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) -> np.ndarray:
+    """Unpack planar YUV420 (I420 / YU12) into BGR8.
+
+    scrcpy's v4l2 sink writes this; YUYV is not available on that path.
+    """
+    width, height = int(width), int(height)
+    expected = width * height * 3 // 2
+    raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+    yuv = raw.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
+
+
+def yv12_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) -> np.ndarray:
+    width, height = int(width), int(height)
+    expected = width * height * 3 // 2
+    raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+    yuv = raw.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_YV12)
+
+
+def nv12_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) -> np.ndarray:
+    width, height = int(width), int(height)
+    expected = width * height * 3 // 2
+    raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+    yuv = raw.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
+
+
 class _LoopbackCapture:
     """``read()``-based capture for v4l2loopback writers (ffmpeg / scrcpy).
 
@@ -101,6 +129,7 @@ class _LoopbackCapture:
         self.height = height
         self.size_image = size_image
         self.fourcc = fourcc
+        self._warned_fourcc = False
 
     @classmethod
     def open(cls, path: str) -> "_LoopbackCapture | None":
@@ -133,6 +162,11 @@ class _LoopbackCapture:
             return None
         if size_image <= 0:
             size_image = int(bpl) * height if bpl else width * height * 2
+        fourcc_u = fourcc.upper().strip()
+        if fourcc_u in {"YU12", "I420", "YV12", "NV12", "NV21"}:
+            planar = int(width) * int(height) * 3 // 2
+            if size_image < planar:
+                size_image = planar
         log.info(
             "V4L2 loopback %s: read() %dx%d fourcc=%s (%d bytes)",
             path,
@@ -200,7 +234,28 @@ class _LoopbackCapture:
             if fourcc == "RGB3":
                 return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             return image
-        log.warning("loopback %s fourcc %s is not YUYV/BGR; dropping frame", self.path, fourcc)
+        if fourcc in {"YU12", "I420", "YV12", "NV12", "NV21"}:
+            if width <= 0 or height <= 0 or height % 2:
+                return None
+            expected = width * height * 3 // 2
+            if len(data) < expected:
+                return None
+            if fourcc in {"YU12", "I420"}:
+                return i420_to_bgr(data, width, height)
+            if fourcc == "YV12":
+                return yv12_to_bgr(data, width, height)
+            if fourcc == "NV21":
+                raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+                yuv = raw.reshape((height * 3 // 2, width))
+                return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV21)
+            return nv12_to_bgr(data, width, height)
+        if not self._warned_fourcc:
+            self._warned_fourcc = True
+            log.warning(
+                "loopback %s fourcc %s is not YUYV/YUV420/BGR; dropping frames",
+                self.path,
+                fourcc,
+            )
         return None
 
     def get(self, prop: int) -> float:
