@@ -636,7 +636,7 @@ class Processor:
             self._scrcpy.stop()
             return self._start_lumos_unlocked(restart=restart)
         if kind == "scrcpy":
-            self._lumos.stop()
+            self._lumos.release_app(self.config.lumos_cam)
             return self._start_scrcpy_unlocked(restart=restart)
         self._lumos.stop()
         self._scrcpy.stop()
@@ -729,6 +729,15 @@ class Processor:
         log.info("scrcpy not running — restarting (phone reconnected?)")
         result = self._start_scrcpy_unlocked(restart=True)
         if not result.get("ok") or not result.get("running"):
+            error = result.get("error") or self._scrcpy.status(cfg).last_error
+            if error:
+                log.warning("scrcpy restart failed: %s", error)
+            return
+        if result.get("ready") is False:
+            log.warning(
+                "scrcpy is up but %s is not capturing yet — not opening the reader",
+                (cfg.v4l2_sink or "/dev/video11"),
+            )
             return
         try:
             self._recreate_source_unlocked()
@@ -1048,7 +1057,27 @@ class Processor:
             recreated: dict[str, Any] = {"ok": True, "skipped": True}
             if not self._idle:
                 phone = self._start_phone_capture_unlocked(restart=True)
-                recreated = self._recreate_source_unlocked()
+                scrcpy_ready = (
+                    self._capture_source_kind() != "scrcpy"
+                    or (
+                        bool(phone.get("ok"))
+                        and bool(phone.get("running"))
+                        and phone.get("ready", True)
+                    )
+                )
+                if scrcpy_ready:
+                    recreated = self._recreate_source_unlocked()
+                else:
+                    log.warning(
+                        "Not opening %s until scrcpy is writing frames: %s",
+                        self.config.scrcpy.v4l2_sink or "/dev/video11",
+                        phone.get("error") or "not ready",
+                    )
+                    recreated = {
+                        "ok": False,
+                        "skipped": True,
+                        "error": phone.get("error") or "scrcpy not ready",
+                    }
             saved_path = None
             if save:
                 saved_path = self.save()
@@ -1245,6 +1274,7 @@ class Processor:
                 and action_name != "stop"
                 and scrcpy_result.get("ok")
                 and scrcpy_result.get("running")
+                and scrcpy_result.get("ready", True)
             ):
                 # Reopen capture after the loopback producer respawns.
                 try:

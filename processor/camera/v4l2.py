@@ -106,7 +106,7 @@ class _LoopbackCapture:
     def open(cls, path: str) -> "_LoopbackCapture | None":
         fd = -1
         last_exc: OSError | None = None
-        for flags in (os.O_RDWR, os.O_RDONLY):
+        for flags in (os.O_RDONLY, os.O_RDWR):
             try:
                 fd = os.open(path, flags)
                 last_exc = None

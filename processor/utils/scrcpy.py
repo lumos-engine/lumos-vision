@@ -13,6 +13,7 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -223,6 +224,9 @@ def build_scrcpy_command(cfg: ScrcpyConfig, *, binary: str | None = None) -> lis
         cmd.append("--no-audio")
     if cfg.no_playback:
         cmd.append("--no-playback")
+        # --no-playback still creates the scrcpy window (disconnected icon).
+        # Headless v4l2 capture must not flash a window on the Ubuntu desktop.
+        cmd.append("--no-window")
     serial = (cfg.serial or "").strip()
     if serial:
         cmd.extend(["-s", serial])
@@ -241,6 +245,8 @@ class ScrcpyManager:
         self._command: list[str] = []
         self._last_error = ""
         self._binary = "scrcpy"
+        self._output_chunks: list[str] = []
+        self._drain: threading.Thread | None = None
 
     @property
     def running(self) -> bool:
@@ -250,7 +256,8 @@ class ScrcpyManager:
         code = proc.poll()
         if code is not None:
             if code != 0 and not self._last_error:
-                self._last_error = f"scrcpy exited with code {code}"
+                output = self._captured_output()
+                self._last_error = output or f"scrcpy exited with code {code}"
             self._proc = None
             return False
         return True
@@ -334,10 +341,11 @@ class ScrcpyManager:
             self._proc = None
             return {"ok": False, "error": self._last_error, "running": False}
 
+        self._start_output_drain(self._proc)
         ready = self._wait_until_ready(cfg)
         proc = self._proc
         if proc is not None and proc.poll() is not None:
-            output = self._read_process_output(proc)
+            output = self._captured_output() or self._read_process_output(proc)
             self._proc = None
             self._last_error = output.strip() or f"scrcpy exited with code {proc.returncode}"
             if "Failed to open output device" in self._last_error:
@@ -346,11 +354,11 @@ class ScrcpyManager:
                     "(Screen Sight) or wrong /dev/videoN"
                 )
             log.error("scrcpy startup failed: %s", self._last_error)
-            return {"ok": False, "error": self._last_error, "running": False}
+            return {"ok": False, "error": self._last_error, "running": False, "ready": False}
 
         if not self.running or proc is None:
             self._last_error = self._last_error or "scrcpy failed to stay running"
-            return {"ok": False, "error": self._last_error, "running": False}
+            return {"ok": False, "error": self._last_error, "running": False, "ready": False}
 
         if not ready:
             log.warning(
@@ -424,6 +432,29 @@ class ScrcpyManager:
             time.sleep(0.25)
         return False
 
+    def _start_output_drain(self, proc: subprocess.Popen[str]) -> None:
+        self._output_chunks = []
+        stdout = proc.stdout
+        if stdout is None:
+            return
+
+        def _read() -> None:
+            try:
+                for line in stdout:
+                    self._output_chunks.append(line)
+                    if len(self._output_chunks) > 80:
+                        del self._output_chunks[:40]
+            except Exception:
+                return
+
+        self._drain = threading.Thread(
+            target=_read, name="scrcpy-log", daemon=True
+        )
+        self._drain.start()
+
+    def _captured_output(self) -> str:
+        return "".join(self._output_chunks[-40:]).strip()
+
     @staticmethod
     def _read_process_output(proc: subprocess.Popen[str]) -> str:
         try:
@@ -467,8 +498,8 @@ def sink_has_capture(device: str) -> bool:
             timeout=2.0,
         )
     except (OSError, subprocess.TimeoutExpired):
-        # Device node present is enough when v4l2-ctl is missing.
-        return True
+        # Do not claim ready: opening the reader first steals exclusive_caps.
+        return False
     if result.returncode != 0:
         return False
     return "video capture" in _device_caps_window(result.stdout or "")

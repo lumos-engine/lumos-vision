@@ -102,8 +102,14 @@ def test_build_scrcpy_command_includes_camera_and_sink():
     assert "--v4l2-sink=/dev/video11" in cmd
     assert "--no-audio" in cmd
     assert "--no-playback" in cmd
+    assert "--no-window" in cmd
     assert cmd[cmd.index("-s") + 1] == "452ee42b0506"
     assert "-V" in cmd and "info" in cmd
+    windowed = build_scrcpy_command(
+        ScrcpyConfig(enabled=True, no_playback=False, v4l2_sink="/dev/video11"),
+        binary="/opt/scrcpy/scrcpy",
+    )
+    assert "--no-window" not in windowed
 
 
 def test_step_zoom_matches_scrcpy_factor():

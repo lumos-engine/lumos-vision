@@ -1093,6 +1093,33 @@ class LumosCamManager:
         self._kill_ffmpeg_unlocked()
         return {"ok": True, "running": False}
 
+    def release_app(self, cfg: LumosCamConfig) -> dict[str, Any]:
+        """Force-stop Lumos Cam so scrcpy can open the phone camera."""
+        self.stop()
+        pkg = (cfg.package or PACKAGE).strip()
+        if not pkg:
+            return {"ok": True, "skipped": True}
+        if not adb_device_ready(cfg.serial, adb=(cfg.adb or "adb")):
+            return {"ok": True, "skipped": True, "reason": "no_adb"}
+        try:
+            result = subprocess.run(
+                adb_argv(cfg, "shell", "am", "force-stop", pkg),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=8.0,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log.warning("Could not force-stop Lumos Cam: %s", exc)
+            return {"ok": False, "error": str(exc)}
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            log.warning("force-stop %s failed: %s", pkg, err or result.returncode)
+            return {"ok": False, "error": err or f"exit {result.returncode}"}
+        log.info("Stopped Lumos Cam on the phone (%s) so the camera is free", pkg)
+        time.sleep(0.4)
+        return {"ok": True}
+
     def restart(self, cfg: LumosCamConfig) -> dict[str, Any]:
         self.stop()
         return self.start(cfg)
