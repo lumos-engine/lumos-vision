@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from processor.config.loader import apply_updates, config_to_dict, load_config, save_config
-from processor.config.schema import Config, ConfigError
+from processor.config.schema import Config, ConfigError, ProfileCameraState
 from processor.utils.color_calibrate import IDENTITY_MATRIX_FLAT
 from processor.utils.color_profiles import (
     all_combos,
     bind_config,
+    camera_after_cal_freeze,
     migrate_slots_add_dimension,
     profile_status,
     resolve_selection,
@@ -289,3 +290,35 @@ def test_processor_switches_between_slot_and_passthrough():
         assert app.config.color.gamma == pytest.approx(1.07)
     finally:
         app.shutdown()
+
+
+def test_camera_after_cal_freeze_does_not_force_all_locks():
+    intended = ProfileCameraState(ae="locked", iso=0, exposure_ns=0)
+    frozen = ProfileCameraState(
+        af="locked",
+        ae="locked",
+        awb="locked",
+        iso=400,
+        exposure_ns=12_500_000,
+        focus_distance=0.18,
+        awb_gains=[1.7, 1.0, 1.0, 1.4],
+    )
+    out = camera_after_cal_freeze(intended, frozen)
+    assert out.af == "auto"
+    assert out.ae == "locked"
+    assert out.awb == "auto"
+    assert out.iso == 400
+    assert out.exposure_ns == 12_500_000
+    assert out.focus_distance == pytest.approx(-1.0)
+    assert out.awb_gains == []
+
+
+def test_camera_after_cal_freeze_all_auto_stays_auto():
+    out = camera_after_cal_freeze(
+        ProfileCameraState(),
+        ProfileCameraState(af="locked", ae="locked", awb="locked", iso=200),
+    )
+    assert out.af == "auto"
+    assert out.ae == "auto"
+    assert out.awb == "auto"
+    assert out.iso == 0

@@ -313,6 +313,22 @@ function markLumosDirty() {
   lumosFormDirty = true;
 }
 
+function applyLumosLocks(phone, config) {
+  const cal = Boolean(phone?.cal_mode);
+  lumosPanelState.cal_mode = cal;
+  const persisted = config?.lumos_cam || {};
+  if (cal) {
+    // Colour-cal freeze locks the sensor; the boxes are profile intent.
+    lumosPanelState.af = persisted.af || 'auto';
+    lumosPanelState.ae = persisted.ae || 'auto';
+    lumosPanelState.awb = persisted.awb || 'auto';
+    return;
+  }
+  if (phone?.af) lumosPanelState.af = phone.af;
+  if (phone?.ae) lumosPanelState.ae = phone.ae;
+  if (phone?.awb) lumosPanelState.awb = phone.awb;
+}
+
 function applyLumosPanelFromConfig(config) {
   const lc = config?.lumos_cam || {};
   lumosPanelState = {
@@ -381,7 +397,9 @@ function syncLumosForm({ force = false } = {}) {
   }
   const setLock = (id, value) => {
     const el = $(id);
-    if (el) el.checked = value === 'locked';
+    if (!el) return;
+    el.checked = value === 'locked';
+    el.disabled = Boolean(lumosPanelState.cal_mode);
   };
   if (force || !lumosFormDirty) {
     setLock('lumos-af', lumosPanelState.af);
@@ -434,13 +452,10 @@ async function postLumos(action, fields, { save = false } = {}) {
     if (result.config) {
       applyLumosPanelFromConfig(result.config);
     }
-    // Phone 3A wins over YAML. Cal mode locks the sensor without writing
-    // lumos_cam.af/ae/awb, so echoing config would uncheck the lock boxes.
+    // Phone 3A wins over YAML, except during colour-cal freeze — that
+    // overlay locks the sensor without changing the profile checkboxes.
     if (result.lumos_cam) {
-      if (result.lumos_cam.af) lumosPanelState.af = result.lumos_cam.af;
-      if (result.lumos_cam.ae) lumosPanelState.ae = result.lumos_cam.ae;
-      if (result.lumos_cam.awb) lumosPanelState.awb = result.lumos_cam.awb;
-      lumosPanelState.cal_mode = Boolean(result.lumos_cam.cal_mode);
+      applyLumosLocks(result.lumos_cam, result.config);
       lumosPanelState.iso = result.lumos_cam.iso ?? lumosPanelState.iso;
       lumosPanelState.exposure_ns = result.lumos_cam.exposure_ns ?? lumosPanelState.exposure_ns;
       lumosPanelState.focus_distance = result.lumos_cam.focus_distance ?? lumosPanelState.focus_distance;
@@ -511,9 +526,9 @@ async function buildLumosCamPanel() {
     <p class="hint">Locks freeze the current exposure / focus / white balance into the
     active environment profile. Switching profiles restores those numbers.
     Uncheck to let the phone hunt; it will not auto-lock again until you tick
-    it or switch profiles. Colour calibrate → Start also freezes 3A for that
-    run only (so black/white patches do not pump AE) — that is not a substitute
-    for these checkboxes.</p>
+    it or switch profiles. Colour calibrate → Start freezes the sensor for that
+    run only; the boxes stay as this profile's saved locks and re-enable after
+    Abort / Apply.</p>
     <p class="source-meta" id="lumos-meta"></p>
     <div class="source-actions">
       <button type="button" class="btn" id="btn-lumos-zoom-out">Zoom −</button>
@@ -1195,8 +1210,8 @@ async function buildColorCalPanel() {
     <h3>Colour calibrate</h3>
     <p class="hint">Saves into the <strong>active environment profile</strong> above.
     Open the patch page fullscreen on the HDMI TV. Lock AE/AWB on mid-grey first
-    if you want that freeze in this profile. <strong>Start</strong> also freezes
-    3A for the patch run so black/white patches do not pump exposure.
+    if you want that freeze in this profile. <strong>Start</strong> freezes the
+    sensor for the patch run (boxes above stay as saved profile locks).
     Uncalibrated combos stay passthrough (no matrix).</p>
     <div class="control">
       <label class="check"><input type="radio" name="color-cal-mode" id="color-cal-mode-manual" value="manual" checked> Manual capture</label>
@@ -1975,9 +1990,7 @@ async function refresh() {
       if (status.lumos_cam.zoom != null) lumosPanelState.camera_zoom = Number(status.lumos_cam.zoom);
       if (status.lumos_cam.pan_x != null) lumosPanelState.pan_x = Number(status.lumos_cam.pan_x);
       if (status.lumos_cam.pan_y != null) lumosPanelState.pan_y = Number(status.lumos_cam.pan_y);
-      if (status.lumos_cam.af) lumosPanelState.af = status.lumos_cam.af;
-      if (status.lumos_cam.ae) lumosPanelState.ae = status.lumos_cam.ae;
-      if (status.lumos_cam.awb) lumosPanelState.awb = status.lumos_cam.awb;
+      applyLumosLocks(status.lumos_cam, status.config);
       lumosPanelState.iso = status.lumos_cam.iso ?? null;
       lumosPanelState.exposure_ns = status.lumos_cam.exposure_ns ?? null;
       lumosPanelState.focus_distance = status.lumos_cam.focus_distance ?? null;
@@ -1988,6 +2001,10 @@ async function refresh() {
       }
       syncLumosForm();
     } else {
+      ['lumos-af', 'lumos-ae', 'lumos-awb'].forEach((id) => {
+        const el = $(id);
+        if (el) el.disabled = Boolean(lumosPanelState.cal_mode);
+      });
       syncLumosMeta();
     }
   }
