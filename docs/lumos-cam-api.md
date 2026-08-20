@@ -190,8 +190,8 @@ or absolute values:
 
 Omitted keys unchanged. The on-phone UI follows the phone (portrait or
 landscape); buttons stay upright with the window. The preview letterboxes
-the camera buffer into the remaining safe area. `orientation` follows how
-the phone is held (plus `frame_rotation`) so the host ffmpeg filter can
-keep the stream upright. Flips apply to the preview and to the host ffmpeg
-filter.
+the camera buffer into the remaining safe area. `orientation` follows the
+phone's physical orientation from the accelerometer (plus `frame_rotation`),
+not whether the Lumos Cam UI is on screen. Flips apply to the preview and
+to the host ffmpeg filter.
 

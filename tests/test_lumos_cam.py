@@ -337,6 +337,63 @@ def test_apply_live_can_lock_one_axis_during_cal_mode():
     assert "awb" not in locks
 
 
+class _FakeVideoSock:
+    def getpeername(self):
+        return ("127.0.0.1", 8766)
+
+
+class _StatusClient:
+    def __init__(self, phone):
+        self.phone = phone
+
+    def status(self):
+        return self.phone
+
+
+def test_sync_output_transform_ignores_device_orientation_flap():
+    from processor.utils.lumos_cam import LumosCamManager
+
+    mgr = LumosCamManager()
+    mgr._sock = _FakeVideoSock()
+    mgr._stream_transform = (0, False, False)
+    mgr._stream_frame_rotation = 0
+    mgr.client = _StatusClient(
+        {
+            "ok": True,
+            "orientation": 90,
+            "frame_rotation": 0,
+            "flip_h": False,
+            "flip_v": False,
+        }
+    )
+    result = mgr.sync_output_transform(LumosCamConfig())
+    assert result.get("unchanged") is True
+    assert result.get("pinned") is True
+    assert mgr._stream_transform == (0, False, False)
+
+
+def test_sync_output_transform_applies_frame_rotate():
+    from processor.utils.lumos_cam import LumosCamManager
+
+    mgr = LumosCamManager()
+    mgr._sock = _FakeVideoSock()
+    mgr._stream_transform = (0, False, False)
+    mgr._stream_frame_rotation = 0
+    mgr.client = _StatusClient(
+        {
+            "ok": True,
+            "orientation": 90,
+            "frame_rotation": 90,
+            "flip_h": False,
+            "flip_v": False,
+        }
+    )
+    result = mgr.sync_output_transform(LumosCamConfig())
+    assert result.get("unchanged") is not True
+    assert mgr._stream_transform == (90, False, False)
+    assert mgr._stream_frame_rotation == 90
+
+
 def test_manager_start_stop_with_fakes(monkeypatch, tmp_path):
     sink = tmp_path / "video11"
     sink.write_text("")

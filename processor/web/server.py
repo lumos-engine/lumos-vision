@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -530,6 +531,12 @@ class CalibrationServer(ThreadingHTTPServer):
     def __init__(self, address, processor: Processor):
         super().__init__(address, _Handler)
         self.processor = processor
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def start_web_server(processor: Processor) -> tuple[CalibrationServer, threading.Thread]:

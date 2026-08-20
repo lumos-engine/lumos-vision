@@ -659,6 +659,7 @@ class LumosCamManager:
         self._stderr_tail: list[str] = []
         self._logged_first = False
         self._stream_transform: tuple[int, bool, bool] = (0, False, False)
+        self._stream_frame_rotation: int = 0
         self._sock: socket.socket | None = None
         self._host_transform = False
         self._video_via = ""
@@ -882,6 +883,7 @@ class LumosCamManager:
         self._close_sock()
         rotation, flip_h, flip_v = _phone_transform(phone)
         self._stream_transform = (rotation, flip_h, flip_v)
+        self._stream_frame_rotation = int(phone.get("frame_rotation") or 0)
         self._host_transform = True
         self._frame_wh = output_frame_size(cfg, rotation)
         self._pending = b""
@@ -931,6 +933,7 @@ class LumosCamManager:
         self._ffmpeg = resolve_ffmpeg(cfg.ffmpeg)
         rotation, flip_h, flip_v = _phone_transform(phone)
         self._stream_transform = (rotation, flip_h, flip_v)
+        self._stream_frame_rotation = int(phone.get("frame_rotation") or 0)
         self._frame_wh = output_frame_size(cfg, rotation)
         self._pending = b""
         self._held_frame = None
@@ -1153,7 +1156,7 @@ class LumosCamManager:
             return {"ok": False, "error": str(exc)}
 
     def sync_output_transform(self, cfg: LumosCamConfig) -> dict[str, Any]:
-        """Respawn ffmpeg when the phone's orientation/flip changed."""
+        """Apply FRAME/flip changes. Ignore device-orientation flaps while streaming."""
         if not self.running:
             return {"ok": True, "skipped": True}
         try:
@@ -1164,16 +1167,37 @@ class LumosCamManager:
         wanted = _phone_transform(phone)
         if wanted == self._stream_transform:
             return {"ok": True, "unchanged": True, "running": True}
-        log.info(
-            "Lumos Cam output transform changed %s -> %s — restarting ffmpeg",
-            self._stream_transform,
-            wanted,
-        )
+        new_frame = int(phone.get("frame_rotation") or 0) % 360
+        old_frame = int(self._stream_frame_rotation or 0) % 360
+        old_rot, old_fh, old_fv = self._stream_transform
+        new_rot, new_fh, new_fv = wanted
+        if (new_fh, new_fv, new_frame) == (old_fh, old_fv, old_frame) and new_rot != old_rot:
+            log.info(
+                "Lumos Cam device orientation %s° -> %s° while streaming — keeping %s",
+                old_rot,
+                new_rot,
+                self._stream_transform,
+            )
+            return {"ok": True, "unchanged": True, "running": True, "pinned": True}
+        if self._sock is not None:
+            log.info(
+                "Lumos Cam output transform changed %s -> %s — applying to JPEG decode",
+                self._stream_transform,
+                wanted,
+            )
+        else:
+            log.info(
+                "Lumos Cam output transform changed %s -> %s — restarting ffmpeg",
+                self._stream_transform,
+                wanted,
+            )
         return self._respawn_ffmpeg(cfg, phone)
 
     def _respawn_ffmpeg(self, cfg: LumosCamConfig, phone: dict[str, Any]) -> dict[str, Any]:
         if self._sock is not None:
             self._stream_transform = _phone_transform(phone)
+            self._stream_frame_rotation = int(phone.get("frame_rotation") or 0) % 360
+            self._frame_wh = output_frame_size(cfg, self._stream_transform[0])
             return {"ok": True, "running": True, "ready": True}
         self._kill_ffmpeg_unlocked()
         return self._start_ffmpeg(cfg, phone, wait=False)

@@ -8,6 +8,7 @@ live previews.
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -139,6 +140,12 @@ class MjpegServer(ThreadingHTTPServer):
         self.broker = broker
         self.fps = fps
         self.quality = quality
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class MjpegSink(Sink):
