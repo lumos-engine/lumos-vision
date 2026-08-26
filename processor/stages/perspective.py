@@ -22,6 +22,10 @@ INTERPOLATION = {
     "area": cv2.INTER_AREA,
 }
 
+#: Small rectified preview when ``led_path: ddp`` and the wizard is watching.
+_DDP_PREVIEW_WIDTH = 320
+_DDP_PREVIEW_HEIGHT = 180
+
 
 class PerspectiveStage(Stage):
     name = "perspective"
@@ -31,10 +35,12 @@ class PerspectiveStage(Stage):
         self.config: PerspectiveConfig = config
         self._matrix: np.ndarray | None = None
         self._matrix_for: np.ndarray | None = None
+        self._matrix_size: tuple[int, int] | None = None
 
     def reset(self) -> None:
         self._matrix = None
         self._matrix_for = None
+        self._matrix_size = None
 
     def on_config_changed(self) -> None:
         self.reset()
@@ -56,8 +62,16 @@ class PerspectiveStage(Stage):
             ctx.skipped[self.name] = "no corners"
             return
 
-        width = max(16, int(self.config.width))
-        height = max(16, int(self.config.height))
+        ddp = self.state.led_path == "ddp"
+        if ddp and not ctx.collect_debug:
+            ctx.skipped[self.name] = "ddp"
+            return
+
+        if ddp:
+            width, height = _DDP_PREVIEW_WIDTH, _DDP_PREVIEW_HEIGHT
+        else:
+            width = max(16, int(self.config.width))
+            height = max(16, int(self.config.height))
 
         # The homography only changes when the corners do, which -- thanks to
         # the deadband on the corner smoother -- is rarely.  Caching it keeps
@@ -65,10 +79,12 @@ class PerspectiveStage(Stage):
         if (
             self._matrix is None
             or self._matrix_for is None
+            or self._matrix_size != (width, height)
             or not np.array_equal(self._matrix_for, corners)
         ):
             self._matrix = homography_to_rect(corners, width, height)
             self._matrix_for = corners.copy()
+            self._matrix_size = (width, height)
 
         warped = cv2.warpPerspective(
             ctx.source,

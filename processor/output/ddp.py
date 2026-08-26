@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 
 from processor.config.schema import DdpConfig
-from processor.led.sampler import LedLayout, LedSampler
+from processor.led.sampler import LedLayout, LedSampler, panel_insets_from_meta
 from processor.output.base import Sink
 from processor.utils.logging import get_logger
 
@@ -101,7 +101,7 @@ class DdpSink(Sink):
             self.sampler.layout.count,
         )
 
-    def write(self, image: np.ndarray) -> bool:
+    def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         if self._socket is None:
             return False
 
@@ -111,7 +111,7 @@ class DdpSink(Sink):
                 return True
             self._next_send = now + 1.0 / self.config.fps
 
-        pixels = self.sampler.sample(image)
+        pixels = self._sample(image, ctx)
         self._sequence = (self._sequence % 15) + 1
         address = (self.config.host, self.config.port)
 
@@ -132,6 +132,22 @@ class DdpSink(Sink):
         self._frames += 1
         return True
 
+    def _sample(self, image: np.ndarray, ctx: Any | None) -> np.ndarray:
+        corners = _corners_from_ctx(ctx)
+        source = getattr(ctx, "source", None) if ctx is not None else None
+        if corners is not None and source is not None:
+            insets = panel_insets_from_meta(getattr(ctx, "meta", None))
+            return self.sampler.sample_quad(
+                source,
+                corners,
+                insets=insets,
+                black_level=getattr(ctx, "color_black_level", None),
+                matrix=getattr(ctx, "color_matrix", None),
+                lut=getattr(ctx, "color_lut", None),
+                saturation=float(getattr(ctx, "color_saturation", 1.0) or 1.0),
+            )
+        return self.sampler.sample(image)
+
     def close(self) -> None:
         if self._socket is not None:
             self._socket.close()
@@ -145,3 +161,13 @@ class DdpSink(Sink):
             "frames": self._frames,
             "errors": self._errors,
         }
+
+
+def _corners_from_ctx(ctx: Any | None) -> np.ndarray | None:
+    if ctx is None:
+        return None
+    meta = getattr(ctx, "meta", None) or {}
+    recorded = (meta.get("boundary") or {}).get("corners")
+    if recorded:
+        return np.asarray(recorded, dtype=np.float32).reshape(4, 2)
+    return None

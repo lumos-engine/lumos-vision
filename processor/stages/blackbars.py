@@ -24,11 +24,15 @@ import numpy as np
 from processor.config.schema import BlackBarsConfig
 from processor.pipeline.context import FrameContext, PipelineState
 from processor.pipeline.stage import Stage
+from processor.utils.geometry import homography_to_rect, inset_quad
 from processor.utils.smoothing import StableValue
 
 EDGES = ("top", "bottom", "left", "right")
 _DIRECTION_LETTERBOX = {"top_bottom", "topbottom", "letterbox", "horizontal"}
 _DIRECTION_PILLARBOX = {"left_right", "leftright", "pillarbox", "vertical"}
+#: Cheap remap target for letterbox detection when we skip the full warp.
+DDP_PROBE_WIDTH = 160
+DDP_PROBE_HEIGHT = 90
 
 
 def parse_aspect_ratio(value: Any) -> float | None:
@@ -379,8 +383,42 @@ class BlackBarStage(Stage):
 
     # -- main --------------------------------------------------------------
 
+    def _ddp_probe(self, ctx: FrameContext) -> np.ndarray | None:
+        """Warp the (crop-inset) TV quad to a tiny rect for ``measure_bars``."""
+        corners = self.state.corners
+        if corners is None:
+            return None
+        crop = (ctx.meta.get("crop") or {}).get("fractions") or {}
+        top = float(crop.get("top", 0.0))
+        bottom = float(crop.get("bottom", 0.0))
+        left = float(crop.get("left", 0.0))
+        right = float(crop.get("right", 0.0))
+        quad = (
+            inset_quad(corners, left, top, right, bottom)
+            if max(top, bottom, left, right) > 1e-6
+            else corners
+        )
+        matrix = homography_to_rect(quad, DDP_PROBE_WIDTH, DDP_PROBE_HEIGHT)
+        return cv2.warpPerspective(
+            ctx.source,
+            matrix,
+            (DDP_PROBE_WIDTH, DDP_PROBE_HEIGHT),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+
     def process(self, ctx: FrameContext) -> None:
-        image = ctx.image
+        ddp = self.state.led_path == "ddp"
+        if ddp:
+            image = self._ddp_probe(ctx)
+            if image is None:
+                ctx.skipped[self.name] = "no corners"
+                return
+            ctx.bar_probe = image
+            if ctx.collect_debug:
+                ctx.add_debug("blackbars_probe", image)
+        else:
+            image = ctx.image
         height, width = image.shape[:2]
         if height < 16 or width < 16:
             ctx.skipped[self.name] = "image too small"
@@ -518,12 +556,14 @@ class BlackBarStage(Stage):
             ctx.skipped[self.name] = "crop would leave nothing"
             return
 
-        ctx.set_image(image[y0:y1, x0:x1])
+        if not ddp:
+            ctx.set_image(image[y0:y1, x0:x1])
         ctx.record(
             self.name,
             pixels=dict(self._pixels),
             raw_percent={k: round(v * 100, 2) for k, v in self._raw.items()},
             applied_percent={k: round(v * 100, 2) for k, v in applied.items()},
+            applied_fractions={k: round(v, 4) for k, v in applied.items()},
             content_aspect=self._content_aspect(),
             dark_frame=measured is None,
         )
@@ -643,6 +683,8 @@ class BlackBarStage(Stage):
 
     def debug_view(self, ctx: FrameContext) -> np.ndarray | None:
         base = ctx.debug_images.get("perspective")
+        if base is None:
+            base = ctx.bar_probe
         if base is None:
             return None
         canvas = base.copy()

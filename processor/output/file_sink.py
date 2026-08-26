@@ -36,7 +36,7 @@ class FileSink(Sink):
         self._size = (width, height)
         log.info("Recording output to %s (%dx%d @ %.1f fps)", path, width, height, self.fps)
 
-    def write(self, image: np.ndarray) -> bool:
+    def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         if self._writer is None:
             return False
         if (image.shape[1], image.shape[0]) != self._size:

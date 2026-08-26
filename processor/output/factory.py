@@ -34,7 +34,10 @@ def create_sinks(config: OutputConfig) -> list[Sink]:
         sinks.append(FileSink(config.file, fps=config.fps))
 
     if config.ddp.enabled:
-        sinks.append(DdpSink(config.ddp))
+        try:
+            sinks.append(DdpSink(config.ddp))
+        except ValueError as exc:
+            log.warning("Skipping DDP output: %s", exc)
 
     if not sinks:
         log.warning("No output sinks are enabled; frames will be discarded")

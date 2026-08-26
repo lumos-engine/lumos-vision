@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from processor.config.schema import Config
+from processor.config.schema import Config, normalize_led_path
 from processor.pipeline.context import PipelineState
 from processor.pipeline.pipeline import Pipeline
 from processor.pipeline.stage import Stage
@@ -108,8 +108,13 @@ def _register_builtins() -> None:
 _register_builtins()
 
 
+def _apply_led_path(state: PipelineState, config: Config) -> None:
+    state.led_path = normalize_led_path(config.output.led_path)
+
+
 def build_pipeline(config: Config, state: PipelineState | None = None) -> Pipeline:
     state = state or PipelineState()
+    _apply_led_path(state, config)
     stages: list[Stage] = []
     for name in config.pipeline.stages:
         spec = STAGE_REGISTRY.get(name)
@@ -144,6 +149,7 @@ def apply_config(pipeline: Pipeline, config: Config) -> None:
         rebuilt.append(stage)
 
     pipeline.replace_stages(rebuilt)
+    _apply_led_path(pipeline.state, config)
     # Do not force collect_debug off here: process_frame enables it whenever
     # the web UI (or another broker) has subscribers.
 

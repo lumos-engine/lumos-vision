@@ -225,7 +225,7 @@ def test_sink_group_survives_a_broken_member():
     class Broken(NullSink):
         name = "broken"
 
-        def write(self, image):
+        def write(self, image, ctx=None):
             raise OSError("device gone")
 
     good = NullSink()
@@ -241,7 +241,7 @@ def test_sink_group_logs_a_dead_sink_once(caplog):
     class Dead(NullSink):
         name = "dead"
 
-        def write(self, image):
+        def write(self, image, ctx=None):
             return False
 
     group = SinkGroup([Dead()])
@@ -389,3 +389,80 @@ def test_ddp_requires_a_host_and_some_leds():
         from processor.output.ddp import DdpSink
 
         DdpSink(DdpConfig(enabled=True, host="10.0.0.5"))
+
+
+def test_quad_sampler_matches_warped_axis_aligned():
+    from processor.testing.scene import SceneParams, SyntheticScene
+    from processor.utils.geometry import homography_to_rect
+
+    scene = SyntheticScene(
+        SceneParams(
+            shake_px=0.0,
+            noise_sigma=0.0,
+            reflection_strength=0.0,
+            show_logo=False,
+            show_subtitles=False,
+            bezel_px=0,
+            color_cast=(1.0, 1.0, 1.0),
+            exposure=1.0,
+        )
+    )
+    t = 1.0
+    frame = scene.frame(t)
+    corners = scene.quad_at(t)
+    width, height = 320, 180
+    warped = cv2.warpPerspective(
+        frame, homography_to_rect(corners, width, height), (width, height)
+    )
+    layout = LedLayout(top=8, right=4, bottom=8, left=4, depth=0.08)
+    axis = LedSampler(layout).sample(warped)
+    quad = LedSampler(layout).sample_quad(frame, corners)
+    diff = np.abs(axis.astype(np.float32) - quad.astype(np.float32)).mean()
+    assert axis.shape == quad.shape == (24, 3)
+    assert diff < 28, f"quad vs warped sampler mean abs diff {diff:.1f}"
+
+
+def test_quad_sampler_insets_move_samples_in_panel_uv():
+    from processor.testing.scene import SceneParams, SyntheticScene
+
+    scene = SyntheticScene(
+        SceneParams(
+            shake_px=0.0,
+            noise_sigma=0.0,
+            reflection_strength=0.0,
+            show_logo=False,
+            show_subtitles=False,
+            bezel_px=0,
+            color_cast=(1.0, 1.0, 1.0),
+            exposure=1.0,
+        )
+    )
+    frame = scene.frame(1.0)
+    corners = scene.quad_at(1.0)
+    layout = LedLayout(top=6, right=0, bottom=0, left=0, depth=0.08)
+    full = LedSampler(layout).sample_quad(frame, corners)
+    inset = LedSampler(layout).sample_quad(frame, corners, insets=(0.2, 0.2, 0.2, 0.2))
+    assert full.shape == inset.shape == (6, 3)
+    assert np.abs(full.astype(int) - inset.astype(int)).mean() > 2
+
+
+def test_quad_sampler_missing_corners_falls_back_on_ddp_sink():
+    from processor.output.ddp import DdpSink
+
+    sink = DdpSink(DdpConfig(enabled=True, host="127.0.0.1", leds_top=4))
+    sink.open(16, 16)
+    black = np.zeros((16, 16, 3), np.uint8)
+    assert sink.write(black) is True
+    sink.close()
+
+
+def test_factory_ddp_led_path_skips_v4l2(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config = OutputConfig(led_path="ddp")
+    config.ddp.enabled = True
+    config.ddp.host = "10.0.0.5"
+    config.ddp.leds_top = 4
+    config.v4l2.enabled = False
+    names = [s.name for s in create_sinks(config)]
+    assert "ddp" in names
+    assert "v4l2" not in names

@@ -49,7 +49,11 @@ from processor.utils.color_profiles import (
     slot_key,
     store_slot_updates,
 )
-from processor.utils.lumos_os import apply_led_brightness, clamp_led_brightness
+from processor.utils.lumos_os import (
+    apply_led_brightness,
+    clamp_led_brightness,
+    set_vision_output,
+)
 from processor.utils.hyperhdr_leds import refresh_video_grabber, set_led_device, set_video_grabber
 from processor.utils.logging import get_logger
 from processor.utils.loopback import (
@@ -173,6 +177,17 @@ def _updates_require_source_recreate(updates: dict[str, Any]) -> bool:
     return any(key in _SOURCE_RECREATE_KEYS for key in updates)
 
 
+def _updates_require_sink_recreate(updates: dict[str, Any]) -> bool:
+    for key in updates:
+        if key in {"output.led_path", "output.width", "output.height"}:
+            return True
+        if key.startswith("output.v4l2.") or key.startswith("output.ddp."):
+            return True
+        if key.startswith("output.mjpeg.") or key.startswith("output.file."):
+            return True
+    return False
+
+
 class Processor:
     def __init__(self, config: Config, config_path: str | Path | None = None):
         self.config = bind_config(config)
@@ -261,6 +276,7 @@ class Processor:
             self.source = self._make_source_unlocked().start()
             self._set_leds_unlocked(True)
             self._apply_lumos_os_brightness_unlocked()
+            self._sync_lumos_vision_output_unlocked()
             log.info(
                 "Pipeline: %s -> %dx%d @ %.0f fps",
                 " -> ".join(self.pipeline.stage_names) or "(empty)",
@@ -306,9 +322,6 @@ class Processor:
             self.start()
         assert self.sinks is not None
 
-        min_interval = (
-            1.0 / self.config.output.fps if self.config.output.fps > 0 else 0.0
-        )
         last_processed = 0.0
         self._loop_active = True
 
@@ -341,6 +354,8 @@ class Processor:
                 self.input_fps.tick()
                 self._last_source = frame.image
 
+                target_fps = float(self.config.output.fps or 0.0)
+                min_interval = 1.0 / target_fps if target_fps > 0 else 0.0
                 now = time.monotonic()
                 if min_interval and (now - last_processed) < min_interval * 0.92:
                     # The camera is faster than our target rate.  Dropping here
@@ -374,7 +389,7 @@ class Processor:
         self._last_ctx = ctx
         self._latency_ms = ctx.latency_ms
 
-        self.sinks.write(ctx.image)
+        self.sinks.write(ctx.image, ctx)
         self._frames_out += 1
         self.output_fps.tick()
         if self._frames_out == 1:
@@ -504,6 +519,7 @@ class Processor:
             self._start_phone_capture_unlocked()
             self._recreate_source_unlocked()
             self._apply_lumos_os_brightness_unlocked()
+            self._sync_lumos_vision_output_unlocked()
         except Exception:
             log.exception("Failed to reopen capture source after idle")
             self._idle = True
@@ -529,6 +545,24 @@ class Processor:
             ensure_processor_loopbacks(self.config)
         except Exception:
             log.exception("Failed to ensure v4l2loopback nodes")
+
+    def _recreate_sinks_unlocked(self) -> None:
+        old = self.sinks
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                log.exception("Failed to close previous output sinks")
+        self._ensure_loopbacks_unlocked()
+        self.sinks = SinkGroup(create_sinks(self.config.output))
+        self.sinks.open(self.config.output.width, self.config.output.height)
+        self._recover_v4l2_unlocked()
+        self._nudge_hyperhdr_grabber_unlocked()
+        log.info(
+            "Output sinks recreated: %s (led_path=%s)",
+            ", ".join(s.name for s in self.sinks.sinks) or "none",
+            self.config.output.led_path,
+        )
 
     def _v4l2_sink_unlocked(self) -> V4L2Sink | None:
         if self.sinks is None:
@@ -924,6 +958,10 @@ class Processor:
             ):
                 # Hardware UVC knobs live on the camera, not in the colour stage.
                 self._apply_camera_controls(dict(new_config.camera.controls))
+            if _updates_require_sink_recreate(updates):
+                self._recreate_sinks_unlocked()
+            if "output.led_path" in updates:
+                self._sync_lumos_vision_output_unlocked()
             log.info("Config updated: %s", ", ".join(sorted(updates)))
             if any(
                 key == "lumos_os" or key.startswith("lumos_os.") for key in updates
@@ -1610,6 +1648,12 @@ class Processor:
             return {"ok": True, "skipped": True, "reason": "idle"}
         value = clamp_led_brightness(self.config.lumos_os.led_brightness)
         return apply_led_brightness(self.config.lumos_os.url, value)
+
+    def _sync_lumos_vision_output_unlocked(self) -> dict[str, Any]:
+        """Ask Lumos OS to match Screen Sight's HyperHDR vs DDP LED path."""
+        return set_vision_output(
+            self.config.lumos_os.url, self.config.output.led_path
+        )
 
     def _merge_phone_camera_into_slot_unlocked(self) -> None:
         """Store checkbox lock flags plus phone numbers onto the active slot."""

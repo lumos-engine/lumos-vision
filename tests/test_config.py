@@ -17,6 +17,8 @@ def test_defaults_match_the_documented_targets():
     config = Config()
     assert (config.output.width, config.output.height) == (1280, 720)
     assert config.output.fps == 20.0
+    assert config.output.led_path == "hyperhdr"
+    assert config.output.ddp.enabled is False
     assert config.camera.process_width == 0
     assert (config.perspective.width, config.perspective.height) == (1280, 720)
     assert config.output.v4l2.device == "/dev/video10"
@@ -173,3 +175,41 @@ def test_explicit_scrcpy_source_wins_over_leftover_lumos_enabled():
     assert config.scrcpy.enabled is True
     assert config.lumos_cam.enabled is False
     assert config.lumos_cam.serial == "phone"
+
+
+def test_led_path_ddp_disables_v4l2():
+    config = Config.from_dict(
+        {
+            "output": {
+                "led_path": "ddp",
+                "v4l2": {"enabled": True},
+                "ddp": {"host": "10.0.0.5", "leds_top": 4},
+            }
+        }
+    )
+    assert config.output.led_path == "ddp"
+    assert config.output.ddp.enabled is True
+    assert config.output.v4l2.enabled is False
+
+
+def test_led_path_direct_alias_normalises_to_ddp():
+    config = Config.from_dict({"output": {"led_path": "direct"}})
+    assert config.output.led_path == "ddp"
+    assert config.output.v4l2.enabled is False
+    assert config.output.ddp.enabled is True
+
+
+def test_led_path_switch_back_restores_v4l2():
+    config = Config.from_dict({"output": {"led_path": "ddp", "ddp": {"host": "10.0.0.5"}}})
+    assert config.output.v4l2.enabled is False
+    restored = apply_updates(config, {"output.led_path": "hyperhdr"})
+    assert restored.output.led_path == "hyperhdr"
+    assert restored.output.ddp.enabled is False
+    assert restored.output.v4l2.enabled is True
+
+
+def test_hyperhdr_load_keeps_v4l2_off():
+    config = Config.from_dict({"output": {"v4l2": {"enabled": False}}})
+    assert config.output.led_path == "hyperhdr"
+    assert config.output.v4l2.enabled is False
+    assert config.output.ddp.enabled is False

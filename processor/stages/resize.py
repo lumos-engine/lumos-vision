@@ -62,6 +62,9 @@ class ResizeStage(Stage):
         }
 
     def process(self, ctx: FrameContext) -> None:
+        if self.state.led_path == "ddp":
+            ctx.skipped[self.name] = "ddp"
+            return
         width = max(2, int(self.output.width))
         height = max(2, int(self.output.height))
         ctx.set_image(fit_image(ctx.image, width, height, self.config.mode))

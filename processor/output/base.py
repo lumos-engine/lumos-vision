@@ -20,7 +20,7 @@ class Sink(ABC):
         """Prepare for frames of the given size."""
 
     @abstractmethod
-    def write(self, image: np.ndarray) -> bool:
+    def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         """Consume one BGR frame.  Returns False if the sink is broken."""
 
     def close(self) -> None:
@@ -60,10 +60,10 @@ class SinkGroup(Sink):
                 log.error("Sink %s failed to open: %s", sink.name, exc)
         self.sinks = alive
 
-    def write(self, image: np.ndarray) -> bool:
+    def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         for sink in self.sinks:
             try:
-                ok = sink.write(image)
+                ok = sink.write(image, ctx)
                 if ok:
                     self._failed.discard(sink.name)
                 elif sink.name not in self._failed:
@@ -98,7 +98,7 @@ class NullSink(Sink):
     def open(self, width: int, height: int) -> None:
         return None
 
-    def write(self, image: np.ndarray) -> bool:
+    def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         self.frames += 1
         return True
 
