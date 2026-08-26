@@ -2112,6 +2112,7 @@ function syncLedPathControls(config) {
     if (item.ddpOnly) bound.input.disabled = !ddp;
     if (item.hyperhdrOnly) bound.input.disabled = ddp;
   }
+}
 
 // ------------------------------------------------------------ corner picker
 
