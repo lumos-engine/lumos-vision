@@ -322,9 +322,6 @@ class Processor:
             self.start()
         assert self.sinks is not None
 
-        min_interval = (
-            1.0 / self.config.output.fps if self.config.output.fps > 0 else 0.0
-        )
         last_processed = 0.0
         self._loop_active = True
 
@@ -357,6 +354,8 @@ class Processor:
                 self.input_fps.tick()
                 self._last_source = frame.image
 
+                target_fps = float(self.config.output.fps or 0.0)
+                min_interval = 1.0 / target_fps if target_fps > 0 else 0.0
                 now = time.monotonic()
                 if min_interval and (now - last_processed) < min_interval * 0.92:
                     # The camera is faster than our target rate.  Dropping here
