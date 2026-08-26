@@ -49,7 +49,11 @@ from processor.utils.color_profiles import (
     slot_key,
     store_slot_updates,
 )
-from processor.utils.lumos_os import apply_led_brightness, clamp_led_brightness
+from processor.utils.lumos_os import (
+    apply_led_brightness,
+    clamp_led_brightness,
+    set_vision_output,
+)
 from processor.utils.hyperhdr_leds import refresh_video_grabber, set_led_device, set_video_grabber
 from processor.utils.logging import get_logger
 from processor.utils.loopback import (
@@ -272,6 +276,7 @@ class Processor:
             self.source = self._make_source_unlocked().start()
             self._set_leds_unlocked(True)
             self._apply_lumos_os_brightness_unlocked()
+            self._sync_lumos_vision_output_unlocked()
             log.info(
                 "Pipeline: %s -> %dx%d @ %.0f fps",
                 " -> ".join(self.pipeline.stage_names) or "(empty)",
@@ -515,6 +520,7 @@ class Processor:
             self._start_phone_capture_unlocked()
             self._recreate_source_unlocked()
             self._apply_lumos_os_brightness_unlocked()
+            self._sync_lumos_vision_output_unlocked()
         except Exception:
             log.exception("Failed to reopen capture source after idle")
             self._idle = True
@@ -955,6 +961,8 @@ class Processor:
                 self._apply_camera_controls(dict(new_config.camera.controls))
             if _updates_require_sink_recreate(updates):
                 self._recreate_sinks_unlocked()
+            if "output.led_path" in updates:
+                self._sync_lumos_vision_output_unlocked()
             log.info("Config updated: %s", ", ".join(sorted(updates)))
             if any(
                 key == "lumos_os" or key.startswith("lumos_os.") for key in updates
@@ -1641,6 +1649,12 @@ class Processor:
             return {"ok": True, "skipped": True, "reason": "idle"}
         value = clamp_led_brightness(self.config.lumos_os.led_brightness)
         return apply_led_brightness(self.config.lumos_os.url, value)
+
+    def _sync_lumos_vision_output_unlocked(self) -> dict[str, Any]:
+        """Ask Lumos OS to match Screen Sight's HyperHDR vs DDP LED path."""
+        return set_vision_output(
+            self.config.lumos_os.url, self.config.output.led_path
+        )
 
     def _merge_phone_camera_into_slot_unlocked(self) -> None:
         """Store checkbox lock flags plus phone numbers onto the active slot."""

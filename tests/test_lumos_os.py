@@ -111,3 +111,85 @@ def test_apply_skips_fallback_and_local_override():
 
 def test_set_brightness_skips_empty_url():
     assert set_brightness("", 12)["skipped"] is True
+
+
+def test_vision_output_mode_aliases():
+    from processor.utils.lumos_os import normalize_vision_output_mode
+
+    assert normalize_vision_output_mode("hyperhdr") == "hyperhdr"
+    assert normalize_vision_output_mode("ddp") == "ddp"
+    assert normalize_vision_output_mode("lumos_vision") == "ddp"
+    assert normalize_vision_output_mode("clock") is None
+
+
+def test_set_vision_output_skips_empty_url():
+    from processor.utils.lumos_os import set_vision_output
+
+    assert set_vision_output("", "ddp")["skipped"] is True
+
+
+def test_set_vision_output_posts_mode():
+    from processor.utils.lumos_os import set_vision_output
+
+    seen = []
+
+    def fake_open(request, timeout=1.5):
+        seen.append((request.get_method(), request.full_url, request.data))
+        return _Resp(b'{"ok":true}')
+
+    result = set_vision_output("192.168.1.230", "ddp", opener=fake_open)
+    assert result["ok"] is True
+    assert result["mode"] == "ddp"
+    assert seen[0][0] == "POST"
+    assert seen[0][1] == "http://192.168.1.230/api/v1/vision/output"
+    assert json.loads(seen[0][2].decode()) == {"mode": "ddp"}
+
+    seen.clear()
+    result = set_vision_output("http://192.168.1.230", "hyperhdr", opener=fake_open)
+    assert json.loads(seen[0][2].decode()) == {"mode": "hyperhdr"}
+
+
+def test_set_vision_output_409_is_not_raised():
+    from processor.utils.lumos_os import set_vision_output
+
+    class _Conflict(_Resp):
+        status = 409
+
+    def fake_open(request, timeout=1.5):
+        return _Conflict(b'{"error":"plugin_not_selected"}')
+
+    result = set_vision_output("http://192.168.1.230", "ddp", opener=fake_open)
+    assert result["ok"] is False
+    assert result["status"] == 409
+    assert result["error"] == "plugin_not_selected"
+
+
+def test_processor_led_path_switch_calls_vision_output(monkeypatch):
+    from processor.app import Processor
+    from processor.config.schema import Config
+
+    seen = []
+    monkeypatch.setattr(
+        "processor.app.set_vision_output",
+        lambda url, mode, **kwargs: seen.append((url, mode)) or {"ok": True, "mode": mode},
+    )
+    monkeypatch.setattr(
+        "processor.app.apply_led_brightness",
+        lambda url, value, **kwargs: {"ok": True, "skipped": True},
+    )
+    app = Processor(
+        Config.from_dict(
+            {
+                "output": {"v4l2": {"enabled": False}},
+                "lumos_os": {"url": "http://192.168.1.230"},
+            }
+        )
+    )
+    try:
+        app.update_config({"output.led_path": "ddp"})
+        assert app.config.output.led_path == "ddp"
+        assert seen[-1] == ("http://192.168.1.230", "ddp")
+        app.update_config({"output.led_path": "hyperhdr"})
+        assert seen[-1] == ("http://192.168.1.230", "hyperhdr")
+    finally:
+        app.shutdown()

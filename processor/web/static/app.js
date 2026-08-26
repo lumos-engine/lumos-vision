@@ -227,7 +227,7 @@ const CONTROLS = [
   },
   {
     group: 'LED output',
-    hint: 'HyperHDR (default) keeps the virtual camera. Direct (DDP) samples the TV quad here and sends colours to WLED — flip back anytime without redoing calibration.',
+    hint: 'HyperHDR (default) keeps the virtual camera. Direct (DDP) samples the TV quad here and sends colours to the Lumos box. The box switches with this control when HyperHDR or Lumos Vision is already selected there.',
     items: [
       {
         path: 'output.led_path',
@@ -241,7 +241,7 @@ const CONTROLS = [
       {
         path: 'output.ddp.host',
         type: 'text',
-        label: 'WLED / DDP host',
+        label: 'Lumos / DDP host',
         placeholder: '192.168.1.50',
         ddpOnly: true,
       },

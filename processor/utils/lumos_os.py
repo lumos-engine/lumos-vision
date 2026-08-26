@@ -80,15 +80,29 @@ def _open_json(
         with open_fn(request, timeout=float(timeout_sec)) as response:
             raw = response.read()
             status = getattr(response, "status", None) or response.getcode()
+    except urllib.error.HTTPError as exc:
+        raw = b""
+        try:
+            raw = exc.read() or b""
+        except Exception:
+            raw = b""
+        status = int(getattr(exc, "code", 0) or 0)
+        parsed = _parse_json_body(raw)
+        error = ""
+        if isinstance(parsed, dict):
+            error = str(
+                parsed.get("error") or parsed.get("message") or parsed.get("code") or ""
+            )
+        return {
+            "ok": False,
+            "error": error or f"HTTP {status}",
+            "status": status,
+            "response": parsed,
+        }
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
 
-    parsed: Any = {}
-    if raw:
-        try:
-            parsed = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
-            parsed = {"raw": raw.decode("utf-8", errors="replace")[:200]}
+    parsed = _parse_json_body(raw)
 
     if not (200 <= int(status) < 300):
         error = ""
@@ -101,6 +115,71 @@ def _open_json(
             "response": parsed,
         }
     return {"ok": True, "status": status, "response": parsed}
+
+
+def _parse_json_body(raw: bytes) -> Any:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError:
+        return {"raw": raw.decode("utf-8", errors="replace")[:200]}
+
+
+def normalize_vision_output_mode(value: Any) -> str | None:
+    """Map Screen Sight ``led_path`` / aliases onto the Lumos OS vision mode."""
+    text = str(value or "").strip().lower()
+    if text in {"ddp", "direct", "wled", "lumos_vision"}:
+        return "ddp"
+    if text == "hyperhdr":
+        return "hyperhdr"
+    return None
+
+
+def set_vision_output(
+    base_url: str,
+    mode: Any,
+    *,
+    timeout_sec: float = DEFAULT_TIMEOUT_SEC,
+    opener: Any = None,
+) -> dict[str, Any]:
+    """POST ``/api/v1/vision/output`` so the box plugin matches Screen Sight.
+
+    Allowed on the box only when HyperHDR or Lumos Vision is selected (or the
+    stream timed out). A 409 ``plugin_not_selected`` is logged, not raised.
+    """
+    host = normalize_base_url(base_url)
+    resolved = normalize_vision_output_mode(mode)
+    if not host:
+        return {"ok": True, "skipped": True, "reason": "no_url"}
+    if resolved is None:
+        return {"ok": False, "error": f"invalid vision output mode {mode!r}"}
+
+    result = _open_json(
+        urljoin(host + "/", "api/v1/vision/output"),
+        method="POST",
+        payload={"mode": resolved},
+        timeout_sec=timeout_sec,
+        opener=opener,
+    )
+    result["mode"] = resolved
+    if result.get("ok"):
+        log.info("Lumos OS vision output %s", resolved)
+    elif int(result.get("status") or 0) == 409:
+        log.warning(
+            "Lumos OS refused vision output %s (%s). "
+            "Select HyperHDR or Lumos Vision on the box first "
+            "(POST /api/v1/plugin/hyperhdr or /api/v1/plugin/lumos_vision).",
+            resolved,
+            result.get("error") or "plugin_not_selected",
+        )
+    else:
+        log.warning(
+            "Lumos OS vision output %s failed: %s",
+            resolved,
+            result.get("error"),
+        )
+    return result
 
 
 def fetch_status(
