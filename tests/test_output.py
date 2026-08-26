@@ -391,6 +391,31 @@ def test_ddp_requires_a_host_and_some_leds():
         DdpSink(DdpConfig(enabled=True, host="10.0.0.5"))
 
 
+def test_rgbw_uses_the_warm_white_channel_for_3000k():
+    from processor.led.rgbw import encode_led_pixels, kelvin_to_srgb, rgb_to_rgbw
+
+    warm = (kelvin_to_srgb(3000.0) * 255).round().astype(np.uint8)
+    pixels = rgb_to_rgbw(warm.reshape(1, 3), white_kelvin=3000)
+    assert pixels.shape == (1, 4)
+    assert pixels[0, 3] > 200
+    assert pixels[0, :3].max() < 40
+
+    red = rgb_to_rgbw(np.array([[255, 0, 0]], np.uint8), white_kelvin=3000)
+    assert red[0, 0] > 200
+    assert red[0, 3] < 15
+
+    rgb = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgb")
+    rgbw = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgbw", 3000)
+    assert rgb.shape == (1, 3)
+    assert rgbw.shape == (1, 4)
+
+
+def test_ddp_rgbw_packets_are_four_bytes_per_led():
+    pixels = np.zeros((10, 4), np.uint8)
+    packets = build_packets(pixels, sequence=1)
+    assert int.from_bytes(packets[0][8:10], "big") == 40
+
+
 def test_quad_sampler_matches_warped_axis_aligned():
     from processor.testing.scene import SceneParams, SyntheticScene
     from processor.utils.geometry import homography_to_rect

@@ -443,6 +443,10 @@ class DdpConfig:
     clockwise: bool = True
     smoothing: float = 0.35
     fps: float = 0.0  # 0 = follow the pipeline
+    #: ``rgb`` (3 bytes/LED) or ``rgbw`` (4 bytes, W extracted using white_kelvin).
+    color_mode: str = "rgb"
+    #: Phosphor temperature of the white LED, used only when ``color_mode`` is rgbw.
+    white_kelvin: int = 3000
 
 
 #: Aliases accepted in YAML / the wizard for the opt-in WLED path.

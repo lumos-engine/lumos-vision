@@ -227,7 +227,7 @@ const CONTROLS = [
   },
   {
     group: 'LED output',
-    hint: 'HyperHDR (default) keeps the virtual camera. Direct (DDP) samples the TV quad here and sends colours to the Lumos box. The box switches with this control when HyperHDR or Lumos Vision is already selected there.',
+    hint: 'HyperHDR (default) keeps the virtual camera. Direct (DDP) samples the TV quad here and sends colours to the Lumos box. The box switches with this control when HyperHDR or Lumos Vision is already selected there. RGB vs RGBW must match the plugin: Vision converts to RGBW only when Direct is sending bytes straight to the strip. If the box already expands RGB → RGBW, leave LED type on RGB.',
     items: [
       {
         path: 'output.led_path',
@@ -283,6 +283,26 @@ const CONTROLS = [
         label: 'Strip start corner',
         options: ['top-left', 'top-right', 'bottom-right', 'bottom-left'],
         ddpOnly: true,
+      },
+      {
+        path: 'output.ddp.color_mode',
+        type: 'select',
+        label: 'LED type',
+        options: [
+          { value: 'rgb', label: 'RGB (3 channels)' },
+          { value: 'rgbw', label: 'RGBW (white channel)' },
+        ],
+        ddpOnly: true,
+      },
+      {
+        path: 'output.ddp.white_kelvin',
+        label: 'White LED temperature',
+        min: 1800,
+        max: 6500,
+        step: 50,
+        unit: ' K',
+        ddpOnly: true,
+        rgbwOnly: true,
       },
     ],
   },
@@ -2106,11 +2126,13 @@ function applyConfig(config, { skipFocused = false } = {}) {
 function syncLedPathControls(config) {
   const path = get(config, 'output.led_path') || 'hyperhdr';
   const ddp = path === 'ddp';
+  const rgbw = ddp && (get(config, 'output.ddp.color_mode') || 'rgb') === 'rgbw';
   for (const bound of boundInputs.values()) {
     const item = bound.item;
     if (!item) continue;
     if (item.ddpOnly) bound.input.disabled = !ddp;
     if (item.hyperhdrOnly) bound.input.disabled = ddp;
+    if (item.rgbwOnly) bound.input.disabled = !rgbw;
   }
 }
 

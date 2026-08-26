@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from processor.config.schema import DdpConfig
+from processor.led.rgbw import encode_led_pixels, normalize_color_mode
 from processor.led.sampler import LedLayout, LedSampler, panel_insets_from_meta
 from processor.output.base import Sink
 from processor.utils.logging import get_logger
@@ -95,10 +96,11 @@ class DdpSink(Sink):
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.setblocking(False)
         log.info(
-            "DDP output to %s:%d (%d LEDs)",
+            "DDP output to %s:%d (%d LEDs, %s)",
             self.config.host,
             self.config.port,
             self.sampler.layout.count,
+            normalize_color_mode(self.config.color_mode),
         )
 
     def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
@@ -111,7 +113,11 @@ class DdpSink(Sink):
                 return True
             self._next_send = now + 1.0 / self.config.fps
 
-        pixels = self._sample(image, ctx)
+        pixels = encode_led_pixels(
+            self._sample(image, ctx),
+            self.config.color_mode,
+            white_kelvin=float(self.config.white_kelvin or 3000),
+        )
         self._sequence = (self._sequence % 15) + 1
         address = (self.config.host, self.config.port)
 
@@ -158,6 +164,8 @@ class DdpSink(Sink):
         return {
             "target": f"{self.config.host}:{self.config.port}",
             "leds": self.sampler.layout.count,
+            "color_mode": normalize_color_mode(self.config.color_mode),
+            "white_kelvin": int(self.config.white_kelvin or 3000),
             "frames": self._frames,
             "errors": self._errors,
         }

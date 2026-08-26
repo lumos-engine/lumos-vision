@@ -19,6 +19,8 @@ def test_defaults_match_the_documented_targets():
     assert config.output.fps == 20.0
     assert config.output.led_path == "hyperhdr"
     assert config.output.ddp.enabled is False
+    assert config.output.ddp.color_mode == "rgb"
+    assert config.output.ddp.white_kelvin == 3000
     assert config.camera.process_width == 0
     assert (config.perspective.width, config.perspective.height) == (1280, 720)
     assert config.output.v4l2.device == "/dev/video10"
