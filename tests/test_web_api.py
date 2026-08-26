@@ -108,7 +108,18 @@ def test_status_reports_the_running_pipeline(server):
     assert status == 200
     assert data["frames_out"] > 0
     assert "boundary" in data["views"]
+    assert "lumos_cam" in data
+    assert "scrcpy" in data
     assert {s["name"] for s in data["pipeline"]["stages"]} >= {"boundary", "color"}
+
+
+def test_lumos_cam_status_endpoint(server):
+    status, body, _ = get(server, "/api/lumos-cam")
+    data = json.loads(body)
+    assert status == 200
+    assert data["ok"] is True
+    assert data["lumos_cam"]["enabled"] is False
+    assert data["lumos_cam"]["min_app_version"] == "0.1.0"
 
 
 def test_camera_credentials_are_never_sent_to_the_browser(server, processor):
@@ -186,6 +197,14 @@ def test_snapshot_returns_a_jpeg(server):
     assert body[:2] == b"\xff\xd8"  # JPEG SOI
 
 
+def test_process_frame_keeps_preview_without_wizard_subscribers(processor):
+    _, source = processor.brokers.get("source").latest()
+    _, output = processor.brokers.get("output").latest()
+    assert source is not None
+    assert output is not None
+    assert output.shape[1] == 320
+
+
 # ------------------------------------------------------------------ config
 
 
@@ -213,6 +232,19 @@ def test_unknown_config_keys_are_rejected(server):
 def test_empty_update_is_rejected(server):
     status, _ = post(server, "/api/config", {"updates": {}})
     assert status == 400
+
+
+def test_color_profile_switch_is_passthrough_when_uncalibrated(server, processor):
+    status, body = post(
+        server,
+        "/api/color/profile",
+        {"selection": {"time_of_day": "day", "lighting": "large"}},
+    )
+    assert status == 200 and body["ok"]
+    assert body["calibrated"] is False
+    assert body["mode"] == "none"
+    assert processor.config.color.profiles.selection["time_of_day"] == "day"
+    assert processor.config.color.matrix_enabled is False
 
 
 def test_config_can_be_saved_to_yaml(server, tmp_path):

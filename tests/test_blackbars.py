@@ -9,7 +9,14 @@ import pytest
 
 from processor.config.schema import BlackBarsConfig
 from processor.pipeline.context import FrameContext, PipelineState
-from processor.stages.blackbars import BlackBarStage, _symmetric_pair, measure_bars
+from processor.stages.blackbars import (
+    BlackBarStage,
+    _symmetric_pair,
+    crop_fractions_for_aspect,
+    detect_axes,
+    measure_bars,
+    parse_aspect_ratio,
+)
 from processor.testing.scene import render_panel
 
 
@@ -255,3 +262,70 @@ def test_reset_clears_the_crop():
     assert stage.status()["pixels"]["top"] > 0
     stage.reset()
     assert stage.status()["pixels"]["top"] == 0
+
+
+def test_parse_aspect_ratio_accepts_common_spellings():
+    assert parse_aspect_ratio("2.39") == pytest.approx(2.39)
+    assert parse_aspect_ratio("2.39:1") == pytest.approx(2.39)
+    assert parse_aspect_ratio("21:9") == pytest.approx(21 / 9)
+    assert parse_aspect_ratio("16/9") == pytest.approx(16 / 9)
+    assert parse_aspect_ratio(2.35) == pytest.approx(2.35)
+    assert parse_aspect_ratio("") is None
+    assert parse_aspect_ratio("auto") is None
+
+
+def test_crop_fractions_for_scope_and_academy():
+    letter = crop_fractions_for_aspect(768, 432, 2.39)
+    expected = (1 - (16 / 9) / 2.39) / 2
+    assert letter["top"] == pytest.approx(expected, abs=1e-6)
+    assert letter["left"] == 0.0
+    pillar = crop_fractions_for_aspect(768, 432, 4 / 3)
+    assert pillar["left"] == pytest.approx((1 - (4 / 3) / (16 / 9)) / 2, abs=1e-6)
+    assert pillar["top"] == 0.0
+    flat = crop_fractions_for_aspect(768, 432, 16 / 9)
+    assert flat == {"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}
+
+
+def test_detect_axes_follows_direction():
+    assert detect_axes(BlackBarsConfig(direction="auto")) == (True, True)
+    assert detect_axes(BlackBarsConfig(direction="top_bottom")) == (True, False)
+    assert detect_axes(BlackBarsConfig(direction="left_right")) == (False, True)
+
+
+def test_direction_top_bottom_ignores_pillarbox():
+    stage = make_stage(direction="top_bottom")
+    panel = render_panel(3.0, PANEL, 4 / 3)
+    run(stage, panel, frames=80)
+    pixels = stage.status()["pixels"]
+    assert pixels["left"] == 0
+    assert pixels["right"] == 0
+
+
+def test_direction_left_right_ignores_letterbox():
+    stage = make_stage(direction="left_right")
+    panel = render_panel(3.0, PANEL, 2.39)
+    run(stage, panel, frames=80)
+    pixels = stage.status()["pixels"]
+    assert pixels["top"] == 0
+    assert pixels["bottom"] == 0
+
+
+def test_pinned_aspect_crops_letterbox_without_measuring_bars():
+    """DV / subtitle-on-bar titles: geometry wins even on a full 16:9 panel."""
+    stage = make_stage(target_aspect="2.39")
+    panel = render_panel(3.0, PANEL, 16 / 9)
+    run(stage, panel, frames=1)
+    expected = (1 - (16 / 9) / 2.39) / 2
+    assert stage.status()["applied_percent"]["top"] == pytest.approx(expected * 100, abs=0.6)
+    assert stage.status()["applied_percent"]["left"] == 0.0
+    assert stage.status()["content_aspect"] == pytest.approx(2.39, abs=0.03)
+
+
+def test_config_loads_direction_and_numeric_aspect():
+    from processor.config.schema import Config
+
+    cfg = Config.from_dict(
+        {"blackbars": {"direction": "top_bottom", "target_aspect": 2.39}}
+    )
+    assert cfg.blackbars.direction == "top_bottom"
+    assert cfg.blackbars.target_aspect == pytest.approx(2.39)

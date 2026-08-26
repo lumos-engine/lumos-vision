@@ -7,8 +7,13 @@ what the web wizard edits (via ``dotted_set``) while the pipeline is running.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Union, get_args, get_origin, get_type_hints
+
+#: Leftover Lumos keys from the ffmpeg→v4l2loopback path. Dropped on load.
+_DROPPED_LUMOS_KEYS = ("v4l2_sink", "bind_camera", "prefer_over_scrcpy")
+_LEGACY_LOOPBACK_NODES = {"video10", "video11"}
 
 # --------------------------------------------------------------------------
 # Camera / input
@@ -17,7 +22,7 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 
 @dataclass
 class CameraConfig:
-    #: rtsp | v4l2 | usb | file | image | synthetic
+    #: lumos | scrcpy | v4l2 | usb | rtsp | file | image | synthetic
     source: str = "rtsp"
     rtsp_url: str = ""
     #: USB webcam for ``v4l2`` / ``usb``. Prefer ``/dev/v4l/by-id/…`` (stable);
@@ -155,6 +160,13 @@ class BlackBarsConfig:
     percentile: float = 96.0
     detect_top_bottom: bool = True
     detect_left_right: bool = True
+    #: Which axis to look at. ``auto`` measures both and keeps letterbox *or*
+    #: pillarbox (never a windowbox). Pin ``top_bottom`` / ``left_right`` when
+    #: Dolby Vision pumping or subtitles sitting on the bars fool auto.
+    direction: str = "auto"
+    #: Optional content aspect, e.g. ``"2.39"`` or ``"21:9"``. Empty = measure
+    #: from the picture. Quote in YAML so ``21:9`` stays a string.
+    target_aspect: str | float = ""
     #: Never crop away more than this fraction of height per side (letterbox).
     #: 16% covers 2.76:1 on a 16:9 panel; common 2.39:1 needs ~13%.
     max_crop_top_bottom_percent: float = 16.0
@@ -235,6 +247,93 @@ class ColorCalibrationInfo:
 
 
 @dataclass
+class ProfileCameraState:
+    """Phone 3A freeze for one environment combo.
+
+    ``ae`` / ``af`` / ``awb`` are ``auto`` or ``locked``. Numeric fields are
+    the Camera2 values to restore on profile switch (0 / -1 / empty = unknown).
+    While locked, the phone must not hunt; unlock is manual only.
+    """
+
+    af: str = "auto"
+    ae: str = "auto"
+    awb: str = "auto"
+    iso: int = 0
+    exposure_ns: int = 0
+    focus_distance: float = -1.0
+    awb_gains: list[float] = field(default_factory=list)
+
+
+@dataclass
+class ProfileOption:
+    id: str = ""
+    label: str = ""
+
+
+@dataclass
+class ProfileDimension:
+    """One axis of an environment profile (e.g. time of day, room lights)."""
+
+    id: str = ""
+    label: str = ""
+    options: list[ProfileOption] = field(default_factory=list)
+
+
+def _default_color_profile_dimensions() -> list[ProfileDimension]:
+    from processor.utils.color_profiles import default_profile_dimensions
+
+    return default_profile_dimensions()
+
+
+def _default_color_profile_selection() -> dict[str, str]:
+    from processor.utils.color_profiles import default_profile_selection
+
+    return default_profile_selection()
+
+
+@dataclass
+class ColorProfileSlot:
+    """Stored correction for one environment combo.
+
+    Empty ``calibrated_at`` means this combo has not been measured yet; the
+    pipeline then runs in no-calibration (passthrough) mode.
+    """
+
+    calibrated_at: str = ""
+    white_balance: str = "off"
+    gains: GainsConfig = field(default_factory=GainsConfig)
+    matrix_enabled: bool = False
+    matrix: list[float] = field(
+        default_factory=lambda: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    )
+    black_level_enabled: bool = False
+    black_level: BlackLevelConfig = field(default_factory=BlackLevelConfig)
+    gamma: float = 1.0
+    saturation: float = 1.0
+    notes: list[str] = field(default_factory=list)
+    patch_means_bgr: dict[str, list[float]] = field(default_factory=dict)
+    camera: ProfileCameraState = field(default_factory=ProfileCameraState)
+    #: Lumos OS LED strip brightness (0–255). Independent of colour cal.
+    led_brightness: int = 128
+
+
+@dataclass
+class ColorProfilesConfig:
+    """Cartesian environment profiles for colour calibration.
+
+    Add a dimension (or an option on an existing one) without changing the
+    live colour stage — see ``.agents/skills/color-profiles/SKILL.md``.
+    """
+
+    dimensions: list[ProfileDimension] = field(
+        default_factory=_default_color_profile_dimensions
+    )
+    selection: dict[str, str] = field(default_factory=_default_color_profile_selection)
+    #: Keyed ``dim=option|dim=option`` in ``dimensions`` order.
+    slots: dict[str, ColorProfileSlot] = field(default_factory=dict)
+
+
+@dataclass
 class ColorConfig:
     enabled: bool = True
     #: off | auto (grey-world) | manual (use ``gains``)
@@ -258,6 +357,7 @@ class ColorConfig:
     contrast: float = 1.0
     saturation: float = 1.0
     calibration: ColorCalibrationInfo = field(default_factory=ColorCalibrationInfo)
+    profiles: ColorProfilesConfig = field(default_factory=ColorProfilesConfig)
 
 
 @dataclass
@@ -416,6 +516,21 @@ class PowerConfig:
 
 
 @dataclass
+class LumosOsConfig:
+    """Lumos OS LED box (HyperHDR plugin host).
+
+    Distinct from ``power.hyperhdr_url`` (HyperHDR JSON-RPC on the PC).
+    Empty ``url`` skips brightness API calls. LED brightness lives on the
+    active colour-profile slot and is copied here as a live view.
+    """
+
+    #: Base URL or host, e.g. ``http://192.168.1.230``. Empty = skip.
+    url: str = ""
+    #: Live LED brightness 0–255 (view of the active profile slot).
+    led_brightness: int = 128
+
+
+@dataclass
 class ScrcpyConfig:
     """Optional Android phone camera via scrcpy → v4l2loopback.
 
@@ -444,12 +559,11 @@ class ScrcpyConfig:
     pan_x: float = 0.0
     #: Vertical pan: -1 = top, +1 = bottom.
     pan_y: float = 0.0
-    #: Loopback node scrcpy writes; Screen Sight should capture this device.
+    #: Loopback node scrcpy writes. Implied when ``camera.source`` is ``scrcpy``
+    #: (``camera.device`` is set to this path; Screen Sight creates the node).
     v4l2_sink: str = "/dev/video11"
     no_playback: bool = True
     no_audio: bool = True
-    #: When starting, set ``camera.source``/``device`` to this sink.
-    bind_camera: bool = True
     #: How long to wait for the sink to advertise capture after spawn.
     startup_timeout_sec: float = 12.0
     #: If scrcpy dies (phone unplug), keep trying to restart when ADB returns.
@@ -458,6 +572,52 @@ class ScrcpyConfig:
     restart_interval_sec: float = 5.0
     #: Extra CLI tokens appended verbatim.
     extra_args: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LumosCamConfig:
+    """Lumos Cam (Camera2 Android app) → ffmpeg pipe.
+
+    Capture is selected with ``camera.source: lumos``. ``enabled`` is a mirror
+    of that (kept so sidecar start/stop stays a boolean). Zoom, pan, and
+    AF/AE/AWB locks are live HTTP; ffmpeg only restarts when codec/size/ports
+    change. Needs Lumos Cam ≥ 0.1.0 (``Lumos-Cam-Protocol: 1``).
+    """
+
+    enabled: bool = False
+    serial: str = ""
+    adb: str = "adb"
+    package: str = "dev.lumos.cam"
+    activity: str = "dev.lumos.cam.MainActivity"
+    camera_id: str = "0"
+    #: 1080p Camera2 JPEGs on typical Xiaomi phones cannot hold 30 fps, so
+    #: the TCP/adb queue fills and playback goes slow-motion. 1280x720 stays live.
+    camera_size: str = "1280x720"
+    camera_fps: int = 30
+    codec: str = "mjpeg"
+    camera_zoom: float = 1.0
+    zoom_min: float = 1.0
+    zoom_max: float = 10.0
+    pan_x: float = 0.0
+    pan_y: float = 0.0
+    af: str = "auto"
+    ae: str = "auto"
+    awb: str = "auto"
+    #: 0 = not set (phone AE auto unless ``ae`` is locked without numbers).
+    iso: int = 0
+    exposure_ns: int = 0
+    #: <0 = not set.
+    focus_distance: float = -1.0
+    #: Camera2 RGGB gains; empty = not set.
+    awb_gains: list[float] = field(default_factory=list)
+    control_device_port: int = 8765
+    video_device_port: int = 8766
+    control_host_port: int = 18765
+    video_host_port: int = 18766
+    ffmpeg: str = "ffmpeg"
+    startup_timeout_sec: float = 15.0
+    auto_restart: bool = True
+    restart_interval_sec: float = 5.0
 
 
 @dataclass
@@ -477,11 +637,117 @@ class Config:
     web: WebConfig = field(default_factory=WebConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     power: PowerConfig = field(default_factory=PowerConfig)
+    lumos_os: LumosOsConfig = field(default_factory=LumosOsConfig)
     scrcpy: ScrcpyConfig = field(default_factory=ScrcpyConfig)
+    lumos_cam: LumosCamConfig = field(default_factory=LumosCamConfig)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "Config":
-        return build_dataclass(cls, data or {})
+    def from_dict(
+        cls, data: dict[str, Any] | None, *, bind_profiles: bool = True
+    ) -> "Config":
+        raw = copy.deepcopy(data or {})
+        normalize_capture_dict(raw)
+        cfg = build_dataclass(cls, raw)
+        if bind_profiles:
+            from processor.utils.color_profiles import bind_config
+
+            return bind_config(cfg)
+        return cfg
+
+
+def _legacy_loopback_device(device: str) -> bool:
+    name = (device or "").rstrip("/").rsplit("/", 1)[-1]
+    return name in _LEGACY_LOOPBACK_NODES or "loopback" in (device or "").lower()
+
+
+def _source_has_no_capture_identity(camera: dict[str, Any], source: str) -> bool:
+    """True when YAML looks like leftover USB/RTSP with nothing actually set."""
+    device = str(camera.get("device") or "").strip()
+    if source in {"v4l2", "usb"}:
+        return not device or _legacy_loopback_device(device)
+    if source in {"rtsp", ""}:
+        return not str(camera.get("rtsp_url") or "").strip() and (
+            not device or _legacy_loopback_device(device)
+        )
+    return False
+
+
+def normalize_capture_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate old Lumos/scrcpy YAML and keep sidecar ``enabled`` in sync.
+
+    Mutates ``data`` in place. ``camera.source`` is the only capture switch;
+    ``lumos_cam.enabled`` / ``scrcpy.enabled`` mirror it.
+    """
+    camera = data.get("camera")
+    if not isinstance(camera, dict):
+        camera = {}
+        data["camera"] = camera
+
+    lumos = data.get("lumos_cam")
+    if isinstance(lumos, dict):
+        for key in _DROPPED_LUMOS_KEYS:
+            lumos.pop(key, None)
+    else:
+        lumos = None
+
+    scrcpy = data.get("scrcpy")
+    if isinstance(scrcpy, dict):
+        scrcpy.pop("bind_camera", None)
+    else:
+        scrcpy = None
+
+    source = str(camera.get("source") or "rtsp").strip().lower()
+    if source == "usb":
+        source = "v4l2"
+    device = str(camera.get("device") or "").strip()
+    lumos_on = bool(lumos and lumos.get("enabled"))
+    scrcpy_on = bool(scrcpy and scrcpy.get("enabled"))
+
+    if source == "lumos":
+        pass
+    elif source == "scrcpy":
+        pass
+    elif lumos_on and _source_has_no_capture_identity(camera, source):
+        source = "lumos"
+        if _legacy_loopback_device(device):
+            device = ""
+    elif (
+        scrcpy_on
+        and source not in {"file", "image", "synthetic", "lumos"}
+        and (
+            _source_has_no_capture_identity(camera, source)
+            or (
+                scrcpy is not None
+                and device == str(scrcpy.get("v4l2_sink") or "").strip()
+            )
+        )
+    ):
+        source = "scrcpy"
+
+    if source == "lumos" and _legacy_loopback_device(device):
+        device = ""
+
+    camera["source"] = source
+    camera["device"] = device
+
+    if lumos is not None or source == "lumos":
+        if lumos is None:
+            lumos = {}
+            data["lumos_cam"] = lumos
+        lumos["enabled"] = source == "lumos"
+
+    if source == "scrcpy":
+        if scrcpy is None:
+            scrcpy = {}
+            data["scrcpy"] = scrcpy
+        scrcpy["enabled"] = True
+        sink = str(scrcpy.get("v4l2_sink") or "/dev/video11").strip() or "/dev/video11"
+        scrcpy["v4l2_sink"] = sink
+        camera["device"] = sink
+    elif scrcpy is not None:
+        scrcpy["enabled"] = False
+
+    return data
 
 
 # --------------------------------------------------------------------------

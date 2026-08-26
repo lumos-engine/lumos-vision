@@ -311,5 +311,10 @@ def test_processor_apply_color_calibration_persists_matrix(tmp_path):
         assert saved["color"]["calibration"]["matrix"]
         assert saved["color"]["black_level_enabled"] is True
         assert "r" in saved["color"]["black_level"]
+        slots = saved["color"]["profiles"]["slots"]
+        key = "time_of_day=night|lighting=lights_off|brightness=full"
+        assert key in slots
+        assert slots[key]["matrix_enabled"] is True
+        assert slots[key]["calibrated_at"]
     finally:
         app.shutdown()

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -113,6 +114,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(
                     {"ok": True, "scrcpy": self.processor.scrcpy_status()}
                 )
+            if route == "/api/lumos-cam":
+                return self._send_json(
+                    {"ok": True, "lumos_cam": self.processor.lumos_cam_status()}
+                )
+            if route == "/api/color/profile":
+                return self._send_json(
+                    {"ok": True, **self.processor.color_profile_status()}
+                )
             if route in (
                 "/api/calibrate/color",
                 "/api/calibrate/color/status",
@@ -163,6 +172,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._apply_camera_source(body)
             if route == "/api/scrcpy":
                 return self._apply_scrcpy(body)
+            if route == "/api/lumos-cam":
+                return self._apply_lumos_cam(body)
             if route == "/api/calibrate/color/start":
                 settle = body.get("settle_sec", None)
                 try:
@@ -222,6 +233,20 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(
                     result, status=200 if result.get("ok") else 400
                 )
+            if route == "/api/color/profile":
+                selection = body.get("selection")
+                if selection is not None and not isinstance(selection, dict):
+                    return self._send_json(
+                        {"ok": False, "error": "selection must be an object"},
+                        status=400,
+                    )
+                result = self.processor.set_color_profile(
+                    selection,
+                    save=bool(body.get("save")),
+                )
+                return self._send_json(
+                    result, status=200 if result.get("ok") else 400
+                )
             self.send_error(404, "not found")
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -276,7 +301,6 @@ class _Handler(BaseHTTPRequestHandler):
                     "v4l2_sink",
                     "no_playback",
                     "no_audio",
-                    "bind_camera",
                     "startup_timeout_sec",
                     "extra_args",
                 )
@@ -292,6 +316,45 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": False, "error": str(exc)}, status=400)
         # Always 200 when the config mutation ran: a scrcpy spawn failure should
         # still leave enabled/zoom/pan reflected in the wizard, not roll the UI back.
+        self._send_json(result, status=200)
+
+    def _apply_lumos_cam(self, body: dict[str, Any]) -> None:
+        action = str(body.get("action") or "apply")
+        save = bool(body.get("save"))
+        fields = body.get("fields")
+        if fields is None:
+            fields = {
+                key: body[key]
+                for key in (
+                    "enabled",
+                    "serial",
+                    "adb",
+                    "package",
+                    "camera_id",
+                    "camera_size",
+                    "camera_fps",
+                    "codec",
+                    "camera_zoom",
+                    "zoom_min",
+                    "zoom_max",
+                    "pan_x",
+                    "pan_y",
+                    "af",
+                    "ae",
+                    "awb",
+                    "ffmpeg",
+                    "startup_timeout_sec",
+                )
+                if key in body
+            }
+        if not isinstance(fields, dict):
+            return self._send_json(
+                {"ok": False, "error": "fields must be an object"}, status=400
+            )
+        try:
+            result = self.processor.apply_lumos_cam(fields, action=action, save=save)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, status=400)
         self._send_json(result, status=200)
 
     def _apply_camera_source(self, body: dict[str, Any]) -> None:
@@ -311,6 +374,20 @@ class _Handler(BaseHTTPRequestHandler):
                 "loop",
                 "replay_fps",
                 "process_width",
+                "serial",
+                "camera_id",
+                "camera_size",
+                "camera_fps",
+                "codec",
+                "camera_zoom",
+                "pan_x",
+                "pan_y",
+                "af",
+                "ae",
+                "awb",
+                "binary",
+                "view_zoom",
+                "v4l2_sink",
             )
             if key in body
         }
@@ -325,7 +402,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             result = self.processor.apply_camera_source(fields, save=save)
         except Exception as exc:
-            return self._send_json({"ok": False, "error": str(exc)}, status=400)
+            msg = str(exc).strip() or type(exc).__name__
+            return self._send_json({"ok": False, "error": msg}, status=400)
         config = result.get("config") or {}
         url = config.get("camera", {}).get("rtsp_url", "")
         if url:
@@ -404,6 +482,11 @@ class _Handler(BaseHTTPRequestHandler):
             return self.send_error(404, f"unknown view {view}")
         config = self.processor.config.web
         broker = self.processor.brokers.get(view)
+        _, current = broker.latest()
+        if current is None:
+            image = self.processor.snapshot(view)
+            if image is not None:
+                broker.publish(image)
         write_mjpeg_stream(
             self,
             broker,
@@ -448,6 +531,12 @@ class CalibrationServer(ThreadingHTTPServer):
     def __init__(self, address, processor: Processor):
         super().__init__(address, _Handler)
         self.processor = processor
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def start_web_server(processor: Processor) -> tuple[CalibrationServer, threading.Thread]:

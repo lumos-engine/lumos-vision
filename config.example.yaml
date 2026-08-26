@@ -8,7 +8,7 @@
 #   python -m processor run
 
 camera:
-  source: v4l2                      # rtsp | v4l2 | usb | file | image | synthetic
+  source: v4l2                      # lumos | scrcpy | v4l2 | usb | rtsp | file | image | synthetic
   # Prefer stable by-id paths — /dev/videoN numbers shift when USB devices
   # are plugged in a different order.  List them with:
   #   ls -l /dev/v4l/by-id/
@@ -85,6 +85,10 @@ blackbars:
   enabled: true
   # Blue-black letterbox on Vimicro: #051138 low light, #201C58 room light
   luma_threshold: 55
+  # auto | top_bottom | left_right — pin an axis when DV / subs fool auto
+  direction: auto
+  # Optional content aspect. Empty = measure. Quote so YAML keeps a string.
+  target_aspect: ""                 # e.g. "2.39" or "21:9"
   max_crop_top_bottom_percent: 16   # letterbox; covers up to ~2.76:1 on 16:9
   max_crop_left_right_percent: 12.5 # pillarbox; 4:3 on 16:9
   window: 21
@@ -107,6 +111,19 @@ color:
   exposure:
     enabled: false
     target_luma: 110
+  # Environment combos (day/night × room lights × brightness). Live colour is
+  # a view of the active slot. Missing slots = passthrough. Quote option ids;
+  # never use YAML booleans (on/off/yes/no) as ids — use lights_off, not off.
+  # profiles:
+  #   selection:
+  #     time_of_day: night
+  #     lighting: lights_off
+  #     brightness: full
+  #   slots:
+  #     time_of_day=night|lighting=lights_off|brightness=full:
+  #       calibrated_at: "2026-08-15T00:00:00Z"
+  #       white_balance: manual
+  #       matrix_enabled: true
 
 debug:
   enabled: false
@@ -116,14 +133,37 @@ logging:
   level: INFO
   stats_interval: 30                # seconds between throughput log lines
 
-# Optional: Screen Sight starts scrcpy and writes the phone camera to a
-# v4l2loopback node (Android Cam).  Wizard → "Android cam (scrcpy)" controls
-# zoom/size; absolute phone zoom briefly restarts scrcpy (no manual CLI).
-# Requires: scrcpy ≥ 4.0, /dev/video11 from:
+# Optional: Lumos Cam (preferred Android path). Needs Lumos Cam ≥ 0.1 on the
+# phone. Wizard → Input type "Lumos Cam (phone)". Zoom/locks are live HTTP;
+# ffmpeg decodes to a pipe (no /dev/video11, no camera.device).
+# camera:
+#   source: lumos
+#   device: ""
+# lumos_cam:
+#   serial: ""
+#   camera_id: "0"
+#   camera_size: "1280x720"         # 1080p JPEG queues and goes slow-mo
+#   camera_fps: 30
+#   codec: mjpeg                    # h264 | mjpeg; mjpeg is the live path
+#   camera_zoom: 1.0
+#   pan_x: 0.0
+#   pan_y: 0.0
+#   af: auto                        # auto | locked
+#   ae: auto
+#   awb: auto
+#   auto_restart: true
+
+# Optional: scrcpy fallback if Lumos Cam is not installed.
+# Wizard → Input type "scrcpy (phone fallback)". Absolute phone zoom restarts
+# scrcpy. Screen Sight creates /dev/video11 when this source is selected.
+# Requires: scrcpy ≥ 4.0. Output loopback stays /dev/video10 (HyperHDR).
+# Preferred module load (only if nodes are missing). Screen Sight creates
+# them on start and repairs a stuck /dev/video10 (S_FMT EINVAL) itself:
 #   sudo modprobe v4l2loopback devices=2 video_nr=10,11 \
 #     card_label="Screen Sight","Android Cam" exclusive_caps=1
+# camera:
+#   source: scrcpy
 # scrcpy:
-#   enabled: true
 #   binary: /opt/scrcpy/scrcpy
 #   serial: ""                      # adb serial, or empty for the only device
 #   camera_id: "0"
@@ -136,11 +176,16 @@ logging:
 #   pan_x: 0.0                      # -1 left .. +1 right
 #   pan_y: 0.0                      # -1 up .. +1 down
 #   v4l2_sink: /dev/video11
-#   bind_camera: true               # also set camera.device to the sink
 #   auto_restart: true              # restart scrcpy when phone USB reconnects
 #   restart_interval_sec: 5.0
-#   no_playback: true
-#   no_audio: true
+
+# Lumos OS LED box (the device that runs HyperHDR as a plugin). Distinct
+# from power.hyperhdr_url (HyperHDR JSON-RPC on the PC). Empty url skips
+# brightness API calls. LED brightness 0–255 is stored per environment
+# profile and only POSTed while HyperHDR is the active plugin.
+# lumos_os:
+#   url: "http://192.168.1.230"
+#   led_brightness: 128
 
 # When the TV is offline, release the USB camera, pause the pipeline, keep
 # writing black frames to /dev/video10 (HyperHDR grabber stays up), and

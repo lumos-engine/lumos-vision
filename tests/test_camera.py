@@ -42,6 +42,42 @@ def test_rtsp_source_requires_a_url():
         create_source(CameraConfig(source="rtsp"))
 
 
+def test_yuyv_to_bgr_converts_packed_frame():
+    from processor.camera.v4l2 import yuyv_to_bgr
+
+    width, height = 8, 4
+    packed = np.zeros((height, width, 2), np.uint8)
+    packed[:, :, 0] = 128
+    packed[:, 0::2, 1] = 128
+    packed[:, 1::2, 1] = 128
+    bgr = yuyv_to_bgr(packed.tobytes(), width, height)
+    assert bgr.shape == (height, width, 3)
+    assert bgr.dtype == np.uint8
+
+
+def test_i420_to_bgr_converts_planar_frame():
+    from processor.camera.v4l2 import i420_to_bgr
+
+    width, height = 8, 4
+    yuv = np.zeros((height * 3 // 2, width), np.uint8)
+    yuv[:height] = 128
+    yuv[height:] = 128
+    bgr = i420_to_bgr(yuv.tobytes(), width, height)
+    assert bgr.shape == (height, width, 3)
+    assert bgr.dtype == np.uint8
+
+
+def test_loopback_decode_accepts_scrcpy_yu12():
+    from processor.camera.v4l2 import _LoopbackCapture
+
+    width, height = 8, 4
+    cap = _LoopbackCapture(-1, "/dev/video11", width, height, width * height * 3 // 2, "YU12")
+    yuv = np.full((height * 3 // 2, width), 128, np.uint8)
+    bgr = cap._decode(yuv.tobytes())
+    assert bgr is not None
+    assert bgr.shape == (height, width, 3)
+
+
 def test_v4l2_source_requires_a_device():
     with pytest.raises(ValueError, match="device"):
         create_source(CameraConfig(source="v4l2"))

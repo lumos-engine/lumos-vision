@@ -2,10 +2,21 @@
 
 Same drop-old rule as the RTSP source: a reader thread keeps one frame, the
 pipeline always gets the newest, and nothing queues up behind a slow stage.
+
+v4l2loopback (ffmpeg / scrcpy → ``/dev/video11``) is a special case: the
+writer uses ``write()``, while OpenCV's V4L2 backend uses mmap + ``select()``.
+Those two I/O paths often never meet, which shows up as
+``VIDEOIO(V4L2): select() timeout`` with a live producer.  Loopback nodes are
+read with a plain ``read()`` instead — the same syscall we use to *write*
+``/dev/video10``.
 """
 
 from __future__ import annotations
 
+import fcntl
+import os
+import select
+import struct
 import threading
 import time
 from pathlib import Path
@@ -16,11 +27,15 @@ import numpy as np
 
 from processor.camera.base import Frame, FrameSource
 from processor.camera.controls import preferred_controls, set_controls
-from processor.camera.devices import real_video_node, resolve_device_path
+from processor.camera.devices import is_v4l2loopback, real_video_node, resolve_device_path
 from processor.config.schema import CameraConfig
 from processor.utils.logging import get_logger
 
 log = get_logger(__name__)
+
+V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
+VIDIOC_G_FMT = 0xC0D05604
+_V4L2_FORMAT_SIZE = 208
 
 
 def resolve_device(device: str) -> str | int:
@@ -59,6 +74,214 @@ def open_device_candidates(device: str | int) -> list[str | int]:
     return candidates
 
 
+def _fourcc_string(code: int) -> str:
+    return "".join(chr((int(code) >> (8 * i)) & 0xFF) for i in range(4))
+
+
+def yuyv_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) -> np.ndarray:
+    """Unpack packed YUYV 4:2:2 into BGR8."""
+    expected = int(width) * int(height) * 2
+    raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+    yuyv = raw.reshape((int(height), int(width), 2))
+    return cv2.cvtColor(yuyv, cv2.COLOR_YUV2BGR_YUYV)
+
+
+def i420_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) -> np.ndarray:
+    """Unpack planar YUV420 (I420 / YU12) into BGR8.
+
+    scrcpy's v4l2 sink writes this; YUYV is not available on that path.
+    """
+    width, height = int(width), int(height)
+    expected = width * height * 3 // 2
+    raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+    yuv = raw.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
+
+
+def yv12_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) -> np.ndarray:
+    width, height = int(width), int(height)
+    expected = width * height * 3 // 2
+    raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+    yuv = raw.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_YV12)
+
+
+def nv12_to_bgr(data: bytes | memoryview | np.ndarray, width: int, height: int) -> np.ndarray:
+    width, height = int(width), int(height)
+    expected = width * height * 3 // 2
+    raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+    yuv = raw.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
+
+
+class _LoopbackCapture:
+    """``read()``-based capture for v4l2loopback writers (ffmpeg / scrcpy).
+
+    Do not STREAMON: ffmpeg's v4l2 muxer ``write()``s frames. STREAMON switches
+    the node to mmap and delivers a couple of leftover buffers, then stalls —
+    the "connected for a second then dies" symptom.
+    """
+
+    def __init__(self, fd: int, path: str, width: int, height: int, size_image: int, fourcc: str):
+        self._fd = fd
+        self.path = path
+        self.width = width
+        self.height = height
+        self.size_image = size_image
+        self.fourcc = fourcc
+        self._warned_fourcc = False
+
+    @classmethod
+    def open(cls, path: str) -> "_LoopbackCapture | None":
+        fd = -1
+        last_exc: OSError | None = None
+        for flags in (os.O_RDONLY, os.O_RDWR):
+            try:
+                fd = os.open(path, flags)
+                last_exc = None
+                break
+            except OSError as exc:
+                last_exc = exc
+                fd = -1
+        if fd < 0:
+            log.warning("loopback open %s failed: %s", path, last_exc)
+            return None
+        buf = bytearray(_V4L2_FORMAT_SIZE)
+        struct.pack_into("<I4x", buf, 0, V4L2_BUF_TYPE_VIDEO_CAPTURE)
+        try:
+            fcntl.ioctl(fd, VIDIOC_G_FMT, buf)
+        except OSError as exc:
+            os.close(fd)
+            log.warning("loopback G_FMT %s failed: %s", path, exc)
+            return None
+        width, height, code, _field, bpl, size_image = struct.unpack_from("<6I", buf, 8)
+        fourcc = _fourcc_string(code)
+        if width <= 0 or height <= 0:
+            os.close(fd)
+            log.warning("loopback %s has no format yet (%dx%d)", path, width, height)
+            return None
+        if size_image <= 0:
+            size_image = int(bpl) * height if bpl else width * height * 2
+        fourcc_u = fourcc.upper().strip()
+        if fourcc_u in {"YU12", "I420", "YV12", "NV12", "NV21"}:
+            planar = int(width) * int(height) * 3 // 2
+            if size_image < planar:
+                size_image = planar
+        log.info(
+            "V4L2 loopback %s: read() %dx%d fourcc=%s (%d bytes)",
+            path,
+            width,
+            height,
+            fourcc.strip() or "?",
+            size_image,
+        )
+        return cls(fd, path, width, height, size_image, fourcc)
+
+    def isOpened(self) -> bool:
+        return self._fd >= 0
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        image = self._read_frame(block=True)
+        if image is None:
+            return False, None
+        # Drop-old: ffmpeg will block in write() if we let the 2-deep
+        # loopback queue fill, which stalls the phone TCP stream.
+        while True:
+            extra = self._read_frame(block=False)
+            if extra is None:
+                break
+            image = extra
+        return True, image
+
+    def _read_frame(self, *, block: bool) -> np.ndarray | None:
+        fd = self._fd
+        if fd < 0:
+            return None
+        if not block:
+            try:
+                ready, _, _ = select.select([fd], [], [], 0)
+            except OSError:
+                self.release()
+                return None
+            if not ready:
+                return None
+        try:
+            data = os.read(fd, self.size_image)
+        except OSError:
+            self.release()
+            return None
+        if not data:
+            self.release()
+            return None
+        return self._decode(data)
+
+    def _decode(self, data: bytes) -> np.ndarray | None:
+        fourcc = (self.fourcc or "").upper().strip()
+        width, height = self.width, self.height
+        if fourcc in {"YUYV", "YUY2"}:
+            row = width * 2
+            if len(data) < row or len(data) % row:
+                return None
+            got_h = len(data) // row
+            return yuyv_to_bgr(data, width, min(height, got_h))
+        if fourcc in {"BGR3", "RGB3"}:
+            row = width * 3
+            if len(data) < row or len(data) % row:
+                return None
+            got_h = len(data) // row
+            image = np.frombuffer(data, dtype=np.uint8, count=row * got_h)
+            image = image.reshape((got_h, width, 3)).copy()
+            if fourcc == "RGB3":
+                return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            return image
+        if fourcc in {"YU12", "I420", "YV12", "NV12", "NV21"}:
+            if width <= 0 or height <= 0 or height % 2:
+                return None
+            expected = width * height * 3 // 2
+            if len(data) < expected:
+                return None
+            if fourcc in {"YU12", "I420"}:
+                return i420_to_bgr(data, width, height)
+            if fourcc == "YV12":
+                return yv12_to_bgr(data, width, height)
+            if fourcc == "NV21":
+                raw = np.frombuffer(data, dtype=np.uint8, count=expected)
+                yuv = raw.reshape((height * 3 // 2, width))
+                return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV21)
+            return nv12_to_bgr(data, width, height)
+        if not self._warned_fourcc:
+            self._warned_fourcc = True
+            log.warning(
+                "loopback %s fourcc %s is not YUYV/YUV420/BGR; dropping frames",
+                self.path,
+                fourcc,
+            )
+        return None
+
+    def get(self, prop: int) -> float:
+        if prop == cv2.CAP_PROP_FRAME_WIDTH:
+            return float(self.width)
+        if prop == cv2.CAP_PROP_FRAME_HEIGHT:
+            return float(self.height)
+        if prop == cv2.CAP_PROP_FPS:
+            return 0.0
+        if prop == cv2.CAP_PROP_FOURCC:
+            raw = (self.fourcc or "YUYV").ljust(4)[:4]
+            return float(sum(ord(ch) << (8 * i) for i, ch in enumerate(raw)))
+        return 0.0
+
+    def set(self, _prop: int, _value: float) -> bool:
+        return False
+
+    def release(self) -> None:
+        fd, self._fd = self._fd, -1
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 class V4l2Source(FrameSource):
     name = "v4l2"
 
@@ -67,7 +290,7 @@ class V4l2Source(FrameSource):
         self.device = resolve_device(config.device)
         self._open_path = resolve_device_path(str(config.device))
 
-        self._capture: cv2.VideoCapture | None = None
+        self._capture: cv2.VideoCapture | _LoopbackCapture | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._frame_ready = threading.Event()
@@ -94,10 +317,11 @@ class V4l2Source(FrameSource):
 
     def stop(self) -> None:
         self._stop.set()
+        # Close the fd first so a blocking loopback read() unblocks.
+        self._release()
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.join(timeout=3.0)
-        self._release()
         log.info("V4L2 source stopped")
 
     def read(self, timeout: float = 1.0) -> Frame | None:
@@ -166,6 +390,13 @@ class V4l2Source(FrameSource):
             now = time.monotonic()
 
             if not ok or image is None:
+                if not capture.isOpened() or self._stop.is_set():
+                    return
+                # Keep a loopback fd open: closing it makes ffmpeg's write()
+                # fail, which kills the phone TCP stream a few seconds later.
+                if isinstance(capture, _LoopbackCapture):
+                    time.sleep(0.01)
+                    continue
                 if now - last_ok > self.config.read_timeout:
                     self._last_error = f"no frames for {self.config.read_timeout:.0f}s"
                     return
@@ -196,6 +427,16 @@ class V4l2Source(FrameSource):
 
     def _open(self) -> bool:
         self._release()
+        path = self._device_path()
+        if is_v4l2loopback(path):
+            capture = _LoopbackCapture.open(path)
+            if capture is None:
+                return False
+            self._open_path = path
+            self._capture = capture
+            log.info("V4L2 opened %s (loopback read)", self.device)
+            return True
+
         capture: cv2.VideoCapture | None = None
         opened_as: str | int | None = None
         for candidate in open_device_candidates(self.device):
@@ -249,7 +490,14 @@ class V4l2Source(FrameSource):
         got_w = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         got_h = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         got_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-        log.info("V4L2 mode: %dx%d @ %.1f fps", got_w, got_h, got_fps)
+        fourcc = int(capture.get(cv2.CAP_PROP_FOURCC) or 0)
+        log.info(
+            "V4L2 mode: %dx%d @ %.1f fps fourcc=%s",
+            got_w,
+            got_h,
+            got_fps,
+            _fourcc_string(fourcc).strip() or "?",
+        )
         if self.config.controls:
             self.apply_controls(dict(self.config.controls))
         return True

@@ -33,5 +33,6 @@ def create_source(config: CameraConfig) -> FrameSource:
 
     raise ValueError(
         f"unknown camera.source {config.source!r} "
-        f"(expected rtsp, v4l2, usb, file, image or synthetic)"
+        f"(expected rtsp, v4l2, usb, file, image or synthetic; "
+        f"lumos and scrcpy are routed by the processor)"
     )

@@ -36,7 +36,14 @@ tests/          # pytest; prefer synthetic sources, no hardware
 tools/          # detection bench, etc.
 packaging/      # systemd unit (screen-sight.service)
 config.example.yaml
+docs/lumos-cam-api.md   # shared with sibling repo lumos-cam (protocol v1)
+.agents/skills/         # project skills (colour profiles, …)
 ```
+
+Android Camera2 capture lives in a **separate repo** (`lumos-cam`, sibling
+directory). Open both in a Cursor multi-root workspace
+(`lumos-vision.code-workspace`). Lumos Vision talks `Lumos-Cam-Protocol: 1`
+and pins **Lumos Cam ≥ 0.1.0**.
 
 ## Architecture rules
 

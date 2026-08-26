@@ -87,7 +87,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     source.add_argument(
         "--source",
-        choices=("rtsp", "v4l2", "usb", "file", "image", "synthetic"),
+        choices=("rtsp", "v4l2", "usb", "file", "image", "synthetic", "lumos", "scrcpy"),
         help="input type",
     )
     source.add_argument(
@@ -201,6 +201,34 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
     return updates
 
 
+def _require_camera_identity(config: Config) -> None:
+    """Fail fast when the configured source has no URL/device.
+
+    ``lumos`` reads an ffmpeg pipe, so ``camera.device`` stays unused.
+    ``scrcpy`` uses ``scrcpy.v4l2_sink`` (copied onto ``camera.device``).
+    """
+    source = (config.camera.source or "").strip().lower()
+    if source in {"lumos", "synthetic"}:
+        return
+    if source == "scrcpy":
+        if not (config.scrcpy.v4l2_sink or config.camera.device):
+            raise SystemExit(
+                "scrcpy selected but no v4l2_sink given. Set scrcpy.v4l2_sink "
+                "(default /dev/video11)."
+            )
+        return
+    if source == "rtsp" and not config.camera.rtsp_url:
+        raise SystemExit(
+            "no camera configured. Pass --rtsp-url, set camera.rtsp_url in the config, "
+            "or try --source synthetic / --source v4l2 --camera-device /dev/video2."
+        )
+    if source in ("v4l2", "usb") and not config.camera.device:
+        raise SystemExit(
+            "USB camera selected but no device given. Pass --camera-device /dev/video2 "
+            "(check with: v4l2-ctl --list-devices)."
+        )
+
+
 def build_config(args: argparse.Namespace) -> tuple[Config, Path | None]:
     """Load YAML (explicit, discovered, or defaults) and apply CLI overrides."""
     path = Path(args.config).expanduser() if getattr(args, "config", None) else find_config()
@@ -235,16 +263,7 @@ def command_run(args: argparse.Namespace) -> int:
         print(f"wrote {target}")
         return 0
 
-    if config.camera.source == "rtsp" and not config.camera.rtsp_url:
-        raise SystemExit(
-            "no camera configured. Pass --rtsp-url, set camera.rtsp_url in the config, "
-            "or try --source synthetic / --source v4l2 --camera-device /dev/video2."
-        )
-    if config.camera.source in ("v4l2", "usb") and not config.camera.device:
-        raise SystemExit(
-            "USB camera selected but no device given. Pass --camera-device /dev/video2 "
-            "(check with: v4l2-ctl --list-devices)."
-        )
+    _require_camera_identity(config)
 
     # Imported here so `screensight --help` and the offline subcommands stay fast and
     # do not need a GUI-capable OpenCV build.

@@ -3,12 +3,32 @@
 from pathlib import Path
 
 from processor.camera.devices import (
+    is_v4l2loopback,
     list_capture_devices,
     prefer_stable_device,
     real_video_node,
     resolve_device_path,
 )
 from processor.camera.v4l2 import open_device_candidates, resolve_device
+
+
+def test_is_v4l2loopback_uses_driver_name(monkeypatch):
+    monkeypatch.setattr(
+        "processor.camera.devices._read_v4l2_info",
+        lambda device: (
+            {"driver": "v4l2loopback", "card": "Android Cam"}
+            if "video11" in device
+            else {"driver": "uvcvideo", "card": "USB Cam"}
+        ),
+    )
+    assert is_v4l2loopback("/dev/video11") is True
+    assert is_v4l2loopback("/dev/video2") is False
+
+    monkeypatch.setattr(
+        "processor.camera.devices._read_v4l2_info",
+        lambda device: {"driver": "v4l2 loopback", "card": "Dummy video device"},
+    )
+    assert is_v4l2loopback("/dev/video11") is True
 
 
 def test_resolve_device_path_accepts_index_and_paths():

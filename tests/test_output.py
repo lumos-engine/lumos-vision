@@ -20,6 +20,7 @@ from processor.output.v4l2 import (
     PIXEL_FORMATS,
     V4L2_BUF_TYPE_VIDEO_OUTPUT,
     V4L2_FIELD_NONE,
+    VIDIOC_S_FMT,
     V4L2Sink,
     bgr_to_yuyv,
     fourcc,
@@ -104,6 +105,119 @@ def test_v4l2_explains_itself_on_other_platforms():
         sink.open(640, 360)
 
 
+def test_v4l2_open_repairs_stuck_format_instead_of_raising(monkeypatch):
+    from processor.config.schema import V4L2Config
+
+    repaired: list[str] = []
+    monkeypatch.setattr("processor.output.v4l2.sys.platform", "linux")
+    monkeypatch.setattr("processor.output.v4l2.os.path.exists", lambda path: True)
+    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._set_keep_format", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "processor.output.v4l2.repair_loopback",
+        lambda path, **k: repaired.append(path) or True,
+    )
+    monkeypatch.setattr("processor.output.v4l2.ensure_loopback", lambda *a, **k: True)
+
+    def boom(*_args, **_kwargs):
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr("processor.output.v4l2.os.open", boom)
+
+    sink = V4L2Sink(V4L2Config())
+    sink.open(640, 360)
+    assert sink.stats["open"] is False
+    assert repaired == ["/dev/video10"]
+
+
+def test_v4l2_writes_pinned_format_when_s_fmt_is_rejected(monkeypatch):
+    from processor.config.schema import V4L2Config
+
+    repaired: list[str] = []
+    monkeypatch.setattr("processor.output.v4l2.sys.platform", "linux")
+    monkeypatch.setattr("processor.output.v4l2.os.path.exists", lambda path: True)
+    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._set_keep_format", lambda *a, **k: None)
+    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._ctl_set_fmt", lambda *a, **k: False)
+    monkeypatch.setattr(
+        "processor.output.v4l2.repair_loopback",
+        lambda path, **k: repaired.append(path) or True,
+    )
+    monkeypatch.setattr("processor.output.v4l2.ensure_loopback", lambda *a, **k: True)
+    monkeypatch.setattr("processor.output.v4l2.os.open", lambda *_a, **_k: 7)
+    monkeypatch.setattr("processor.output.v4l2.os.close", lambda *_a, **_k: None)
+    monkeypatch.setattr("processor.output.v4l2.os.write", lambda *_a, **_k: 1280 * 720 * 2)
+
+    def fake_ioctl(_fd, req, buf):
+        if req == VIDIOC_S_FMT:
+            raise OSError(22, "Invalid argument")
+        packed = pack_format(1280, 720, "YUYV")
+        buf[: len(packed)] = packed
+        return 0
+
+    monkeypatch.setattr("processor.output.v4l2.fcntl.ioctl", fake_ioctl)
+
+    sink = V4L2Sink(V4L2Config())
+    sink.open(640, 360)
+    assert sink.stats["open"] is True
+    assert sink.stats["size"] == [1280, 720]
+    assert sink.stats["pixel_format"] == "YUYV"
+    assert repaired == []
+
+
+def test_processor_recovers_v4l2_and_nudges_hyperhdr(monkeypatch):
+    from processor.app import Processor
+    from processor.config.schema import Config, V4L2Config
+
+    grabber: list[bool] = []
+    repaired: list[str] = []
+    nudged: list[str] = []
+    monkeypatch.setattr("processor.app.sys.platform", "linux")
+    monkeypatch.setattr("processor.app.time.sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "processor.app.set_video_grabber",
+        lambda url, enabled, **kw: grabber.append(bool(enabled)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        "processor.app.repair_loopback",
+        lambda path, **kw: repaired.append(path) or True,
+    )
+    monkeypatch.setattr(
+        "processor.app.refresh_video_grabber",
+        lambda url, **kw: nudged.append(url) or {"ok": True},
+    )
+
+    sink = V4L2Sink(V4L2Config())
+    opened: list[tuple[int, int]] = []
+
+    def fake_open(width, height):
+        opened.append((width, height))
+        sink._fd = 7
+        sink._size = (width, height)
+
+    monkeypatch.setattr(sink, "open", fake_open)
+    monkeypatch.setattr(sink, "close", lambda: None)
+
+    app = Processor(
+        Config.from_dict(
+            {
+                "camera": {"source": "synthetic"},
+                "output": {
+                    "width": 640,
+                    "height": 360,
+                    "v4l2": {"enabled": True, "device": "/dev/video10"},
+                },
+                "power": {"hyperhdr_url": "http://127.0.0.1:8090"},
+            }
+        )
+    )
+    app.sinks = SinkGroup([sink])
+    app._recover_v4l2_unlocked()
+    app._nudge_hyperhdr_grabber_unlocked()
+    assert grabber == [False]
+    assert repaired == ["/dev/video10"]
+    assert opened == [(640, 360)]
+    assert nudged == ["http://127.0.0.1:8090"]
+
+
 # ------------------------------------------------------------------- sinks
 
 
@@ -119,6 +233,25 @@ def test_sink_group_survives_a_broken_member():
     group.open(64, 36)
     group.write(np.zeros((36, 64, 3), np.uint8))
     assert good.frames == 1, "one broken sink stopped the others"
+
+
+def test_sink_group_logs_a_dead_sink_once(caplog):
+    import logging
+
+    class Dead(NullSink):
+        name = "dead"
+
+        def write(self, image):
+            return False
+
+    group = SinkGroup([Dead()])
+    group.open(4, 4)
+    frame = np.zeros((4, 4, 3), np.uint8)
+    with caplog.at_level(logging.WARNING):
+        group.write(frame)
+        group.write(frame)
+        group.write(frame)
+    assert sum(1 for rec in caplog.records if "stopped accepting" in rec.message) == 1
 
 
 def test_sink_group_drops_a_sink_that_cannot_open():
