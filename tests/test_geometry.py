@@ -3,6 +3,7 @@ import pytest
 
 from processor.utils.geometry import (
     clip_quad,
+    compose_panel_insets,
     full_frame_quad,
     homography_to_rect,
     inset_quad,
@@ -119,3 +120,19 @@ def test_max_corner_shift_and_clip():
 def test_full_frame_quad():
     quad = full_frame_quad(640, 360)
     assert quad_aspect_ratio(quad) == pytest.approx(639 / 359, rel=1e-3)
+
+
+def test_compose_panel_insets_is_sequential_remaining_space():
+    top, bottom, left, right = compose_panel_insets(
+        (0.02, 0.02, 0.02, 0.02),
+        (0.10, 0.10, 0.0, 0.0),
+        0.02,
+    )
+    # crop 2% + 10% of remaining 96% + 2% of what's left after that
+    inner = 0.02 + 0.10 * 0.96
+    rem = 1.0 - 2 * inner
+    expected = inner + 0.02 * rem
+    assert top == pytest.approx(expected)
+    assert bottom == pytest.approx(expected)
+    assert left == pytest.approx(0.02 + 0.02 * (1.0 - 0.04))
+    assert right == pytest.approx(left)

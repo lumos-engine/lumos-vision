@@ -88,6 +88,7 @@ class Pipeline:
             image=frame.image,
             index=frame.index,
             captured_at=frame.captured_at,
+            collect_debug=self.collect_debug,
         )
         self.state.frame_size = (frame.width, frame.height)
 

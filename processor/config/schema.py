@@ -445,6 +445,35 @@ class DdpConfig:
     fps: float = 0.0  # 0 = follow the pipeline
 
 
+#: Aliases accepted in YAML / the wizard for the opt-in WLED path.
+_LED_PATH_DDP = frozenset({"ddp", "direct", "wled"})
+
+
+def normalize_led_path(value: Any) -> str:
+    """``hyperhdr`` (default, virtual cam) or ``ddp`` (direct to WLED)."""
+    text = str(value or "hyperhdr").strip().lower()
+    return "ddp" if text in _LED_PATH_DDP else "hyperhdr"
+
+
+def sync_led_path_sinks(output: OutputConfig, *, restore_v4l2: bool = False) -> None:
+    """Keep V4L2 and DDP mutually exclusive for the live LED path.
+
+    ``restore_v4l2`` is True when the user just switched *to* HyperHDR (wizard
+    or live update) so the virtual camera comes back without a YAML edit.
+    Loading a file with ``led_path: hyperhdr`` leaves ``v4l2.enabled`` alone
+    so ``--no-v4l2`` still works.
+    """
+    path = normalize_led_path(output.led_path)
+    output.led_path = path
+    if path == "ddp":
+        output.ddp.enabled = True
+        output.v4l2.enabled = False
+    else:
+        output.ddp.enabled = False
+        if restore_v4l2:
+            output.v4l2.enabled = True
+
+
 @dataclass
 class OutputConfig:
     #: Virtual-cam / MJPEG size.  1280x720 keeps cinema letterbox edges sharp
@@ -452,6 +481,9 @@ class OutputConfig:
     width: int = 1280
     height: int = 720
     fps: float = 20.0
+    #: ``hyperhdr`` (default): warp → V4L2 → HyperHDR. ``ddp``: sample the
+    #: camera quad and send DDP UDP to WLED. Mutually exclusive live paths.
+    led_path: str = "hyperhdr"
     v4l2: V4L2Config = field(default_factory=V4L2Config)
     mjpeg: MjpegConfig = field(default_factory=MjpegConfig)
     file: FileSinkConfig = field(default_factory=FileSinkConfig)
@@ -648,6 +680,7 @@ class Config:
         raw = copy.deepcopy(data or {})
         normalize_capture_dict(raw)
         cfg = build_dataclass(cls, raw)
+        sync_led_path_sinks(cfg.output, restore_v4l2=False)
         if bind_profiles:
             from processor.utils.color_profiles import bind_config
 

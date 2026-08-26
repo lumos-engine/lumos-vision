@@ -42,16 +42,33 @@ class ReflectionStage(Stage):
         image = ctx.image
         height, width = image.shape[:2]
 
-        if self.config.exclusions:
-            image = self._apply_exclusions(image)
-
         margin = max(0.0, min(self.config.margin_percent, 20.0)) / 100.0
         dx = int(round(width * margin))
         dy = int(round(height * margin))
         self._margin_px = max(dx, dy)
 
+        if self.state.led_path == "ddp":
+            ctx.record(
+                self.name,
+                margin_px={"x": 0, "y": 0},
+                margin_fraction=margin,
+                size=[width, height],
+                exclusions=len(self.config.exclusions),
+            )
+            return
+
+        if self.config.exclusions:
+            image = self._apply_exclusions(image)
+
         if width - 2 * dx < 8 or height - 2 * dy < 8:
             ctx.skipped[self.name] = "margin too large"
+            ctx.record(
+                self.name,
+                margin_px={"x": dx, "y": dy},
+                margin_fraction=margin,
+                size=[image.shape[1], image.shape[0]],
+                exclusions=len(self.config.exclusions),
+            )
             ctx.set_image(image)
             return
 
@@ -62,6 +79,7 @@ class ReflectionStage(Stage):
         ctx.record(
             self.name,
             margin_px={"x": dx, "y": dy},
+            margin_fraction=margin,
             size=[image.shape[1], image.shape[0]],
             exclusions=len(self.config.exclusions),
         )

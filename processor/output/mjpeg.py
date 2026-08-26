@@ -178,7 +178,7 @@ class MjpegSink(Sink):
             height,
         )
 
-    def write(self, image: np.ndarray) -> bool:
+    def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         self._frames += 1
         # Skip the copy when nobody is watching -- this sink is usually idle.
         if self.broker.has_subscribers:

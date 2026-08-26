@@ -53,6 +53,17 @@ class CropStage(Stage):
         image = ctx.image
         height, width = image.shape[:2]
         top_f, bottom_f, left_f, right_f = resolve_insets(self.config)
+        ctx.record(
+            self.name,
+            fractions={
+                "top": top_f,
+                "bottom": bottom_f,
+                "left": left_f,
+                "right": right_f,
+            },
+        )
+        if self.state.led_path == "ddp":
+            return
 
         top = int(round(height * top_f))
         bottom = int(round(height * bottom_f))
@@ -66,14 +77,14 @@ class CropStage(Stage):
             return
 
         self._last = (top, bottom, left, right)
-        # A slice is a view; nothing is copied until something needs it to be
-        # contiguous, which is exactly the behaviour we want on a slow CPU.
-        ctx.set_image(image[y0:y1, x0:x1])
         ctx.record(
             self.name,
             pixels={"top": top, "bottom": bottom, "left": left, "right": right},
             size=[x1 - x0, y1 - y0],
         )
+        # A slice is a view; nothing is copied until something needs it to be
+        # contiguous, which is exactly the behaviour we want on a slow CPU.
+        ctx.set_image(image[y0:y1, x0:x1])
 
     def debug_view(self, ctx: FrameContext) -> np.ndarray | None:
         image = ctx.debug_images.get("perspective")

@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from processor.config.schema import Config, ConfigError
+from processor.config.schema import Config, ConfigError, normalize_led_path
 
 DEFAULT_CONFIG_PATHS = (
     Path("config.yaml"),
@@ -118,5 +118,14 @@ def apply_updates(config: Config, updates: dict[str, Any]) -> Config:
     data = config_to_dict(config)
     for path, value in updates.items():
         dotted_set(data, path, value)
+    if "output.led_path" in updates:
+        led_path = normalize_led_path(updates["output.led_path"])
+        dotted_set(data, "output.led_path", led_path)
+        if led_path == "ddp":
+            dotted_set(data, "output.ddp.enabled", True)
+            dotted_set(data, "output.v4l2.enabled", False)
+        else:
+            dotted_set(data, "output.ddp.enabled", False)
+            dotted_set(data, "output.v4l2.enabled", True)
     # Skip profile bind here: apply_updates is used *by* bind_config.
     return Config.from_dict(data, bind_profiles=False)

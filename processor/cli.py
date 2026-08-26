@@ -175,6 +175,7 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
         updates["output.file.enabled"] = True
         updates["output.file.path"] = args.record
     if args.ddp_host:
+        updates["output.led_path"] = "ddp"
         updates["output.ddp.enabled"] = True
         updates["output.ddp.host"] = args.ddp_host
 

@@ -226,6 +226,67 @@ const CONTROLS = [
     ],
   },
   {
+    group: 'LED output',
+    hint: 'HyperHDR (default) keeps the virtual camera. Direct (DDP) samples the TV quad here and sends colours to WLED — flip back anytime without redoing calibration.',
+    items: [
+      {
+        path: 'output.led_path',
+        type: 'select',
+        label: 'LED output',
+        options: [
+          { value: 'hyperhdr', label: 'HyperHDR (virtual cam)' },
+          { value: 'ddp', label: 'Direct (DDP → WLED)' },
+        ],
+      },
+      {
+        path: 'output.ddp.host',
+        type: 'text',
+        label: 'WLED / DDP host',
+        placeholder: '192.168.1.50',
+        ddpOnly: true,
+      },
+      {
+        path: 'output.ddp.leds_top',
+        label: 'LEDs on top',
+        min: 0,
+        max: 200,
+        step: 1,
+        ddpOnly: true,
+      },
+      {
+        path: 'output.ddp.leds_right',
+        label: 'LEDs on right',
+        min: 0,
+        max: 200,
+        step: 1,
+        ddpOnly: true,
+      },
+      {
+        path: 'output.ddp.leds_bottom',
+        label: 'LEDs on bottom',
+        min: 0,
+        max: 200,
+        step: 1,
+        ddpOnly: true,
+      },
+      {
+        path: 'output.ddp.leds_left',
+        label: 'LEDs on left',
+        min: 0,
+        max: 200,
+        step: 1,
+        ddpOnly: true,
+      },
+      {
+        path: 'output.ddp.start_corner',
+        type: 'select',
+        label: 'Strip start corner',
+        options: ['top-left', 'top-right', 'bottom-right', 'bottom-left'],
+        ddpOnly: true,
+      },
+    ],
+  },
+  {
     group: 'Detection',
     items: [
       {
@@ -295,6 +356,7 @@ const CONTROLS = [
         max: 1920,
         step: 16,
         unit: ' px',
+        hyperhdrOnly: true,
       },
       {
         path: 'perspective.height',
@@ -303,12 +365,14 @@ const CONTROLS = [
         max: 1080,
         step: 9,
         unit: ' px',
+        hyperhdrOnly: true,
       },
       {
         path: 'resize.mode',
         type: 'select',
         label: 'Fit mode',
         options: ['stretch', 'letterbox', 'crop'],
+        hyperhdrOnly: true,
       },
     ],
   },
@@ -1953,7 +2017,7 @@ function buildControls() {
         );
         wrap.append(input, document.createTextNode(label));
         row.append(wrap);
-        boundInputs.set(item.path, { input, kind: 'toggle' });
+        boundInputs.set(item.path, { input, kind: 'toggle', item });
       } else if (item.type === 'select') {
         row.innerHTML = `<label>${label}</label><output></output>`;
         const select = document.createElement('select');
@@ -1971,7 +2035,7 @@ function buildControls() {
           queueUpdate(item.path, select.value),
         );
         row.append(select);
-        boundInputs.set(item.path, { input: select, kind: 'select' });
+        boundInputs.set(item.path, { input: select, kind: 'select', item });
       } else if (item.type === 'text') {
         row.innerHTML = `<label>${label}</label>`;
         const input = document.createElement('input');
@@ -1987,7 +2051,7 @@ function buildControls() {
           }
         });
         row.append(input);
-        boundInputs.set(item.path, { input, kind: 'text' });
+        boundInputs.set(item.path, { input, kind: 'text', item });
       } else {
         row.innerHTML = `<label>${label}</label><output></output>`;
         const input = document.createElement('input');
@@ -2036,7 +2100,18 @@ function applyConfig(config, { skipFocused = false } = {}) {
   const mode = $('boundary-mode');
   if (document.activeElement !== mode)
     mode.value = get(config, 'boundary.mode') || 'hybrid';
+  syncLedPathControls(config);
 }
+
+function syncLedPathControls(config) {
+  const path = get(config, 'output.led_path') || 'hyperhdr';
+  const ddp = path === 'ddp';
+  for (const bound of boundInputs.values()) {
+    const item = bound.item;
+    if (!item) continue;
+    if (item.ddpOnly) bound.input.disabled = !ddp;
+    if (item.hyperhdrOnly) bound.input.disabled = ddp;
+  }
 
 // ------------------------------------------------------------ corner picker
 

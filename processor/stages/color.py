@@ -66,6 +66,36 @@ def build_lut(
     return table
 
 
+def apply_colour_bgr(
+    image: np.ndarray,
+    *,
+    black_level: tuple[float, float, float] | None = None,
+    matrix: np.ndarray | None = None,
+    lut: np.ndarray | None = None,
+    saturation: float = 1.0,
+) -> np.ndarray:
+    """Apply the colour-stage stack to a BGR image or an ``(N, 3)`` sample row."""
+    if image.size == 0:
+        return image
+    work = np.ascontiguousarray(image)
+    squeezed = False
+    if work.ndim == 2 and work.shape[-1] == 3:
+        work = work[None, ...]
+        squeezed = True
+    if black_level is not None:
+        work = apply_black_level_bgr(work, black_level)
+    if matrix is not None:
+        work = apply_matrix_bgr(work, matrix)
+    if lut is not None:
+        work = cv2.LUT(np.ascontiguousarray(work), lut)
+    sat = float(saturation)
+    if abs(sat - 1.0) > 1e-3:
+        grey = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
+        grey3 = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
+        work = cv2.addWeighted(work, sat, grey3, 1.0 - sat, 0.0)
+    return work[0] if squeezed else work
+
+
 class ColorStage(Stage):
     name = "color"
 
@@ -112,6 +142,10 @@ class ColorStage(Stage):
     # -- main --------------------------------------------------------------
 
     def process(self, ctx: FrameContext) -> None:
+        if self.state.led_path == "ddp":
+            self._process_ddp(ctx)
+            return
+
         image = ctx.image
         if image.ndim != 3 or image.shape[2] != 3:
             ctx.skipped[self.name] = "not a colour image"
@@ -127,7 +161,44 @@ class ColorStage(Stage):
 
         gains = self._resolve_gains(image)
         exposure = self._resolve_exposure(image)
+        identity = self._rebuild_lut(gains, exposure)
+        saturation = float(self.config.saturation)
+        self._publish_colour(ctx, black_level, matrix, identity, gains, exposure, saturation)
 
+        if not identity:
+            image = cv2.LUT(np.ascontiguousarray(image), self._lut)
+        if abs(saturation - 1.0) > 1e-3:
+            grey = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            grey3 = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
+            image = cv2.addWeighted(image, saturation, grey3, 1.0 - saturation, 0.0)
+
+        ctx.set_image(image)
+
+    def _process_ddp(self, ctx: FrameContext) -> None:
+        sample = ctx.bar_probe if ctx.bar_probe is not None else ctx.image
+        if sample.ndim != 3 or sample.shape[2] != 3:
+            ctx.skipped[self.name] = "not a colour image"
+            return
+
+        black_level = self._resolve_black_level()
+        matrix = self._resolve_matrix()
+        auto = (self.config.white_balance or "off").lower() == "auto"
+        if auto and ctx.bar_probe is None:
+            gains = (1.0, 1.0, 1.0)
+            self._measured["gains"] = [1.0, 1.0, 1.0]
+        else:
+            work = sample
+            if black_level is not None:
+                work = apply_black_level_bgr(work, black_level)
+            if matrix is not None:
+                work = apply_matrix_bgr(work, matrix)
+            gains = self._resolve_gains(work)
+        exposure = self._resolve_exposure(ctx.bar_probe if ctx.bar_probe is not None else sample)
+        identity = self._rebuild_lut(gains, exposure)
+        saturation = float(self.config.saturation)
+        self._publish_colour(ctx, black_level, matrix, identity, gains, exposure, saturation)
+
+    def _rebuild_lut(self, gains: tuple[float, float, float], exposure: float) -> bool:
         key = (
             round(gains[0], 3),
             round(gains[1], 3),
@@ -146,18 +217,22 @@ class ColorStage(Stage):
                 gamma=self.config.gamma,
             )
             self._lut_key = key
+        return key == (1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 
-        identity = key == (1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
-        if not identity:
-            image = cv2.LUT(np.ascontiguousarray(image), self._lut)
-
-        saturation = float(self.config.saturation)
-        if abs(saturation - 1.0) > 1e-3:
-            grey = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            grey3 = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
-            image = cv2.addWeighted(image, saturation, grey3, 1.0 - saturation, 0.0)
-
-        ctx.set_image(image)
+    def _publish_colour(
+        self,
+        ctx: FrameContext,
+        black_level: tuple[float, float, float] | None,
+        matrix: np.ndarray | None,
+        identity: bool,
+        gains: tuple[float, float, float],
+        exposure: float,
+        saturation: float,
+    ) -> None:
+        ctx.color_black_level = black_level
+        ctx.color_matrix = matrix
+        ctx.color_lut = None if identity else self._lut
+        ctx.color_saturation = saturation
         ctx.record(
             self.name,
             gains=[round(g, 3) for g in gains],

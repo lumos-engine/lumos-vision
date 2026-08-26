@@ -153,6 +153,40 @@ def homography_to_rect(quad, width: int, height: int) -> np.ndarray:
     return cv2.getPerspectiveTransform(src, dst)
 
 
+def compose_panel_insets(
+    crop: tuple[float, float, float, float],
+    bars: tuple[float, float, float, float],
+    reflection: float = 0.0,
+) -> tuple[float, float, float, float]:
+    """Fold sequential remaining-space insets into panel-UV fractions.
+
+    Pipeline order is crop → black bars → reflection, each as a fraction of
+    *what remains*. LED sampling needs a single inset of the TV quad.
+    Returns ``(top, bottom, left, right)`` in ``0..0.49``.
+    """
+    ct, cb, cl, cr = (float(max(0.0, v)) for v in crop)
+    bt, bb, bl, br = (float(max(0.0, v)) for v in bars)
+    inner_h = max(0.0, 1.0 - ct - cb)
+    inner_w = max(0.0, 1.0 - cl - cr)
+    top = ct + bt * inner_h
+    bottom = cb + bb * inner_h
+    left = cl + bl * inner_w
+    right = cr + br * inner_w
+    rem_h = max(0.0, 1.0 - top - bottom)
+    rem_w = max(0.0, 1.0 - left - right)
+    refl = float(max(0.0, reflection))
+    top += refl * rem_h
+    bottom += refl * rem_h
+    left += refl * rem_w
+    right += refl * rem_w
+    return (
+        float(np.clip(top, 0.0, 0.49)),
+        float(np.clip(bottom, 0.0, 0.49)),
+        float(np.clip(left, 0.0, 0.49)),
+        float(np.clip(right, 0.0, 0.49)),
+    )
+
+
 def inset_quad(quad, left: float, top: float, right: float, bottom: float) -> np.ndarray:
     """Shrink (or, with negative values, grow) a quad by fractions of its own
     perspective-corrected size.

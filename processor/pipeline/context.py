@@ -31,6 +31,16 @@ class FrameContext:
     debug_images: dict[str, np.ndarray] = field(default_factory=dict)
     #: Stages that declined to run this frame, with a reason.
     skipped: dict[str, str] = field(default_factory=dict)
+    #: Copied from the pipeline so stages can skip full-frame work in DDP mode
+    #: unless the wizard (or another subscriber) actually wants a preview.
+    collect_debug: bool = False
+    #: Tiny warped panel used for letterbox probing / auto-WB in DDP mode.
+    bar_probe: np.ndarray | None = None
+    #: Colour params for LED samples when the full-frame colour stage is skipped.
+    color_lut: np.ndarray | None = None
+    color_matrix: np.ndarray | None = None
+    color_black_level: tuple[float, float, float] | None = None
+    color_saturation: float = 1.0
 
     @property
     def latency_ms(self) -> float:
@@ -68,6 +78,8 @@ class PipelineState:
         self._recalibrate = False
         self.last_movement_at: float = 0.0
         self.movement_score: float = 0.0
+        #: ``hyperhdr`` (full warp → V4L2) or ``ddp`` (sample the camera quad).
+        self.led_path: str = "hyperhdr"
 
     def request_recalibration(self, reason: str = "") -> None:
         with self._lock:
@@ -106,4 +118,5 @@ class PipelineState:
                 "recalibration_pending": self._recalibrate,
                 "movement_score": round(self.movement_score, 2),
                 "last_movement_at": self.last_movement_at,
+                "led_path": self.led_path,
             }

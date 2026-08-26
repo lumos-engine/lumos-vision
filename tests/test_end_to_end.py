@@ -201,3 +201,55 @@ def test_file_output_records_the_processed_stream(tmp_path, scene):
     ok, frame = capture.read()
     capture.release()
     assert ok and frame.shape[:2] == (180, 320)
+
+
+def test_ddp_mode_skips_full_frame_warp(scene):
+    processor = build(
+        output={
+            "width": 640,
+            "height": 360,
+            "fps": 15,
+            "led_path": "ddp",
+            "v4l2": {"enabled": False},
+            "ddp": {
+                "host": "127.0.0.1",
+                "leds_top": 4,
+                "leds_right": 2,
+                "leds_bottom": 4,
+                "leds_left": 2,
+            },
+        }
+    )
+    try:
+        ctx = drive(processor, scene, frames=50)
+        assert processor.state.led_path == "ddp"
+        assert ctx.image.shape[:2] == (scene.params.height, scene.params.width)
+        assert ctx.skipped.get("perspective") == "ddp"
+        assert ctx.skipped.get("resize") == "ddp"
+        assert "fractions" in ctx.meta.get("crop", {})
+        assert "applied_percent" in ctx.meta.get("blackbars", {})
+        names = [s.name for s in processor.sinks.sinks]
+        assert "ddp" in names
+        assert "v4l2" not in names
+    finally:
+        processor.shutdown()
+
+
+def test_led_path_toggle_switches_which_stages_transform(scene):
+    from processor.config.loader import apply_updates
+    from processor.pipeline.registry import apply_config
+
+    processor = build()
+    try:
+        ctx = drive(processor, scene, frames=40)
+        assert ctx.skipped.get("perspective") != "ddp"
+        assert ctx.image.shape[:2] == (360, 640)
+
+        processor.config = apply_updates(processor.config, {"output.led_path": "ddp"})
+        apply_config(processor.pipeline, processor.config)
+        ctx = drive(processor, scene, frames=5)
+        assert processor.state.led_path == "ddp"
+        assert ctx.skipped.get("perspective") == "ddp"
+        assert ctx.image.shape[:2] == (scene.params.height, scene.params.width)
+    finally:
+        processor.shutdown()

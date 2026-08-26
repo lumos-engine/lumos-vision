@@ -5,13 +5,14 @@ it into a clean, rectified, cropped, low-latency virtual webcam for ambient
 lighting.
 
 ```
-USB or RTSP camera ─▶ Screen Sight ─▶ /dev/video10 ─▶ HyperHDR ─▶ ESP32 + WLED
+USB or RTSP camera ─▶ Screen Sight ─┬─ /dev/video10 ─▶ HyperHDR ─▶ LEDs  (default)
+                                    └─ DDP :4048 ─▶ WLED                 (opt-in)
 ```
 
-The processor knows nothing about HyperHDR. It produces frames and hands them
-to pluggable output sinks; HyperHDR is simply the one reading the virtual
-camera today. A DDP sink that drives WLED directly is already in the box, so
-HyperHDR can be removed from the chain later without touching the pipeline.
+The processor knows nothing about HyperHDR. It produces frames (or LED
+samples) and hands them to pluggable sinks. **HyperHDR is the default and the
+escape hatch** — flip `output.led_path` back to `hyperhdr` and you get today's
+warp → V4L2 path without redoing calibration. Direct DDP to WLED is opt-in.
 
 **What it actually does:** finds the TV in the camera's view, removes the
 perspective so the screen becomes a true rectangle, trims the bezel, detects
@@ -440,13 +441,29 @@ plus whatever the camera and network contribute.
 | `file`  | Records the processed output to a video file.                     |
 | `ddp`   | Samples LED colours and sends them straight to WLED over UDP.     |
 
-The DDP sink is the path that eventually removes HyperHDR from the chain. It
-is off by default and needs the LED counts for each edge:
+The DDP sink is the opt-in path that removes HyperHDR from the chain. Shared
+setup (camera, movement, TV corners, crop / black-bar / reflection *settings*,
+colour profiles) always runs. After that, one switch picks how LEDs get colour:
 
 ```yaml
 output:
+  led_path: hyperhdr   # default: warp → V4L2 → HyperHDR
+  # led_path: ddp      # opt-in: sample the camera quad → DDP :4048 → WLED
+```
+
+| Mode | Stages that transform the frame | Sink |
+| ---- | ------------------------------- | ---- |
+| `hyperhdr` (default) | perspective → crop → blackbars → colour → resize | V4L2 on, DDP off |
+| `ddp` | movement + boundary only; crop/bars/colour record insets and params; cheap ~160×90 remap for letterbox | DDP on, V4L2 off |
+
+Savings require **DDP mode, not both**. Running both still pays for the full warp, colour matrix, YUYV pack, and HyperHDR. In DDP mode the host typically cuts about half of Screen Sight's per-frame work (and most of it when a 3×3 colour matrix is on), plus you stop running HyperHDR.
+
+The wizard control is **LED output: HyperHDR (virtual cam) / Direct (DDP)**. LED counts and the WLED host are DDP-only; switching back to HyperHDR restores V4L2 without touching corners or colour profiles.
+
+```yaml
+output:
+  led_path: ddp
   ddp:
-    enabled: true
     host: 192.168.1.50
     leds_top: 42
     leds_right: 24

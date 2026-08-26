@@ -40,6 +40,7 @@ output:
   width: 640                        # match HyperHDR; 1280 if using Logitech
   height: 360
   fps: 20
+  # led_path: hyperhdr              # default: virtual cam. ddp = sample the TV quad → WLED
   v4l2:
     enabled: true
     device: /dev/video10
@@ -206,11 +207,13 @@ logging:
 #   success_pings: 1               # consecutive oks before resume
 #   idle_fps: 2.0
 
-# Send LED colours straight to WLED and skip HyperHDR entirely.
-# ddp:
-#   enabled: true
-#   host: 192.168.1.50
-#   leds_top: 42
-#   leds_right: 24
-#   leds_bottom: 42
-#   leds_left: 24
+# LED path: hyperhdr (default, virtual cam) or ddp (sample the camera quad → WLED).
+# Savings only apply in ddp mode — do not enable both live paths.
+# output:
+#   led_path: ddp
+#   ddp:
+#     host: 192.168.1.50
+#     leds_top: 42
+#     leds_right: 24
+#     leds_bottom: 42
+#     leds_left: 24

@@ -425,7 +425,7 @@ class V4L2Sink(Sink):
             return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         return np.ascontiguousarray(image)
 
-    def write(self, image: np.ndarray) -> bool:
+    def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         if self._fd is None:
             # The consumer may have unloaded the module; retry occasionally
             # rather than giving up for the rest of the process's life.
