@@ -2486,9 +2486,9 @@ function renderDetected(status) {
       bars.content_aspect ? `${bars.content_aspect.toFixed(2)}:1` : '–',
     ],
     [
-      'Bars (px)',
-      bars.pixels
-        ? `t${bars.pixels.top} b${bars.pixels.bottom} l${bars.pixels.left} r${bars.pixels.right}`
+      'Bars',
+      bars.applied_percent
+        ? `t${Number(bars.applied_percent.top).toFixed(0)}% b${Number(bars.applied_percent.bottom).toFixed(0)}% l${Number(bars.applied_percent.left).toFixed(0)}% r${Number(bars.applied_percent.right).toFixed(0)}%`
         : '–',
     ],
     [

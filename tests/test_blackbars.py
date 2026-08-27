@@ -329,3 +329,20 @@ def test_config_loads_direction_and_numeric_aspect():
     )
     assert cfg.blackbars.direction == "top_bottom"
     assert cfg.blackbars.target_aspect == pytest.approx(2.39)
+
+
+def test_debug_overlay_uses_fractions_not_probe_pixels():
+    """DDP measures on 160×90 but the wizard preview is 320×180."""
+    stage = make_stage()
+    panel = render_panel(3.0, PANEL, 2.35)
+    ctx = run(stage, panel, frames=80)
+    preview = cv2.resize(panel, (320, 180))
+    ctx.debug_images["perspective"] = preview
+    overlay = stage.debug_view(ctx)
+    assert overlay is not None
+    frac = stage.status()["applied_percent"]["top"] / 100.0
+    expected = int(round(180 * frac))
+    assert expected > 16  # 11px probe counts would fail this on a 180-tall preview
+    y = max(2, expected // 2)
+    # Overlay is BGR (40, 40, 220) blended onto the bar.
+    assert int(overlay[y, 160, 2]) > int(preview[y, 160, 2])
