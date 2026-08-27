@@ -227,7 +227,7 @@ const CONTROLS = [
   },
   {
     group: 'LED output',
-    hint: 'HyperHDR keeps the virtual camera. Direct DDP is always 4 bytes/LED. RGB only leaves the white diode off (use this 3000 K strip like RGB). RGBW drives W — set White LED temperature to 6500 K when you have a cool-white SK6812.',
+    hint: 'HyperHDR keeps the virtual camera. Direct: RGB is a 3-channel strip (WS2815). RGBW as RGB holds W at 0 on a 4-channel strip. RGBW drives the white diode — set temperature to 6500 K for a cool-white SK6812.',
     items: [
       {
         path: 'output.led_path',
@@ -243,7 +243,8 @@ const CONTROLS = [
         type: 'select',
         label: 'LED type',
         options: [
-          { value: 'rgb', label: 'RGB only (W off)' },
+          { value: 'rgb', label: 'RGB (3-channel strip)' },
+          { value: 'rgbw_off', label: 'RGBW as RGB (W off)' },
           { value: 'rgbw', label: 'RGBW (use white channel)' },
         ],
       },

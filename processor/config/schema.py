@@ -443,9 +443,8 @@ class DdpConfig:
     clockwise: bool = True
     smoothing: float = 0.35
     fps: float = 0.0  # 0 = follow the pipeline
-    #: Direct DDP is always 4 bytes/LED (Lumos OS). ``rgb`` leaves W at 0
-    #: (use an RGBW strip as RGB). ``rgbw`` drives the white diode (set
-    #: ``white_kelvin`` to the phosphor, e.g. 3000 or 6500).
+    #: ``rgb`` = 3 bytes/LED (WS2812/WS2815). ``rgbw_off`` = RGBW strip, W=0.
+    #: ``rgbw`` = drive the white diode (set ``white_kelvin`` to the phosphor).
     color_mode: str = "rgbw"
     #: SK6812 W-phosphor CCT. Strip spec; not used to fold hue onto W.
     white_kelvin: int = 3000
@@ -477,7 +476,7 @@ def sync_led_path_sinks(output: OutputConfig, *, restore_v4l2: bool = False) -> 
     if path == "ddp":
         output.ddp.enabled = True
         output.v4l2.enabled = False
-        # 4-byte stride always. ``rgb`` = W off; ``rgbw`` = use the white diode.
+        # ``rgb`` is 3-byte; ``rgbw`` / ``rgbw_off`` are 4-byte.
         from processor.led.rgbw import normalize_color_mode
 
         output.ddp.color_mode = normalize_color_mode(output.ddp.color_mode)

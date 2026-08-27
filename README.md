@@ -460,8 +460,9 @@ Savings require **DDP mode, not both**. Running both still pays for the full war
 
 The wizard control is **LED output: HyperHDR (virtual cam) / Direct (DDP)**. Direct always sends **4 bytes/LED** (`R,G,B,W`, data type 0) so an RGBW strip does not desync.
 
-- `color_mode: rgb` — W is always 0 (drive the strip like RGB; use this on 3000 K SK6812 if the white diode is too yellow).
-- `color_mode: rgbw` — use the white diode. Set `white_kelvin` to the phosphor (3000 now, **6500** when you swap the strip). `white_gain` mixes W vs cool RGB fill.
+- `color_mode: rgb` — 3 bytes/LED for a WS2812 / WS2815 strip.
+- `color_mode: rgbw_off` — RGBW strip, W always 0 (this 3000 K SK6812 without the yellow diode).
+- `color_mode: rgbw` — use the white diode. Set `white_kelvin` to the phosphor (3000 now, **6500** when you swap). `white_gain` mixes W vs cool RGB fill.
 
 Lumos OS maps logical LEDs to the physical strip and must not extract white again. HyperHDR stays 3-byte RGB on the virtual camera; the box converts there. Match `leds_top/right/bottom/left` to the box calibration (top-left clockwise).
 

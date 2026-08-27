@@ -196,7 +196,7 @@ def test_led_path_ddp_disables_v4l2():
     assert config.output.ddp.color_mode == "rgbw"
 
 
-def test_led_path_ddp_keeps_rgb_only_mode():
+def test_led_path_ddp_keeps_selected_color_mode():
     config = Config.from_dict(
         {
             "output": {
@@ -206,10 +206,10 @@ def test_led_path_ddp_keeps_rgb_only_mode():
         }
     )
     assert config.output.ddp.color_mode == "rgb"
-    switched = apply_updates(config, {"output.ddp.color_mode": "rgbw"})
-    assert switched.output.ddp.color_mode == "rgbw"
-    back = apply_updates(switched, {"output.ddp.color_mode": "rgb"})
-    assert back.output.ddp.color_mode == "rgb"
+    off = apply_updates(config, {"output.ddp.color_mode": "rgbw_off"})
+    assert off.output.ddp.color_mode == "rgbw_off"
+    rgbw = apply_updates(off, {"output.ddp.color_mode": "rgbw"})
+    assert rgbw.output.ddp.color_mode == "rgbw"
 
 
 def test_led_path_direct_alias_normalises_to_ddp():

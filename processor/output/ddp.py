@@ -1,11 +1,11 @@
 """DDP output to Lumos OS (``lumos_vision`` plugin) on UDP :4048.
 
-Direct path contract: Vision-converted RGBW, 4 bytes/LED, layout R,G,B,W
-(not GRBW). Data type 0 — stride is implied, do not advertise RGBW in the
-header. Offsets are in bytes, max 1440 bytes/datagram. One pixel per Lumos
-active LED, perimeter top-left clockwise; OS maps logical → physical.
+``rgb``: 3 bytes/LED. ``rgbw`` / ``rgbw_off``: 4 bytes/LED, layout R,G,B,W
+(not GRBW). Data type 0 — stride is implied. Offsets in bytes, max 1440
+bytes/datagram. One pixel per Lumos active LED, perimeter top-left clockwise;
+OS maps logical → physical.
 
-HyperHDR path does not use this sink (3-byte RGB stays on the virtual cam).
+HyperHDR path does not use this sink.
 """
 
 from __future__ import annotations

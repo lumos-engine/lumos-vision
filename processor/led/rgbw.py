@@ -1,9 +1,9 @@
 """RGB / RGBW packing for Direct DDP (Lumos OS ``lumos_vision`` plugin).
 
-Direct always sends 4 bytes/LED (``R,G,B,W``). ``rgb`` leaves W at 0 so an
-RGBW strip behaves like RGB. ``rgbw`` drives the white diode (set
-``white_kelvin`` to the phosphor: 3000 K today, 6500 K later). HyperHDR stays
-3-byte RGB; the box converts there.
+``rgb`` is a 3-byte strip (WS2812 / WS2815). ``rgbw_off`` is an RGBW strip
+with W held at 0 (same 4-byte stride, white diode unused). ``rgbw`` drives W
+(set ``white_kelvin`` to the phosphor). HyperHDR stays 3-byte RGB; the box
+converts there.
 """
 
 from __future__ import annotations
@@ -13,20 +13,26 @@ from typing import Any
 
 import numpy as np
 
+_RGB_ALIASES = frozenset({"rgb", "rgb3", "ws2812", "ws2815"})
+_RGBW_OFF_ALIASES = frozenset({"rgbw_off", "rgb_only", "rgb0"})
 _RGBW_ALIASES = frozenset({"rgbw", "sk6812", "rgbw3000", "rgbw6500"})
-_RGB_ALIASES = frozenset({"rgb", "rgb_only", "rgbw_off"})
-#: How much of the gray component rides the warm W diode vs RGB fill.
 DEFAULT_WHITE_GAIN = 0.35
 
 
 def normalize_color_mode(value: Any) -> str:
-    """``rgb`` = W off (4-byte RGB0). ``rgbw`` = use the white diode."""
+    """``rgb`` | ``rgbw_off`` | ``rgbw``."""
     text = str(value or "rgbw").strip().lower()
     if text in _RGB_ALIASES:
         return "rgb"
+    if text in _RGBW_OFF_ALIASES:
+        return "rgbw_off"
     if text in _RGBW_ALIASES:
         return "rgbw"
     return "rgbw"
+
+
+def bytes_per_led(color_mode: Any) -> int:
+    return 3 if normalize_color_mode(color_mode) == "rgb" else 4
 
 
 def kelvin_to_srgb(kelvin: float) -> np.ndarray:
@@ -93,9 +99,15 @@ def encode_led_pixels(
     white_kelvin: float = 3000.0,
     white_gain: float = DEFAULT_WHITE_GAIN,
 ) -> np.ndarray:
-    """RGB samples → 4-byte DDP layout (Lumos OS Direct never uses 3-byte RGB)."""
-    if normalize_color_mode(color_mode) == "rgbw":
+    """RGB samples → DDP byte layout for ``color_mode``."""
+    mode = normalize_color_mode(color_mode)
+    if mode == "rgbw":
         return rgb_to_rgbw(
             pixels_rgb, white_kelvin=white_kelvin, white_gain=white_gain
         )
-    return rgb_as_rgbw(pixels_rgb)
+    if mode == "rgbw_off":
+        return rgb_as_rgbw(pixels_rgb)
+    rgb = np.ascontiguousarray(pixels_rgb, dtype=np.uint8)
+    if rgb.size == 0:
+        return np.zeros((0, 3), dtype=np.uint8)
+    return rgb.reshape(-1, 3)

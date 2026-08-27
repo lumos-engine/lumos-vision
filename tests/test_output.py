@@ -440,11 +440,14 @@ def test_rgbw_extracts_shared_white_and_keeps_hue():
     assert dimmed[0, 3] < camera_red[0, 3]
 
     rgb = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgb")
+    rgbw_off = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgbw_off")
     rgbw = encode_led_pixels(
         np.array([[10, 20, 30]], np.uint8), "rgbw", 3000, white_gain=1.0
     )
-    assert rgb.shape == (1, 4)
-    assert list(rgb[0]) == [10, 20, 30, 0]
+    assert rgb.shape == (1, 3)
+    assert list(rgb[0]) == [10, 20, 30]
+    assert rgbw_off.shape == (1, 4)
+    assert list(rgbw_off[0]) == [10, 20, 30, 0]
     assert rgbw.shape == (1, 4)
     assert rgbw[0, 3] == 10
 
@@ -456,7 +459,7 @@ def test_ddp_rgbw_packets_are_four_bytes_per_led():
     assert packets[0][2] == 0
 
 
-def test_ddp_sink_always_sends_four_bytes_per_led(monkeypatch):
+def test_ddp_sink_rgb_is_three_bytes_per_led(monkeypatch):
     from processor.output.ddp import DdpSink
 
     sent: list[bytes] = []
@@ -480,17 +483,48 @@ def test_ddp_sink_always_sends_four_bytes_per_led(monkeypatch):
             host="10.0.0.5",
             leds_top=4,
             color_mode="rgb",
-            white_kelvin=3000,
         )
     )
     sink.open(8, 8)
     frame = np.full((8, 8, 3), (40, 80, 200), np.uint8)
     assert sink.write(frame) is True
     assert sent
-    assert int.from_bytes(sent[0][8:10], "big") == 16
+    assert int.from_bytes(sent[0][8:10], "big") == 12
     assert sink.stats["color_mode"] == "rgb"
-    payload = sent[0][10:]
-    assert payload[3::4] == b"\x00\x00\x00\x00"
+
+
+def test_ddp_sink_rgbw_off_holds_w_at_zero(monkeypatch):
+    from processor.output.ddp import DdpSink
+
+    sent: list[bytes] = []
+
+    class _FakeSock:
+        def setblocking(self, _flag):
+            return None
+
+        def sendto(self, packet, _addr):
+            sent.append(packet)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "processor.output.ddp.socket.socket", lambda *a, **k: _FakeSock()
+    )
+    sink = DdpSink(
+        DdpConfig(
+            enabled=True,
+            host="10.0.0.5",
+            leds_top=4,
+            color_mode="rgbw_off",
+        )
+    )
+    sink.open(8, 8)
+    frame = np.full((8, 8, 3), (40, 80, 200), np.uint8)
+    assert sink.write(frame) is True
+    assert int.from_bytes(sent[0][8:10], "big") == 16
+    assert sent[0][10:][3::4] == b"\x00\x00\x00\x00"
+    assert sink.stats["color_mode"] == "rgbw_off"
 
 
 def test_quad_sampler_matches_warped_axis_aligned():
