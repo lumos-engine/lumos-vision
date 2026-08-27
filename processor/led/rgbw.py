@@ -3,12 +3,10 @@
 Camera samples stay RGB. Direct sends 4-byte ``R,G,B,W``. HyperHDR stays
 3-byte RGB; the box converts there.
 
-Do **not** project samples onto the 3000 K white-LED chromaticity. Camera
-pixels of a TV are weakly saturated, so that fold dumps almost every LED onto
-W and the strip looks white with a hint of leftover blue. Extract the shared
-component instead (``W = min(R,G,B)``): saturated red keeps W ≈ 0, screen white
-rides W (the SK6812 diode is already 3000 K). ``white_kelvin`` is the strip spec,
-not a second white extraction.
+SK6812 W is much brighter than R/G/B, and camera pixels of a TV are weakly
+saturated, so ``W = min(R,G,B)`` still looks like a white wash. Fold only the
+*unsaturated* share onto W (``min² / max``) and scale it by ``white_gain``.
+``white_kelvin`` is the diode spec, not a second extract.
 """
 
 from __future__ import annotations
@@ -19,6 +17,8 @@ from typing import Any
 import numpy as np
 
 _RGBW_ALIASES = frozenset({"rgbw", "sk6812", "rgbw3000"})
+#: SK6812 W vs RGB luminous ratio is ~2.5–3×. 0.35 keeps hue visible.
+DEFAULT_WHITE_GAIN = 0.35
 
 
 def normalize_color_mode(value: Any) -> str:
@@ -50,27 +50,41 @@ def kelvin_to_srgb(kelvin: float) -> np.ndarray:
     return np.clip(np.array([red, green, blue], dtype=np.float32) / 255.0, 0.0, 1.0)
 
 
-def rgb_to_rgbw(pixels_rgb: np.ndarray, white_kelvin: float = 3000.0) -> np.ndarray:
+def rgb_to_rgbw(
+    pixels_rgb: np.ndarray,
+    white_kelvin: float = 3000.0,
+    white_gain: float = DEFAULT_WHITE_GAIN,
+) -> np.ndarray:
     """``(N, 3)`` RGB uint8 → ``(N, 4)`` RGBW uint8.
 
-    ExtractMin: ``W = min(R, G, B)``, leftover on R/G/B. ``white_kelvin`` is
-    unused in the extract (the W diode already is that CCT).
+    Chroma stays on R/G/B (``RGB - min``). W gets the gray share attenuated by
+    saturation (``min² / max``) and ``white_gain`` so the phosphor diode does
+    not bury hue.
     """
     _ = white_kelvin
+    gain = float(np.clip(white_gain, 0.0, 1.0))
     rgb = np.asarray(pixels_rgb, dtype=np.float32)
     if rgb.size == 0:
         return np.zeros((0, 4), dtype=np.uint8)
     rgb = rgb.reshape(-1, 3)
-    white = np.min(rgb, axis=1, keepdims=True)
-    remain = np.clip(rgb - white, 0.0, 255.0)
+    minc = np.min(rgb, axis=1, keepdims=True)
+    maxc = np.max(rgb, axis=1, keepdims=True)
+    gray_share = np.divide(minc, maxc, out=np.zeros_like(minc), where=maxc > 1e-6)
+    white = minc * gray_share * gain
+    remain = np.clip(rgb - minc, 0.0, 255.0)
     out = np.concatenate([remain, white], axis=1)
     return np.clip(np.round(out), 0, 255).astype(np.uint8)
 
 
 def encode_led_pixels(
-    pixels_rgb: np.ndarray, color_mode: Any, white_kelvin: float = 3000.0
+    pixels_rgb: np.ndarray,
+    color_mode: Any,
+    white_kelvin: float = 3000.0,
+    white_gain: float = DEFAULT_WHITE_GAIN,
 ) -> np.ndarray:
     """RGB samples → the byte layout DDP should send."""
     if normalize_color_mode(color_mode) == "rgbw":
-        return rgb_to_rgbw(pixels_rgb, white_kelvin=white_kelvin)
+        return rgb_to_rgbw(
+            pixels_rgb, white_kelvin=white_kelvin, white_gain=white_gain
+        )
     return np.ascontiguousarray(pixels_rgb, dtype=np.uint8)

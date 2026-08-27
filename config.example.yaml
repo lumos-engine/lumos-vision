@@ -219,3 +219,4 @@ logging:
 #     leds_left: 24
 #     color_mode: rgbw          # Direct always RGBW (4 bytes/LED). OS must not convert again.
 #     white_kelvin: 3000        # SK6812 W phosphor CCT
+#     white_gain: 0.35          # 0..1 — turn down if W washes out colour

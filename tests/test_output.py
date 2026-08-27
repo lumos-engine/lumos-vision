@@ -409,26 +409,38 @@ def test_ddp_requires_a_host_and_some_leds():
 def test_rgbw_extracts_shared_white_and_keeps_hue():
     from processor.led.rgbw import encode_led_pixels, rgb_to_rgbw
 
-    white = rgb_to_rgbw(np.array([[255, 255, 255]], np.uint8), white_kelvin=3000)
+    white = rgb_to_rgbw(
+        np.array([[255, 255, 255]], np.uint8), white_kelvin=3000, white_gain=1.0
+    )
     assert white.shape == (1, 4)
     assert white[0, 3] == 255
     assert white[0, :3].max() == 0
 
-    red = rgb_to_rgbw(np.array([[255, 0, 0]], np.uint8), white_kelvin=3000)
+    red = rgb_to_rgbw(np.array([[255, 0, 0]], np.uint8), white_gain=1.0)
     assert red[0, 0] > 200
     assert red[0, 3] < 15
 
-    # Camera-sampled TV red is never 255,0,0. CCT-fold would dump this onto W.
-    camera_red = rgb_to_rgbw(np.array([[180, 70, 55]], np.uint8), white_kelvin=3000)
-    assert camera_red[0, 0] > camera_red[0, 3]
-    assert camera_red[0, 3] == 55
+    # Camera-sampled TV red: saturation-weighted W, not min(R,G,B).
+    camera_red = rgb_to_rgbw(
+        np.array([[180, 70, 55]], np.uint8), white_kelvin=3000, white_gain=1.0
+    )
     assert camera_red[0, 0] == 125
+    assert camera_red[0, 3] == 17  # 55² / 180
+    assert camera_red[0, 0] > camera_red[0, 3]
+
+    dimmed = rgb_to_rgbw(
+        np.array([[180, 70, 55]], np.uint8), white_gain=0.35
+    )
+    assert dimmed[0, 3] < camera_red[0, 3]
+    assert dimmed[0, 0] == 125
 
     rgb = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgb")
-    rgbw = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgbw", 3000)
+    rgbw = encode_led_pixels(
+        np.array([[10, 20, 30]], np.uint8), "rgbw", 3000, white_gain=1.0
+    )
     assert rgb.shape == (1, 3)
     assert rgbw.shape == (1, 4)
-    assert list(rgbw[0]) == [0, 10, 20, 10]
+    assert list(rgbw[0]) == [0, 10, 20, 3]  # W = 10² / 30
 
 
 def test_ddp_rgbw_packets_are_four_bytes_per_led():

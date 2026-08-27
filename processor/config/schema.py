@@ -446,8 +446,11 @@ class DdpConfig:
     #: Direct DDP is always RGBW (4 bytes/LED). Lumos OS expects Vision-converted
     #: RGBW and must not see 3-byte RGB on :4048. HyperHDR still uses 3-byte RGB.
     color_mode: str = "rgbw"
-    #: SK6812 W-phosphor CCT. Used only for RGB→RGBW on the Direct path.
+    #: SK6812 W-phosphor CCT. Strip spec; not used to fold hue onto W.
     white_kelvin: int = 3000
+    #: 0..1 scale on the W channel after saturation-weighted extract.
+    #: SK6812 W is far brighter than R/G/B; ~0.35 keeps colours visible.
+    white_gain: float = 0.35
 
 
 #: Aliases accepted in YAML / the wizard for the opt-in WLED path.

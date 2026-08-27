@@ -227,7 +227,7 @@ const CONTROLS = [
   },
   {
     group: 'LED output',
-    hint: 'HyperHDR keeps the virtual camera (3-byte RGB; the box converts). Direct DDP always sends Vision-converted RGBW (4 bytes/LED, R,G,B,W) at the white LED temperature — Lumos OS must not extract white again. Match LEDs per edge to the box calibration (top-left clockwise); the box maps logical → physical.',
+    hint: 'HyperHDR keeps the virtual camera (3-byte RGB; the box converts). Direct DDP sends Vision-converted RGBW (R,G,B,W). White LED mix turns down the SK6812 W diode so it does not wash out colour. Match LEDs per edge to the box calibration (top-left clockwise).',
     items: [
       {
         path: 'output.led_path',
@@ -254,6 +254,14 @@ const CONTROLS = [
         max: 6500,
         step: 50,
         unit: ' K',
+        rgbwOnly: true,
+      },
+      {
+        path: 'output.ddp.white_gain',
+        label: 'White LED mix',
+        min: 0,
+        max: 1,
+        step: 0.01,
         rgbwOnly: true,
       },
       {

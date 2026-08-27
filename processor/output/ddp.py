@@ -120,6 +120,7 @@ class DdpSink(Sink):
             self._sample(image, ctx),
             "rgbw",
             white_kelvin=float(self.config.white_kelvin or 3000),
+            white_gain=float(self.config.white_gain),
         )
         self._sequence = (self._sequence % 15) + 1
         address = (self.config.host, self.config.port)
@@ -169,6 +170,7 @@ class DdpSink(Sink):
             "leds": self.sampler.layout.count,
             "color_mode": "rgbw",
             "white_kelvin": int(self.config.white_kelvin or 3000),
+            "white_gain": float(self.config.white_gain),
             "frames": self._frames,
             "errors": self._errors,
         }
