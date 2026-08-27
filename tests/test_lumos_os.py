@@ -143,6 +143,7 @@ def test_set_vision_output_posts_mode():
     assert seen[0][0] == "POST"
     assert seen[0][1] == "http://192.168.1.230/api/v1/vision/output"
     assert json.loads(seen[0][2].decode()) == {"mode": "ddp"}
+    assert list(json.loads(seen[0][2].decode()).keys()) == ["mode"]
 
     seen.clear()
     result = set_vision_output("http://192.168.1.230", "hyperhdr", opener=fake_open)
@@ -188,6 +189,7 @@ def test_processor_led_path_switch_calls_vision_output(monkeypatch):
     try:
         app.update_config({"output.led_path": "ddp"})
         assert app.config.output.led_path == "ddp"
+        assert app.config.output.ddp.color_mode == "rgbw"
         assert seen[-1] == ("http://192.168.1.230", "ddp")
         app.update_config({"output.led_path": "hyperhdr"})
         assert seen[-1] == ("http://192.168.1.230", "hyperhdr")

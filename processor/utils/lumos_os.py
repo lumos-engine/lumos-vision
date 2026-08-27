@@ -145,6 +145,9 @@ def set_vision_output(
 ) -> dict[str, Any]:
     """POST ``/api/v1/vision/output`` so the box plugin matches Screen Sight.
 
+    Body is only ``{"mode": "ddp"|"hyperhdr"}`` — never ``color_mode``. Direct
+    DDP colour (RGBW / kelvin) stays in Screen Sight config.
+
     Allowed on the box only when HyperHDR or Lumos Vision is selected (or the
     stream timed out). A 409 ``plugin_not_selected`` is logged, not raised.
     """

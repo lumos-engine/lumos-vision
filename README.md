@@ -458,9 +458,9 @@ output:
 
 Savings require **DDP mode, not both**. Running both still pays for the full warp, colour matrix, YUYV pack, and HyperHDR. In DDP mode the host typically cuts about half of Screen Sight's per-frame work (and most of it when a 3×3 colour matrix is on), plus you stop running HyperHDR.
 
-The wizard control is **LED output: HyperHDR (virtual cam) / Direct (DDP)**. LED counts, host, and **LED type** (RGB / RGBW) are DDP-only; switching back to HyperHDR restores V4L2 without touching corners or colour profiles. HyperHDR still uses the box's own LED-type setting.
+The wizard control is **LED output: HyperHDR (virtual cam) / Direct (DDP)**. Direct always sends **Vision-converted RGBW** (4 bytes/LED, `R,G,B,W`, data type 0) at `white_kelvin` (3000 K for this SK6812). Lumos OS maps logical LEDs to the physical strip and must not extract white again. HyperHDR stays 3-byte RGB on the virtual camera; the box converts there. Match `leds_top/right/bottom/left` to the box calibration (top-left clockwise).
 
-RGBW DDP is 4 bytes per LED. Set `color_mode: rgbw` and `white_kelvin` to the phosphor CCT (3000 K for typical warm-white SK6812) **and** match the Lumos OS plugin. If the plugin already converts RGB → RGBW, keep Vision on `rgb` so the white channel is not extracted twice.
+`POST /api/v1/vision/output` is still only `{ "mode": "ddp" | "hyperhdr" }` — do not send `color_mode`.
 
 ```yaml
 output:

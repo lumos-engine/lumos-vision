@@ -1,10 +1,11 @@
-"""DDP output straight to WLED.
+"""DDP output to Lumos OS (``lumos_vision`` plugin) on UDP :4048.
 
-The long-term escape hatch: sample LED colours here and push them to the ESP32
-over UDP, removing HyperHDR from the chain entirely.  Off by default -- the
-supported path today is the virtual camera.
+Direct path contract: Vision-converted RGBW, 4 bytes/LED, layout R,G,B,W
+(not GRBW). Data type 0 — stride is implied, do not advertise RGBW in the
+header. Offsets are in bytes, max 1440 bytes/datagram. One pixel per Lumos
+active LED, perimeter top-left clockwise; OS maps logical → physical.
 
-DDP (Distributed Display Protocol) is what WLED listens for on UDP 4048.
+HyperHDR path does not use this sink (3-byte RGB stays on the virtual cam).
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from typing import Any
 import numpy as np
 
 from processor.config.schema import DdpConfig
-from processor.led.rgbw import encode_led_pixels, normalize_color_mode
+from processor.led.rgbw import encode_led_pixels
 from processor.led.sampler import LedLayout, LedSampler, panel_insets_from_meta
 from processor.output.base import Sink
 from processor.utils.logging import get_logger
@@ -28,7 +29,7 @@ DDP_HEADER_LEN = 10
 DDP_FLAGS1_VER1 = 0x40
 DDP_FLAGS1_PUSH = 0x01
 DDP_ID_DISPLAY = 1
-#: Keep each datagram inside a typical 1500-byte MTU: 480 LEDs x 3 bytes.
+#: Keep each datagram inside a typical 1500-byte MTU: 360 RGBW LEDs × 4 bytes.
 DDP_MAX_PAYLOAD = 1440
 
 
@@ -100,7 +101,7 @@ class DdpSink(Sink):
             self.config.host,
             self.config.port,
             self.sampler.layout.count,
-            normalize_color_mode(self.config.color_mode),
+            "rgbw",
         )
 
     def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
@@ -115,7 +116,7 @@ class DdpSink(Sink):
 
         pixels = encode_led_pixels(
             self._sample(image, ctx),
-            self.config.color_mode,
+            "rgbw",
             white_kelvin=float(self.config.white_kelvin or 3000),
         )
         self._sequence = (self._sequence % 15) + 1
@@ -164,7 +165,7 @@ class DdpSink(Sink):
         return {
             "target": f"{self.config.host}:{self.config.port}",
             "leds": self.sampler.layout.count,
-            "color_mode": normalize_color_mode(self.config.color_mode),
+            "color_mode": "rgbw",
             "white_kelvin": int(self.config.white_kelvin or 3000),
             "frames": self._frames,
             "errors": self._errors,

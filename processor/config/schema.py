@@ -443,9 +443,10 @@ class DdpConfig:
     clockwise: bool = True
     smoothing: float = 0.35
     fps: float = 0.0  # 0 = follow the pipeline
-    #: ``rgb`` (3 bytes/LED) or ``rgbw`` (4 bytes, W extracted using white_kelvin).
-    color_mode: str = "rgb"
-    #: Phosphor temperature of the white LED, used only when ``color_mode`` is rgbw.
+    #: Direct DDP is always RGBW (4 bytes/LED). Lumos OS expects Vision-converted
+    #: RGBW and must not see 3-byte RGB on :4048. HyperHDR still uses 3-byte RGB.
+    color_mode: str = "rgbw"
+    #: SK6812 W-phosphor CCT. Used only for RGB→RGBW on the Direct path.
     white_kelvin: int = 3000
 
 
@@ -472,6 +473,10 @@ def sync_led_path_sinks(output: OutputConfig, *, restore_v4l2: bool = False) -> 
     if path == "ddp":
         output.ddp.enabled = True
         output.v4l2.enabled = False
+        # Lumos OS Direct contract: Vision-converted RGBW, never 3-byte RGB.
+        output.ddp.color_mode = "rgbw"
+        if int(output.ddp.white_kelvin or 0) <= 0:
+            output.ddp.white_kelvin = 3000
     else:
         output.ddp.enabled = False
         if restore_v4l2:

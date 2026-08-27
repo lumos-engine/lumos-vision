@@ -1,4 +1,8 @@
-"""Sample border colours for an LED strip running around the TV."""
+"""Sample border colours for an LED strip running around the TV.
+
+Logical order is one pixel per active LED, perimeter top-left clockwise.
+Lumos OS maps that chain onto the physical strip (skips / wire order).
+"""
 
 from __future__ import annotations
 

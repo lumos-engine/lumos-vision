@@ -217,5 +217,5 @@ logging:
 #     leds_right: 24
 #     leds_bottom: 42
 #     leds_left: 24
-#     color_mode: rgbw          # rgb | rgbw — must match the Lumos OS plugin
-#     white_kelvin: 3000        # RGBW phosphor CCT (ignored for rgb)
+#     color_mode: rgbw          # Direct always RGBW (4 bytes/LED). OS must not convert again.
+#     white_kelvin: 3000        # SK6812 W phosphor CCT

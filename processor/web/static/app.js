@@ -227,7 +227,7 @@ const CONTROLS = [
   },
   {
     group: 'LED output',
-    hint: 'HyperHDR (default) keeps the virtual camera. Direct (DDP) samples the TV quad here and sends colours to the Lumos box. LED type is the strip spec (always available). Host and LED counts appear when Direct is selected.',
+    hint: 'HyperHDR keeps the virtual camera (3-byte RGB; the box converts). Direct DDP always sends Vision-converted RGBW (4 bytes/LED, R,G,B,W) at the white LED temperature — Lumos OS must not extract white again. Match LEDs per edge to the box calibration (top-left clockwise); the box maps logical → physical.',
     items: [
       {
         path: 'output.led_path',
@@ -243,9 +243,9 @@ const CONTROLS = [
         type: 'select',
         label: 'LED type',
         options: [
-          { value: 'rgb', label: 'RGB (3 channels)' },
-          { value: 'rgbw', label: 'RGBW (white channel)' },
+          { value: 'rgbw', label: 'RGBW (required for Direct)' },
         ],
+        lockOnDdp: true,
       },
       {
         path: 'output.ddp.white_kelvin',
@@ -2142,7 +2142,7 @@ function syncLedPathControls(config) {
   const mode =
     _boundValue('output.ddp.color_mode') ||
     (config && get(config, 'output.ddp.color_mode')) ||
-    'rgb';
+    'rgbw';
   const rgbw = mode === 'rgbw';
   for (const bound of boundInputs.values()) {
     const item = bound.item;
@@ -2155,8 +2155,12 @@ function syncLedPathControls(config) {
       bound.input.disabled = ddp;
       if (bound.row) bound.row.hidden = ddp;
     }
+    if (item.lockOnDdp) {
+      bound.input.value = 'rgbw';
+      bound.input.disabled = true;
+    }
     if (item.rgbwOnly) {
-      const show = rgbw && (!item.ddpOnly || ddp);
+      const show = rgbw;
       bound.input.disabled = !show;
       if (bound.row) bound.row.hidden = !show;
     }

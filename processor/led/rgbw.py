@@ -1,7 +1,9 @@
-"""RGB → RGBW for DDP strips that have a dedicated white LED.
+"""RGB → RGBW for Direct DDP (Lumos OS ``lumos_vision`` plugin).
 
-The camera and colour stage are RGB. SK6812-style RGBW (warm white ~3000 K)
-needs a fourth channel so the box can drive W instead of faking white with R+G+B.
+Camera samples stay RGB. On Direct, Vision extracts W onto the white-LED
+chromaticity at ``white_kelvin`` (SK6812 warm phosphor is 3000 K) and sends
+4-byte ``R,G,B,W``. Lumos OS maps logical LEDs to the physical strip and must
+not ExtractMin again. HyperHDR stays 3-byte RGB; the box converts there.
 """
 
 from __future__ import annotations

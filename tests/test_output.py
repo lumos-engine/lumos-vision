@@ -414,6 +414,42 @@ def test_ddp_rgbw_packets_are_four_bytes_per_led():
     pixels = np.zeros((10, 4), np.uint8)
     packets = build_packets(pixels, sequence=1)
     assert int.from_bytes(packets[0][8:10], "big") == 40
+    assert packets[0][2] == 0
+
+
+def test_ddp_sink_always_sends_four_bytes_per_led(monkeypatch):
+    from processor.output.ddp import DdpSink
+
+    sent: list[bytes] = []
+
+    class _FakeSock:
+        def setblocking(self, _flag):
+            return None
+
+        def sendto(self, packet, _addr):
+            sent.append(packet)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "processor.output.ddp.socket.socket", lambda *a, **k: _FakeSock()
+    )
+    sink = DdpSink(
+        DdpConfig(
+            enabled=True,
+            host="10.0.0.5",
+            leds_top=4,
+            color_mode="rgb",
+            white_kelvin=3000,
+        )
+    )
+    sink.open(8, 8)
+    frame = np.zeros((8, 8, 3), np.uint8)
+    assert sink.write(frame) is True
+    assert sent
+    assert int.from_bytes(sent[0][8:10], "big") == 16
+    assert sink.stats["color_mode"] == "rgbw"
 
 
 def test_quad_sampler_matches_warped_axis_aligned():
