@@ -33,7 +33,9 @@ DDP_ID_DISPLAY = 1
 DDP_MAX_PAYLOAD = 1440
 
 
-def build_packets(pixels: np.ndarray, sequence: int, output_id: int = DDP_ID_DISPLAY) -> list[bytes]:
+def build_packets(
+    pixels: np.ndarray, sequence: int, output_id: int = DDP_ID_DISPLAY
+) -> list[bytes]:
     """Split an RGB array into DDP datagrams, PUSH set on the last one."""
     data = np.ascontiguousarray(pixels, dtype=np.uint8).tobytes()
     packets: list[bytes] = []
