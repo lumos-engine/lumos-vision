@@ -391,23 +391,29 @@ def test_ddp_requires_a_host_and_some_leds():
         DdpSink(DdpConfig(enabled=True, host="10.0.0.5"))
 
 
-def test_rgbw_uses_the_warm_white_channel_for_3000k():
-    from processor.led.rgbw import encode_led_pixels, kelvin_to_srgb, rgb_to_rgbw
+def test_rgbw_extracts_shared_white_and_keeps_hue():
+    from processor.led.rgbw import encode_led_pixels, rgb_to_rgbw
 
-    warm = (kelvin_to_srgb(3000.0) * 255).round().astype(np.uint8)
-    pixels = rgb_to_rgbw(warm.reshape(1, 3), white_kelvin=3000)
-    assert pixels.shape == (1, 4)
-    assert pixels[0, 3] > 200
-    assert pixels[0, :3].max() < 40
+    white = rgb_to_rgbw(np.array([[255, 255, 255]], np.uint8), white_kelvin=3000)
+    assert white.shape == (1, 4)
+    assert white[0, 3] == 255
+    assert white[0, :3].max() == 0
 
     red = rgb_to_rgbw(np.array([[255, 0, 0]], np.uint8), white_kelvin=3000)
     assert red[0, 0] > 200
     assert red[0, 3] < 15
 
+    # Camera-sampled TV red is never 255,0,0. CCT-fold would dump this onto W.
+    camera_red = rgb_to_rgbw(np.array([[180, 70, 55]], np.uint8), white_kelvin=3000)
+    assert camera_red[0, 0] > camera_red[0, 3]
+    assert camera_red[0, 3] == 55
+    assert camera_red[0, 0] == 125
+
     rgb = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgb")
     rgbw = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgbw", 3000)
     assert rgb.shape == (1, 3)
     assert rgbw.shape == (1, 4)
+    assert list(rgbw[0]) == [0, 10, 20, 10]
 
 
 def test_ddp_rgbw_packets_are_four_bytes_per_led():
