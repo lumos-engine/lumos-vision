@@ -227,7 +227,7 @@ const CONTROLS = [
   },
   {
     group: 'LED output',
-    hint: 'HyperHDR (default) keeps the virtual camera. Direct (DDP) samples the TV quad here and sends colours to the Lumos box. The box switches with this control when HyperHDR or Lumos Vision is already selected there. RGB vs RGBW must match the plugin: Vision converts to RGBW only when Direct is sending bytes straight to the strip. If the box already expands RGB → RGBW, leave LED type on RGB.',
+    hint: 'HyperHDR (default) keeps the virtual camera. Direct (DDP) samples the TV quad here and sends colours to the Lumos box. LED type is the strip spec (always available). Host and LED counts appear when Direct is selected.',
     items: [
       {
         path: 'output.led_path',
@@ -237,6 +237,24 @@ const CONTROLS = [
           { value: 'hyperhdr', label: 'HyperHDR (virtual cam)' },
           { value: 'ddp', label: 'Direct (DDP → WLED)' },
         ],
+      },
+      {
+        path: 'output.ddp.color_mode',
+        type: 'select',
+        label: 'LED type',
+        options: [
+          { value: 'rgb', label: 'RGB (3 channels)' },
+          { value: 'rgbw', label: 'RGBW (white channel)' },
+        ],
+      },
+      {
+        path: 'output.ddp.white_kelvin',
+        label: 'White LED temperature',
+        min: 1800,
+        max: 6500,
+        step: 50,
+        unit: ' K',
+        rgbwOnly: true,
       },
       {
         path: 'output.ddp.host',
@@ -283,26 +301,6 @@ const CONTROLS = [
         label: 'Strip start corner',
         options: ['top-left', 'top-right', 'bottom-right', 'bottom-left'],
         ddpOnly: true,
-      },
-      {
-        path: 'output.ddp.color_mode',
-        type: 'select',
-        label: 'LED type',
-        options: [
-          { value: 'rgb', label: 'RGB (3 channels)' },
-          { value: 'rgbw', label: 'RGBW (white channel)' },
-        ],
-        ddpOnly: true,
-      },
-      {
-        path: 'output.ddp.white_kelvin',
-        label: 'White LED temperature',
-        min: 1800,
-        max: 6500,
-        step: 50,
-        unit: ' K',
-        ddpOnly: true,
-        rgbwOnly: true,
       },
     ],
   },
@@ -2037,7 +2035,7 @@ function buildControls() {
         );
         wrap.append(input, document.createTextNode(label));
         row.append(wrap);
-        boundInputs.set(item.path, { input, kind: 'toggle', item });
+        boundInputs.set(item.path, { input, kind: 'toggle', item, row });
       } else if (item.type === 'select') {
         row.innerHTML = `<label>${label}</label><output></output>`;
         const select = document.createElement('select');
@@ -2051,11 +2049,17 @@ function buildControls() {
             return `<option value="${o}">${o}</option>`;
           })
           .join('');
-        select.addEventListener('change', () =>
-          queueUpdate(item.path, select.value),
-        );
+        select.addEventListener('change', () => {
+          queueUpdate(item.path, select.value);
+          if (
+            item.path === 'output.led_path' ||
+            item.path === 'output.ddp.color_mode'
+          ) {
+            syncLedPathControls();
+          }
+        });
         row.append(select);
-        boundInputs.set(item.path, { input: select, kind: 'select', item });
+        boundInputs.set(item.path, { input: select, kind: 'select', item, row });
       } else if (item.type === 'text') {
         row.innerHTML = `<label>${label}</label>`;
         const input = document.createElement('input');
@@ -2071,7 +2075,7 @@ function buildControls() {
           }
         });
         row.append(input);
-        boundInputs.set(item.path, { input, kind: 'text', item });
+        boundInputs.set(item.path, { input, kind: 'text', item, row });
       } else {
         row.innerHTML = `<label>${label}</label><output></output>`;
         const input = document.createElement('input');
@@ -2089,7 +2093,7 @@ function buildControls() {
           queueUpdate(item.path, value);
         });
         row.append(input);
-        boundInputs.set(item.path, { input, out, kind: 'range', item });
+        boundInputs.set(item.path, { input, out, kind: 'range', item, row });
       }
       section.append(row);
     }
@@ -2123,16 +2127,39 @@ function applyConfig(config, { skipFocused = false } = {}) {
   syncLedPathControls(config);
 }
 
+function _boundValue(path, fallback) {
+  const bound = boundInputs.get(path);
+  if (bound && bound.input && bound.input.value) return bound.input.value;
+  return fallback;
+}
+
 function syncLedPathControls(config) {
-  const path = get(config, 'output.led_path') || 'hyperhdr';
+  const path =
+    _boundValue('output.led_path') ||
+    (config && get(config, 'output.led_path')) ||
+    'hyperhdr';
   const ddp = path === 'ddp';
-  const rgbw = ddp && (get(config, 'output.ddp.color_mode') || 'rgb') === 'rgbw';
+  const mode =
+    _boundValue('output.ddp.color_mode') ||
+    (config && get(config, 'output.ddp.color_mode')) ||
+    'rgb';
+  const rgbw = mode === 'rgbw';
   for (const bound of boundInputs.values()) {
     const item = bound.item;
     if (!item) continue;
-    if (item.ddpOnly) bound.input.disabled = !ddp;
-    if (item.hyperhdrOnly) bound.input.disabled = ddp;
-    if (item.rgbwOnly) bound.input.disabled = !rgbw;
+    if (item.ddpOnly) {
+      bound.input.disabled = !ddp;
+      if (bound.row) bound.row.hidden = !ddp;
+    }
+    if (item.hyperhdrOnly) {
+      bound.input.disabled = ddp;
+      if (bound.row) bound.row.hidden = ddp;
+    }
+    if (item.rgbwOnly) {
+      const show = rgbw && (!item.ddpOnly || ddp);
+      bound.input.disabled = !show;
+      if (bound.row) bound.row.hidden = !show;
+    }
   }
 }
 
