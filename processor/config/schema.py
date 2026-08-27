@@ -443,13 +443,14 @@ class DdpConfig:
     clockwise: bool = True
     smoothing: float = 0.35
     fps: float = 0.0  # 0 = follow the pipeline
-    #: Direct DDP is always RGBW (4 bytes/LED). Lumos OS expects Vision-converted
-    #: RGBW and must not see 3-byte RGB on :4048. HyperHDR still uses 3-byte RGB.
+    #: Direct DDP is always 4 bytes/LED (Lumos OS). ``rgb`` leaves W at 0
+    #: (use an RGBW strip as RGB). ``rgbw`` drives the white diode (set
+    #: ``white_kelvin`` to the phosphor, e.g. 3000 or 6500).
     color_mode: str = "rgbw"
     #: SK6812 W-phosphor CCT. Strip spec; not used to fold hue onto W.
     white_kelvin: int = 3000
-    #: 0..1 scale on the W channel after saturation-weighted extract.
-    #: SK6812 W is far brighter than R/G/B; ~0.35 keeps colours visible.
+    #: 0..1: how much of the gray component uses the warm W diode vs cool RGB
+    #: fill. 0 = D65-ish mixed RGB whites; 1 = maximum 3000 K W.
     white_gain: float = 0.35
 
 
@@ -476,8 +477,10 @@ def sync_led_path_sinks(output: OutputConfig, *, restore_v4l2: bool = False) -> 
     if path == "ddp":
         output.ddp.enabled = True
         output.v4l2.enabled = False
-        # Lumos OS Direct contract: Vision-converted RGBW, never 3-byte RGB.
-        output.ddp.color_mode = "rgbw"
+        # 4-byte stride always. ``rgb`` = W off; ``rgbw`` = use the white diode.
+        from processor.led.rgbw import normalize_color_mode
+
+        output.ddp.color_mode = normalize_color_mode(output.ddp.color_mode)
         if int(output.ddp.white_kelvin or 0) <= 0:
             output.ddp.white_kelvin = 3000
     else:

@@ -409,38 +409,44 @@ def test_ddp_requires_a_host_and_some_leds():
 def test_rgbw_extracts_shared_white_and_keeps_hue():
     from processor.led.rgbw import encode_led_pixels, rgb_to_rgbw
 
+    # Full W still needs cool leftover (G/B) so 3000 K does not read as yellow.
     white = rgb_to_rgbw(
         np.array([[255, 255, 255]], np.uint8), white_kelvin=3000, white_gain=1.0
     )
     assert white.shape == (1, 4)
     assert white[0, 3] == 255
-    assert white[0, :3].max() == 0
+    assert white[0, 0] < 20
+    assert white[0, 2] > 100
+
+    rgb_white = rgb_to_rgbw(
+        np.array([[255, 255, 255]], np.uint8), white_kelvin=3000, white_gain=0.0
+    )
+    assert rgb_white[0, 3] == 0
+    assert rgb_white[0, :3].min() > 250
 
     red = rgb_to_rgbw(np.array([[255, 0, 0]], np.uint8), white_gain=1.0)
     assert red[0, 0] > 200
     assert red[0, 3] < 15
 
-    # Camera-sampled TV red: saturation-weighted W, not min(R,G,B).
     camera_red = rgb_to_rgbw(
         np.array([[180, 70, 55]], np.uint8), white_kelvin=3000, white_gain=1.0
     )
-    assert camera_red[0, 0] == 125
-    assert camera_red[0, 3] == 17  # 55² / 180
     assert camera_red[0, 0] > camera_red[0, 3]
+    assert camera_red[0, 0] > 100
 
     dimmed = rgb_to_rgbw(
         np.array([[180, 70, 55]], np.uint8), white_gain=0.35
     )
     assert dimmed[0, 3] < camera_red[0, 3]
-    assert dimmed[0, 0] == 125
 
     rgb = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgb")
     rgbw = encode_led_pixels(
         np.array([[10, 20, 30]], np.uint8), "rgbw", 3000, white_gain=1.0
     )
-    assert rgb.shape == (1, 3)
+    assert rgb.shape == (1, 4)
+    assert list(rgb[0]) == [10, 20, 30, 0]
     assert rgbw.shape == (1, 4)
-    assert list(rgbw[0]) == [0, 10, 20, 3]  # W = 10² / 30
+    assert rgbw[0, 3] == 10
 
 
 def test_ddp_rgbw_packets_are_four_bytes_per_led():
@@ -478,11 +484,13 @@ def test_ddp_sink_always_sends_four_bytes_per_led(monkeypatch):
         )
     )
     sink.open(8, 8)
-    frame = np.zeros((8, 8, 3), np.uint8)
+    frame = np.full((8, 8, 3), (40, 80, 200), np.uint8)
     assert sink.write(frame) is True
     assert sent
     assert int.from_bytes(sent[0][8:10], "big") == 16
-    assert sink.stats["color_mode"] == "rgbw"
+    assert sink.stats["color_mode"] == "rgb"
+    payload = sent[0][10:]
+    assert payload[3::4] == b"\x00\x00\x00\x00"
 
 
 def test_quad_sampler_matches_warped_axis_aligned():

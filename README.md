@@ -458,7 +458,12 @@ output:
 
 Savings require **DDP mode, not both**. Running both still pays for the full warp, colour matrix, YUYV pack, and HyperHDR. In DDP mode the host typically cuts about half of Screen Sight's per-frame work (and most of it when a 3×3 colour matrix is on), plus you stop running HyperHDR.
 
-The wizard control is **LED output: HyperHDR (virtual cam) / Direct (DDP)**. Direct always sends **Vision-converted RGBW** (4 bytes/LED, `R,G,B,W`, data type 0). Chroma stays on RGB; W gets the unsaturated share scaled by `white_gain` (default 0.35 — SK6812 W is much brighter than R/G/B). `white_kelvin` (3000 K) is the diode spec. Lumos OS maps logical LEDs to the physical strip and must not extract white again. HyperHDR stays 3-byte RGB on the virtual camera; the box converts there. Match `leds_top/right/bottom/left` to the box calibration (top-left clockwise).
+The wizard control is **LED output: HyperHDR (virtual cam) / Direct (DDP)**. Direct always sends **4 bytes/LED** (`R,G,B,W`, data type 0) so an RGBW strip does not desync.
+
+- `color_mode: rgb` — W is always 0 (drive the strip like RGB; use this on 3000 K SK6812 if the white diode is too yellow).
+- `color_mode: rgbw` — use the white diode. Set `white_kelvin` to the phosphor (3000 now, **6500** when you swap the strip). `white_gain` mixes W vs cool RGB fill.
+
+Lumos OS maps logical LEDs to the physical strip and must not extract white again. HyperHDR stays 3-byte RGB on the virtual camera; the box converts there. Match `leds_top/right/bottom/left` to the box calibration (top-left clockwise).
 
 `POST /api/v1/vision/output` is still only `{ "mode": "ddp" | "hyperhdr" }` — do not send `color_mode`.
 

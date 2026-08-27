@@ -227,7 +227,7 @@ const CONTROLS = [
   },
   {
     group: 'LED output',
-    hint: 'HyperHDR keeps the virtual camera (3-byte RGB; the box converts). Direct DDP sends Vision-converted RGBW (R,G,B,W). White LED mix turns down the SK6812 W diode so it does not wash out colour. Match LEDs per edge to the box calibration (top-left clockwise).',
+    hint: 'HyperHDR keeps the virtual camera. Direct DDP is always 4 bytes/LED. RGB only leaves the white diode off (use this 3000 K strip like RGB). RGBW drives W — set White LED temperature to 6500 K when you have a cool-white SK6812.',
     items: [
       {
         path: 'output.led_path',
@@ -243,9 +243,9 @@ const CONTROLS = [
         type: 'select',
         label: 'LED type',
         options: [
-          { value: 'rgbw', label: 'RGBW (required for Direct)' },
+          { value: 'rgb', label: 'RGB only (W off)' },
+          { value: 'rgbw', label: 'RGBW (use white channel)' },
         ],
-        lockOnDdp: true,
       },
       {
         path: 'output.ddp.white_kelvin',
@@ -258,7 +258,7 @@ const CONTROLS = [
       },
       {
         path: 'output.ddp.white_gain',
-        label: 'White LED mix',
+        label: 'Warm white mix',
         min: 0,
         max: 1,
         step: 0.01,
@@ -2162,10 +2162,6 @@ function syncLedPathControls(config) {
     if (item.hyperhdrOnly) {
       bound.input.disabled = ddp;
       if (bound.row) bound.row.hidden = ddp;
-    }
-    if (item.lockOnDdp) {
-      bound.input.value = 'rgbw';
-      bound.input.disabled = true;
     }
     if (item.rgbwOnly) {
       const show = rgbw;
