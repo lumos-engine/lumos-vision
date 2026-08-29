@@ -64,6 +64,7 @@ from processor.utils.loopback import (
 )
 from processor.utils.lumos_cam import (
     LumosCamManager,
+    frame_stream_stalled,
     step_lumos_pan,
     step_lumos_zoom,
 )
@@ -235,6 +236,7 @@ class Processor:
         self._lumos = LumosCamManager()
         self._lumos_next_retry = 0.0
         self._lumos_transform_at = 0.0
+        self._last_no_frame_log = 0.0
         self._v4l2_next_repair = 0.0
         self._color_cal = ColorCalibrationSession()
 
@@ -348,6 +350,7 @@ class Processor:
                 frame = self.source.read(timeout=1.0)
                 if frame is None:
                     self._on_no_frame()
+                    self._maybe_log_stats(time.monotonic())
                     continue
 
                 self._frames_in += 1
@@ -419,8 +422,29 @@ class Processor:
 
     def _on_no_frame(self) -> None:
         source = self.source
-        if source is not None and not source.is_connected:
-            log.debug("Waiting for the camera to reconnect...")
+        now = time.monotonic()
+        if now - self._last_no_frame_log < 15.0:
+            return
+        if source is None:
+            self._last_no_frame_log = now
+            log.warning("No camera source — waiting for Lumos Cam / capture to come back")
+            return
+        stats = getattr(source, "stats", {}) or {}
+        age = stats.get("last_frame_age")
+        if source.is_connected and (age is None or float(age) < 3.0):
+            return
+        self._last_no_frame_log = now
+        if age is not None:
+            log.warning(
+                "No camera frame for %.0fs (source %s)",
+                float(age),
+                getattr(source, "name", "?"),
+            )
+        elif not source.is_connected:
+            log.warning(
+                "Waiting for the camera to reconnect (source %s)",
+                getattr(source, "name", "?"),
+            )
 
     # -- TV presence / idle ------------------------------------------------
 
@@ -778,32 +802,72 @@ class Processor:
         except Exception:
             log.exception("Failed to recreate capture source after scrcpy restart")
 
+    def _lumos_stall_timeout_sec(self) -> float:
+        configured = float(self.config.lumos_cam.stall_timeout_sec or 0.0)
+        if configured > 0:
+            return configured
+        return max(8.0, float(self.config.camera.read_timeout or 8.0))
+
+    def _restart_lumos_capture_unlocked(self, reason: str) -> None:
+        log.warning("%s — restarting Lumos Cam", reason)
+        result = self._start_lumos_unlocked(restart=True)
+        if not result.get("ok") or not result.get("running"):
+            return
+        if result.get("ready") is False:
+            log.warning(
+                "Lumos Cam ffmpeg is up but no frames yet — opening the reader anyway"
+            )
+        try:
+            self._recreate_source_unlocked()
+        except Exception:
+            log.exception("Failed to recreate capture source after Lumos Cam restart")
+
     def _tick_lumos_watchdog(self) -> None:
         cfg = self.config.lumos_cam
         if self._idle or not cfg.enabled or not cfg.auto_restart:
             return
+        now = time.monotonic()
         if self._lumos.running:
-            now = time.monotonic()
             sync = getattr(self._lumos, "sync_output_transform", None)
             if callable(sync) and now >= self._lumos_transform_at:
                 self._lumos_transform_at = now + 1.5
                 sync(cfg)
+            source = self.source
+            if source is None:
+                if now < self._lumos_next_retry:
+                    return
+                interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
+                self._lumos_next_retry = now + interval
+                log.warning("Lumos Cam is running but capture source is gone — reopening")
+                try:
+                    self._recreate_source_unlocked()
+                except Exception:
+                    log.exception("Failed to reopen Lumos Cam capture source")
+                return
+            stats = getattr(source, "stats", None)
+            if (
+                isinstance(stats, dict)
+                and int(stats.get("frames") or 0) > 0
+                and frame_stream_stalled(
+                    stats.get("last_frame_age"), self._lumos_stall_timeout_sec()
+                )
+            ):
+                if now < self._lumos_next_retry:
+                    return
+                interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
+                self._lumos_next_retry = now + interval
+                self._restart_lumos_capture_unlocked(
+                    f"Lumos Cam stream stalled "
+                    f"(no frames for {float(stats.get('last_frame_age') or 0):.0f}s)"
+                )
             return
-        now = time.monotonic()
         if now < self._lumos_next_retry:
             return
         interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
         self._lumos_next_retry = now + interval
         if not adb_device_ready(cfg.serial, adb=(cfg.adb or "adb")):
             return
-        log.info("Lumos Cam not running — restarting (phone reconnected?)")
-        result = self._start_lumos_unlocked(restart=True)
-        if not result.get("ok") or not result.get("running") or not result.get("ready", True):
-            return
-        try:
-            self._recreate_source_unlocked()
-        except Exception:
-            log.exception("Failed to recreate capture source after Lumos Cam restart")
+        self._restart_lumos_capture_unlocked("Lumos Cam not running (phone reconnected?)")
 
     def _set_leds_unlocked(self, enabled: bool) -> None:
         url = (self.config.power.hyperhdr_url or "").strip()

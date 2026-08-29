@@ -664,6 +664,9 @@ class LumosCamConfig:
     startup_timeout_sec: float = 15.0
     auto_restart: bool = True
     restart_interval_sec: float = 5.0
+    #: Restart if frames stop while ffmpeg/TCP still looks alive (Doze, stall).
+    #: 0 falls back to ``camera.read_timeout``.
+    stall_timeout_sec: float = 8.0
 
 
 @dataclass

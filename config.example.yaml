@@ -153,6 +153,7 @@ logging:
 #   ae: auto
 #   awb: auto
 #   auto_restart: true
+#   stall_timeout_sec: 8.0          # restart if JPEGs stop while ffmpeg still lives
 
 # Optional: scrcpy fallback if Lumos Cam is not installed.
 # Wizard → Input type "scrcpy (phone fallback)". Absolute phone zoom restarts

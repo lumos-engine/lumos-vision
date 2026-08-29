@@ -40,6 +40,19 @@ from processor.utils.scrcpy import (
 log = get_logger(__name__)
 
 PROTOCOL_VERSION = 1
+
+
+def frame_stream_stalled(last_frame_age: Any, timeout_sec: float) -> bool:
+    """True when we have seen frames and then they stopped arriving."""
+    if last_frame_age is None:
+        return False
+    try:
+        age = float(last_frame_age)
+    except (TypeError, ValueError):
+        return False
+    return age > float(timeout_sec)
+
+
 MIN_APP_VERSION = "0.1.0"
 PACKAGE = "dev.lumos.cam"
 ACTIVITY = "dev.lumos.cam.MainActivity"
@@ -1498,6 +1511,7 @@ __all__ = [
     "LumosCamManager",
     "LumosCamStatus",
     "build_ffmpeg_command",
+    "frame_stream_stalled",
     "output_frame_size",
     "package_installed",
     "phone_lan_ipv4",
