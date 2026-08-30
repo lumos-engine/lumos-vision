@@ -11,6 +11,8 @@ from processor.utils.lumos_os import (
     hyperhdr_in_use,
     normalize_base_url,
     set_brightness,
+    sync_vision_output,
+    vision_plugin_selected,
 )
 
 
@@ -171,7 +173,7 @@ def test_processor_led_path_switch_calls_vision_output(monkeypatch):
 
     seen = []
     monkeypatch.setattr(
-        "processor.app.set_vision_output",
+        "processor.app.sync_vision_output",
         lambda url, mode, **kwargs: seen.append((url, mode)) or {"ok": True, "mode": mode},
     )
     monkeypatch.setattr(
@@ -195,3 +197,43 @@ def test_processor_led_path_switch_calls_vision_output(monkeypatch):
         assert seen[-1] == ("http://192.168.1.230", "hyperhdr")
     finally:
         app.shutdown()
+
+
+def test_vision_plugin_selected_allows_fallback_but_not_clock():
+    assert vision_plugin_selected({"active_plugin": "hyperhdr"}) is True
+    assert vision_plugin_selected({"active_plugin": "lumos_vision", "in_fallback": True}) is True
+    assert vision_plugin_selected({"active_plugin": "ddp"}) is True
+    assert vision_plugin_selected({"hyperhdr_active": True}) is True
+    assert vision_plugin_selected({"active_plugin": "clock"}) is False
+    assert vision_plugin_selected({}) is False
+
+
+def test_sync_vision_output_skips_non_vision_plugin():
+    seen = []
+
+    def fake_open(request, timeout=1.5):
+        seen.append((request.get_method(), request.full_url, request.data))
+        return _Resp(b'{"active_plugin":"clock"}')
+
+    result = sync_vision_output("http://192.168.1.230", "ddp", opener=fake_open)
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "not_vision_plugin"
+    assert seen == [("GET", "http://192.168.1.230/api/v1/status", None)]
+
+
+def test_sync_vision_output_posts_when_plugin_is_vision():
+    seen = []
+
+    def fake_open(request, timeout=1.5):
+        seen.append((request.get_method(), request.full_url, request.data))
+        if request.full_url.endswith("/status"):
+            return _Resp(b'{"active_plugin":"lumos_vision","in_fallback":true}')
+        return _Resp(b'{"ok":true}')
+
+    result = sync_vision_output("192.168.1.230", "hyperhdr", opener=fake_open)
+    assert result["ok"] is True
+    assert result.get("skipped") is not True
+    assert [row[0] for row in seen] == ["GET", "POST"]
+    assert seen[1][1] == "http://192.168.1.230/api/v1/vision/output"
+    assert json.loads(seen[1][2].decode()) == {"mode": "hyperhdr"}

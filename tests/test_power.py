@@ -154,7 +154,7 @@ def test_enter_and_leave_idle_releases_camera_and_toggles_leds(monkeypatch):
     app.start()
     try:
         assert app.source is not None
-        assert calls == [True]
+        assert calls == []
 
         monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: False)
         app._last_power_check = 0.0
@@ -162,6 +162,7 @@ def test_enter_and_leave_idle_releases_camera_and_toggles_leds(monkeypatch):
         assert app._idle is True
         assert app.source is None
         assert app._leds_off is True
+        assert app._leds_hold_reason == "tv_idle"
         assert calls[-1] is False
 
         app._write_idle_frame()
@@ -175,6 +176,7 @@ def test_enter_and_leave_idle_releases_camera_and_toggles_leds(monkeypatch):
         assert app._idle is False
         assert app.source is not None
         assert app._leds_off is False
+        assert app._leds_hold_reason is None
         assert calls[-1] is True
 
         status = app.status()["power"]
@@ -224,6 +226,178 @@ def test_failed_pings_from_config_drives_presence_monitor():
     app = _processor(tv_host="192.168.1.244", failed_pings=4, success_pings=3)
     assert app._presence.offline_checks == 4
     assert app._presence.online_checks == 3
+
+
+def test_ddp_feed_stall_sends_black_without_changing_mode(monkeypatch):
+    from processor.config.schema import Config
+    from processor.output.ddp import DdpSink
+
+    vision = []
+    leds = []
+    sent: list[bytes] = []
+
+    class _FakeSock:
+        def setblocking(self, _flag):
+            return None
+
+        def sendto(self, packet, _addr):
+            sent.append(packet)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "processor.output.ddp.socket.socket", lambda *a, **k: _FakeSock()
+    )
+    monkeypatch.setattr(
+        "processor.app.set_led_device",
+        lambda url, enabled, **kw: leds.append(bool(enabled)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        "processor.app.sync_vision_output",
+        lambda *a, **k: vision.append(True) or {"ok": True, "skipped": True},
+    )
+    monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: True)
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "synthetic", "replay_fps": 60},
+            "output": {
+                "width": 320,
+                "height": 180,
+                "fps": 30,
+                "led_path": "ddp",
+                "v4l2": {"enabled": False},
+                "ddp": {"host": "10.0.0.5", "leds_top": 4, "color_mode": "rgb"},
+            },
+            "logging": {"stats_interval": 0},
+            "power": {"hyperhdr_url": "http://127.0.0.1:8090"},
+        }
+    )
+    app = Processor(config)
+    app.start()
+    try:
+        ddp = next(s for s in app.sinks.sinks if isinstance(s, DdpSink))
+        vision.clear()
+        app._note_feed_alive_unlocked()
+        app._last_frame_at -= 20.0
+        app._on_no_frame()
+        assert app._leds_hold_reason == "feed_stall"
+        assert ddp.stats["held_off"] is True
+        assert sent and sent[-1][10:] == b"\x00" * 12
+        assert leds == []
+        assert vision == []
+    finally:
+        app.shutdown()
+
+
+def test_start_does_not_force_leddevice_on(monkeypatch):
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        "processor.app.set_led_device",
+        lambda url, enabled, **kw: calls.append(bool(enabled)) or {"ok": True},
+    )
+    monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: True)
+    app = _processor(tv_host="192.168.1.244", hyperhdr_url="http://127.0.0.1:8090")
+    app.start()
+    try:
+        assert calls == []
+        assert app._leds_off is False
+        assert app._leds_hold_reason is None
+    finally:
+        app.shutdown()
+
+
+def test_feed_stall_holds_leds_and_restores_only_for_that_reason(monkeypatch):
+    calls: list[bool] = []
+    vision = []
+    monkeypatch.setattr(
+        "processor.app.set_led_device",
+        lambda url, enabled, **kw: calls.append(bool(enabled)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        "processor.app.sync_vision_output",
+        lambda *a, **k: vision.append(True) or {"ok": True, "skipped": True},
+    )
+    monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: True)
+    app = _processor(
+        tv_host="192.168.1.244",
+        hyperhdr_url="http://127.0.0.1:8090",
+        failed_pings=1,
+        success_pings=1,
+        check_interval_sec=1.0,
+    )
+    app.start()
+    try:
+        vision.clear()
+        app._note_feed_alive_unlocked()
+        app._last_frame_at -= 20.0
+        app._on_no_frame()
+        assert app._leds_hold_reason == "feed_stall"
+        assert app._leds_off is True
+        assert calls == [False]
+        assert vision == []
+
+        app._leds_off = True
+        app._leds_hold_reason = None
+        app._on_no_frame()
+        assert app._leds_hold_reason is None
+        assert calls == [False]
+
+        app._leds_off = False
+        app._note_feed_alive_unlocked()
+        app._last_frame_at -= 20.0
+        app._on_no_frame()
+        assert app._leds_hold_reason == "feed_stall"
+        app._note_feed_alive_unlocked()
+        assert app._leds_hold_reason is None
+        assert calls[-1] is True
+        assert vision == []
+    finally:
+        app.shutdown()
+
+
+def test_leave_idle_does_not_restore_leds_held_for_feed_stall(monkeypatch):
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        "processor.app.set_led_device",
+        lambda url, enabled, **kw: calls.append(bool(enabled)) or {"ok": True},
+    )
+    monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "processor.app.sync_vision_output",
+        lambda *a, **k: {"ok": True, "skipped": True},
+    )
+    app = _processor(
+        tv_host="192.168.1.244",
+        hyperhdr_url="http://127.0.0.1:8090",
+        failed_pings=1,
+        success_pings=1,
+        check_interval_sec=1.0,
+    )
+    app.start()
+    try:
+        app._note_feed_alive_unlocked()
+        app._last_frame_at -= 20.0
+        app._hold_leds_off_unlocked("feed_stall")
+        assert calls == [False]
+
+        monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: False)
+        app._last_power_check = 0.0
+        app._tick_power()
+        assert app._idle is True
+        assert app._leds_hold_reason == "feed_stall"
+        assert calls == [False]
+
+        monkeypatch.setattr("processor.app.ping_host", lambda *a, **k: True)
+        app._last_power_check = 0.0
+        app._tick_power()
+        assert app._idle is False
+        assert app._leds_hold_reason == "feed_stall"
+        assert app._leds_off is True
+        assert True not in calls
+    finally:
+        app.shutdown()
 
 
 def test_logs_first_reconnect_before_idle(monkeypatch, caplog):

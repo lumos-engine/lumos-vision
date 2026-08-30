@@ -592,6 +592,45 @@ def test_quad_sampler_missing_corners_falls_back_on_ddp_sink():
     sink.close()
 
 
+def test_ddp_hold_off_sends_black_then_stops(monkeypatch):
+    from processor.output.ddp import DdpSink
+
+    sent: list[bytes] = []
+
+    class _FakeSock:
+        def setblocking(self, _flag):
+            return None
+
+        def sendto(self, packet, _addr):
+            sent.append(packet)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "processor.output.ddp.socket.socket", lambda *a, **k: _FakeSock()
+    )
+    sink = DdpSink(
+        DdpConfig(enabled=True, host="10.0.0.5", leds_top=4, color_mode="rgb")
+    )
+    sink.open(8, 8)
+    assert sink.hold_off() is True
+    assert sent
+    payload = sent[0][10:]
+    assert payload == b"\x00" * 12
+    assert sink.stats["held_off"] is True
+
+    before = len(sent)
+    frame = np.full((8, 8, 3), (40, 80, 200), np.uint8)
+    assert sink.write(frame) is True
+    assert len(sent) == before
+
+    sink.resume()
+    assert sink.stats["held_off"] is False
+    assert sink.write(frame) is True
+    assert len(sent) == before + 1
+
+
 def test_factory_ddp_led_path_skips_v4l2(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     config = OutputConfig(led_path="ddp")

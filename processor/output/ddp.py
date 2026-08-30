@@ -94,6 +94,8 @@ class DdpSink(Sink):
         self._frames = 0
         self._errors = 0
         self._next_send = 0.0
+        #: After ``hold_off``, skip further sends until ``resume``.
+        self._held_off = False
 
     def open(self, width: int, height: int) -> None:
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -109,6 +111,8 @@ class DdpSink(Sink):
     def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         if self._socket is None:
             return False
+        if self._held_off:
+            return True
 
         if self.config.fps > 0:
             now = time.monotonic()
@@ -116,21 +120,36 @@ class DdpSink(Sink):
                 return True
             self._next_send = now + 1.0 / self.config.fps
 
+        return self._send_pixels(self._sample(image, ctx))
+
+    def hold_off(self) -> bool:
+        """Send one black frame and stop so a dead stream does not sit on colour."""
+        if self._held_off:
+            return True
+        count = self.sampler.layout.count
+        black = np.zeros((count, 3), dtype=np.uint8)
+        ok = self._send_pixels(black)
+        self._held_off = True
+        return ok
+
+    def resume(self) -> None:
+        self._held_off = False
+
+    def _send_pixels(self, rgb: np.ndarray) -> bool:
+        if self._socket is None:
+            return False
         pixels = encode_led_pixels(
-            self._sample(image, ctx),
+            rgb,
             self.config.color_mode,
             white_kelvin=float(self.config.white_kelvin or 3000),
             white_gain=float(self.config.white_gain),
         )
         self._sequence = (self._sequence % 15) + 1
         address = (self.config.host, self.config.port)
-
         for packet in build_packets(pixels, self._sequence):
             try:
                 self._socket.sendto(packet, address)
             except BlockingIOError:
-                # The socket buffer is full; dropping this frame is strictly
-                # better than blocking the pipeline for a light strip.
                 self._errors += 1
                 return True
             except OSError as exc:
@@ -138,7 +157,6 @@ class DdpSink(Sink):
                 if self._errors <= 3:
                     log.warning("DDP send failed: %s", exc)
                 return False
-
         self._frames += 1
         return True
 
@@ -173,6 +191,7 @@ class DdpSink(Sink):
             "white_gain": float(self.config.white_gain),
             "frames": self._frames,
             "errors": self._errors,
+            "held_off": self._held_off,
         }
 
 

@@ -25,7 +25,7 @@ from processor.camera.base import Frame, FrameSource
 from processor.camera.lumos import LumosPipeSource
 from processor.camera.factory import create_source
 from processor.config.loader import apply_updates, config_to_dict, save_config
-from processor.config.schema import Config, LumosCamConfig
+from processor.config.schema import Config, LumosCamConfig, normalize_led_path
 from processor.output.base import SinkGroup
 from processor.output.broker import BrokerHub
 from processor.output.factory import create_sinks
@@ -52,7 +52,7 @@ from processor.utils.color_profiles import (
 from processor.utils.lumos_os import (
     apply_led_brightness,
     clamp_led_brightness,
-    set_vision_output,
+    sync_vision_output,
 )
 from processor.utils.hyperhdr_leds import refresh_video_grabber, set_led_device, set_video_grabber
 from processor.utils.logging import get_logger
@@ -224,6 +224,9 @@ class Processor:
 
         self._idle = False
         self._leds_off = False
+        #: None, ``"feed_stall"``, or ``"tv_idle"``. Only that event may turn LEDs back on.
+        self._leds_hold_reason: str | None = None
+        self._last_frame_at = 0.0
         self._last_power_check = 0.0
         self._black_frame: np.ndarray | None = None
         self._logged_reconnect_ping = False
@@ -276,7 +279,6 @@ class Processor:
             self._presence.reset(online=True)
             self._start_phone_capture_unlocked()
             self.source = self._make_source_unlocked().start()
-            self._set_leds_unlocked(True)
             self._apply_lumos_os_brightness_unlocked()
             self._sync_lumos_vision_output_unlocked()
             log.info(
@@ -353,6 +355,7 @@ class Processor:
                     self._maybe_log_stats(time.monotonic())
                     continue
 
+                self._note_feed_alive_unlocked()
                 self._frames_in += 1
                 self.input_fps.tick()
                 self._last_source = frame.image
@@ -421,6 +424,7 @@ class Processor:
                 self.brokers.publish(name, image)
 
     def _on_no_frame(self) -> None:
+        self._maybe_hold_leds_for_feed_stall_unlocked()
         source = self.source
         now = time.monotonic()
         if now - self._last_no_frame_log < 15.0:
@@ -521,7 +525,7 @@ class Processor:
         self._last_ctx = None
         self._idle = True
         self._logged_reconnect_ping = False
-        self._set_leds_unlocked(False)
+        self._hold_leds_off_unlocked("tv_idle")
         clock = datetime.now().strftime("%H:%M:%S")
         if not initial:
             log.info(
@@ -537,11 +541,11 @@ class Processor:
             )
 
     def _leave_idle_unlocked(self) -> None:
-        self._set_leds_unlocked(True)
         self._idle = False
         try:
             self._start_phone_capture_unlocked()
             self._recreate_source_unlocked()
+            self._release_leds_hold_unlocked("tv_idle")
             self._apply_lumos_os_brightness_unlocked()
             self._sync_lumos_vision_output_unlocked()
         except Exception:
@@ -549,7 +553,7 @@ class Processor:
             self._idle = True
             self._scrcpy.stop()
             self._lumos.stop()
-            self._set_leds_unlocked(False)
+            self._hold_leds_off_unlocked("tv_idle")
             return
         clock = datetime.now().strftime("%H:%M:%S")
         log.info(
@@ -582,6 +586,8 @@ class Processor:
         self.sinks.open(self.config.output.width, self.config.output.height)
         self._recover_v4l2_unlocked()
         self._nudge_hyperhdr_grabber_unlocked()
+        if self._leds_hold_reason:
+            self._apply_led_output_unlocked(False)
         log.info(
             "Output sinks recreated: %s (led_path=%s)",
             ", ".join(s.name for s in self.sinks.sinks) or "none",
@@ -856,6 +862,7 @@ class Processor:
                     return
                 interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
                 self._lumos_next_retry = now + interval
+                self._hold_leds_off_unlocked("feed_stall")
                 self._restart_lumos_capture_unlocked(
                     f"Lumos Cam stream stalled "
                     f"(no frames for {float(stats.get('last_frame_age') or 0):.0f}s)"
@@ -868,6 +875,69 @@ class Processor:
         if not adb_device_ready(cfg.serial, adb=(cfg.adb or "adb")):
             return
         self._restart_lumos_capture_unlocked("Lumos Cam not running (phone reconnected?)")
+
+    def _led_path(self) -> str:
+        return normalize_led_path(self.config.output.led_path)
+
+    def _feed_stall_timeout_sec(self) -> float:
+        if self.config.lumos_cam.enabled:
+            return self._lumos_stall_timeout_sec()
+        return max(8.0, float(self.config.camera.read_timeout or 8.0))
+
+    def _note_feed_alive_unlocked(self) -> None:
+        self._last_frame_at = time.monotonic()
+        self._release_leds_hold_unlocked("feed_stall")
+
+    def _maybe_hold_leds_for_feed_stall_unlocked(self) -> None:
+        if self._idle or not self._last_frame_at:
+            return
+        if time.monotonic() - self._last_frame_at <= self._feed_stall_timeout_sec():
+            return
+        self._hold_leds_off_unlocked("feed_stall")
+
+    def _hold_leds_off_unlocked(self, reason: str) -> None:
+        """Turn LEDs off for ``reason`` without changing Lumos OS plugin/mode.
+
+        If LEDs are already off for another reason (or we never owned them),
+        do not take ownership — only the original holder may turn them back on.
+        """
+        if self._leds_hold_reason is not None:
+            return
+        if self._leds_off:
+            return
+        self._apply_led_output_unlocked(False)
+        self._leds_hold_reason = reason
+        log.info("LEDs held off (%s)", reason)
+
+    def _release_leds_hold_unlocked(self, reason: str) -> None:
+        if self._leds_hold_reason != reason:
+            return
+        self._apply_led_output_unlocked(True)
+        self._leds_hold_reason = None
+        log.info("LEDs restored after %s", reason)
+
+    def _apply_led_output_unlocked(self, enabled: bool) -> None:
+        if self._led_path() == "ddp":
+            self._set_ddp_leds_unlocked(enabled)
+            self._leds_off = not enabled
+            return
+        self._set_leds_unlocked(enabled)
+
+    def _set_ddp_leds_unlocked(self, enabled: bool) -> None:
+        sinks = self.sinks
+        if sinks is None:
+            return
+        for sink in sinks.sinks:
+            if getattr(sink, "name", "") != "ddp":
+                continue
+            if enabled:
+                resume = getattr(sink, "resume", None)
+                if callable(resume):
+                    resume()
+            else:
+                hold_off = getattr(sink, "hold_off", None)
+                if callable(hold_off):
+                    hold_off()
 
     def _set_leds_unlocked(self, enabled: bool) -> None:
         url = (self.config.power.hyperhdr_url or "").strip()
@@ -1708,14 +1778,14 @@ class Processor:
 
     def _apply_lumos_os_brightness_unlocked(self) -> dict[str, Any]:
         """Push the active slot's LED brightness to Lumos OS if HyperHDR is on."""
-        if self._idle:
+        if self._idle or self._leds_hold_reason:
             return {"ok": True, "skipped": True, "reason": "idle"}
         value = clamp_led_brightness(self.config.lumos_os.led_brightness)
         return apply_led_brightness(self.config.lumos_os.url, value)
 
     def _sync_lumos_vision_output_unlocked(self) -> dict[str, Any]:
-        """Ask Lumos OS to match Screen Sight's HyperHDR vs DDP LED path."""
-        return set_vision_output(
+        """Match HyperHDR vs DDP only if Lumos OS is already on a vision plugin."""
+        return sync_vision_output(
             self.config.lumos_os.url, self.config.output.led_path
         )
 
@@ -2009,6 +2079,7 @@ class Processor:
                 "online": self._presence.online if self._power_enabled() else True,
                 "idle": self._idle,
                 "leds_off": self._leds_off,
+                "leds_hold_reason": self._leds_hold_reason,
             },
             "scrcpy": self._scrcpy.status(self.config.scrcpy).as_dict(),
             "lumos_cam": self._lumos.status(self.config.lumos_cam).as_dict(),
