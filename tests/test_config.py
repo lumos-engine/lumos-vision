@@ -19,6 +19,9 @@ def test_defaults_match_the_documented_targets():
     assert config.output.fps == 20.0
     assert config.output.led_path == "hyperhdr"
     assert config.output.ddp.enabled is False
+    assert config.output.ddp.color_mode == "rgbw"
+    assert config.output.ddp.white_kelvin == 3000
+    assert config.output.ddp.white_gain == 0.35
     assert config.camera.process_width == 0
     assert (config.perspective.width, config.perspective.height) == (1280, 720)
     assert config.output.v4l2.device == "/dev/video10"
@@ -190,6 +193,23 @@ def test_led_path_ddp_disables_v4l2():
     assert config.output.led_path == "ddp"
     assert config.output.ddp.enabled is True
     assert config.output.v4l2.enabled is False
+    assert config.output.ddp.color_mode == "rgbw"
+
+
+def test_led_path_ddp_keeps_selected_color_mode():
+    config = Config.from_dict(
+        {
+            "output": {
+                "led_path": "ddp",
+                "ddp": {"host": "10.0.0.5", "leds_top": 4, "color_mode": "rgb"},
+            }
+        }
+    )
+    assert config.output.ddp.color_mode == "rgb"
+    off = apply_updates(config, {"output.ddp.color_mode": "rgbw_off"})
+    assert off.output.ddp.color_mode == "rgbw_off"
+    rgbw = apply_updates(off, {"output.ddp.color_mode": "rgbw"})
+    assert rgbw.output.ddp.color_mode == "rgbw"
 
 
 def test_led_path_direct_alias_normalises_to_ddp():

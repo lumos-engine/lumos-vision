@@ -443,6 +443,21 @@ class DdpConfig:
     clockwise: bool = True
     smoothing: float = 0.35
     fps: float = 0.0  # 0 = follow the pipeline
+    #: ``rgb`` = 3 bytes/LED (WS2812/WS2815). ``rgbw_off`` = RGBW strip, W=0.
+    #: ``rgbw`` = drive the white diode (set ``white_kelvin`` to the phosphor).
+    color_mode: str = "rgbw"
+    #: SK6812 W-phosphor CCT. Strip spec; not used to fold hue onto W.
+    white_kelvin: int = 3000
+    #: 0..1: how much of the gray component uses the warm W diode vs cool RGB
+    #: fill. 0 = D65-ish mixed RGB whites; 1 = maximum 3000 K W.
+    white_gain: float = 0.35
+    #: Wire order of the first three diodes: ``rgb`` (RGBW) or ``grb`` (GRBW).
+    rgb_order: str = "rgb"
+    #: Row-major 3×3 on logical RGB: ``driven = intended @ matrix``. Identity = no-op.
+    color_matrix: list[float] = field(
+        default_factory=lambda: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    )
+    calibrated_at: str = ""
 
 
 #: Aliases accepted in YAML / the wizard for the opt-in WLED path.
@@ -468,6 +483,15 @@ def sync_led_path_sinks(output: OutputConfig, *, restore_v4l2: bool = False) -> 
     if path == "ddp":
         output.ddp.enabled = True
         output.v4l2.enabled = False
+        # ``rgb`` is 3-byte; ``rgbw`` / ``rgbw_off`` are 4-byte.
+        from processor.led.rgbw import normalize_color_mode
+
+        output.ddp.color_mode = normalize_color_mode(output.ddp.color_mode)
+        if int(output.ddp.white_kelvin or 0) <= 0:
+            output.ddp.white_kelvin = 3000
+        from processor.led.rgbw import normalize_rgb_order
+
+        output.ddp.rgb_order = normalize_rgb_order(output.ddp.rgb_order)
     else:
         output.ddp.enabled = False
         if restore_v4l2:
@@ -650,6 +674,9 @@ class LumosCamConfig:
     startup_timeout_sec: float = 15.0
     auto_restart: bool = True
     restart_interval_sec: float = 5.0
+    #: Restart if frames stop while ffmpeg/TCP still looks alive (Doze, stall).
+    #: 0 falls back to ``camera.read_timeout``.
+    stall_timeout_sec: float = 8.0
 
 
 @dataclass

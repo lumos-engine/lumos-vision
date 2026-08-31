@@ -21,7 +21,10 @@ class FpsMeter:
     def fps(self) -> float:
         if len(self._times) < 2:
             return 0.0
-        span = self._times[-1] - self._times[0]
+        newest = self._times[-1]
+        if time.monotonic() - newest > 2.0:
+            return 0.0
+        span = newest - self._times[0]
         if span <= 0:
             return 0.0
         return (len(self._times) - 1) / span

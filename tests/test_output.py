@@ -45,7 +45,9 @@ def test_v4l2_format_struct_is_the_right_size():
 def test_v4l2_format_struct_fields_decode_correctly():
     blob = pack_format(640, 360, "YUYV")
     (buf_type,) = struct.unpack_from("<I", blob, 0)
-    width, height, code, field, bytes_per_line, size_image = struct.unpack_from("<6I", blob, 8)
+    width, height, code, field, bytes_per_line, size_image = struct.unpack_from(
+        "<6I", blob, 8
+    )
 
     assert buf_type == V4L2_BUF_TYPE_VIDEO_OUTPUT
     assert (width, height) == (640, 360)
@@ -93,7 +95,9 @@ def test_yuyv_handles_an_odd_width():
 
 def test_v4l2_rejects_an_unknown_pixel_format():
     with pytest.raises(ValueError, match="pixel_format"):
-        V4L2Sink(type("C", (), {"device": "/dev/video10", "pixel_format": "JPEG2000"})())
+        V4L2Sink(
+            type("C", (), {"device": "/dev/video10", "pixel_format": "JPEG2000"})()
+        )
 
 
 @pytest.mark.skipif(sys.platform == "linux", reason="v4l2 is supported on Linux")
@@ -111,7 +115,9 @@ def test_v4l2_open_repairs_stuck_format_instead_of_raising(monkeypatch):
     repaired: list[str] = []
     monkeypatch.setattr("processor.output.v4l2.sys.platform", "linux")
     monkeypatch.setattr("processor.output.v4l2.os.path.exists", lambda path: True)
-    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._set_keep_format", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "processor.output.v4l2.V4L2Sink._set_keep_format", lambda *a, **k: None
+    )
     monkeypatch.setattr(
         "processor.output.v4l2.repair_loopback",
         lambda path, **k: repaired.append(path) or True,
@@ -135,8 +141,12 @@ def test_v4l2_writes_pinned_format_when_s_fmt_is_rejected(monkeypatch):
     repaired: list[str] = []
     monkeypatch.setattr("processor.output.v4l2.sys.platform", "linux")
     monkeypatch.setattr("processor.output.v4l2.os.path.exists", lambda path: True)
-    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._set_keep_format", lambda *a, **k: None)
-    monkeypatch.setattr("processor.output.v4l2.V4L2Sink._ctl_set_fmt", lambda *a, **k: False)
+    monkeypatch.setattr(
+        "processor.output.v4l2.V4L2Sink._set_keep_format", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "processor.output.v4l2.V4L2Sink._ctl_set_fmt", lambda *a, **k: False
+    )
     monkeypatch.setattr(
         "processor.output.v4l2.repair_loopback",
         lambda path, **k: repaired.append(path) or True,
@@ -144,7 +154,9 @@ def test_v4l2_writes_pinned_format_when_s_fmt_is_rejected(monkeypatch):
     monkeypatch.setattr("processor.output.v4l2.ensure_loopback", lambda *a, **k: True)
     monkeypatch.setattr("processor.output.v4l2.os.open", lambda *_a, **_k: 7)
     monkeypatch.setattr("processor.output.v4l2.os.close", lambda *_a, **_k: None)
-    monkeypatch.setattr("processor.output.v4l2.os.write", lambda *_a, **_k: 1280 * 720 * 2)
+    monkeypatch.setattr(
+        "processor.output.v4l2.os.write", lambda *_a, **_k: 1280 * 720 * 2
+    )
 
     def fake_ioctl(_fd, req, buf):
         if req == VIDIOC_S_FMT:
@@ -351,7 +363,10 @@ def test_led_sampler_order_starts_at_the_configured_corner():
 
 
 def test_led_sampler_handles_an_empty_layout():
-    assert LedSampler(LedLayout()).sample(np.zeros((10, 10, 3), np.uint8)).shape == (0, 3)
+    assert LedSampler(LedLayout()).sample(np.zeros((10, 10, 3), np.uint8)).shape == (
+        0,
+        3,
+    )
 
 
 def test_ddp_packet_header_is_well_formed():
@@ -389,6 +404,127 @@ def test_ddp_requires_a_host_and_some_leds():
         from processor.output.ddp import DdpSink
 
         DdpSink(DdpConfig(enabled=True, host="10.0.0.5"))
+
+
+def test_rgbw_extracts_shared_white_and_keeps_hue():
+    from processor.led.rgbw import encode_led_pixels, rgb_to_rgbw
+
+    # Full W still needs cool leftover (G/B) so 3000 K does not read as yellow.
+    white = rgb_to_rgbw(
+        np.array([[255, 255, 255]], np.uint8), white_kelvin=3000, white_gain=1.0
+    )
+    assert white.shape == (1, 4)
+    assert white[0, 3] == 255
+    assert white[0, 0] < 20
+    assert white[0, 2] > 100
+
+    rgb_white = rgb_to_rgbw(
+        np.array([[255, 255, 255]], np.uint8), white_kelvin=3000, white_gain=0.0
+    )
+    assert rgb_white[0, 3] == 0
+    assert rgb_white[0, :3].min() > 250
+
+    red = rgb_to_rgbw(np.array([[255, 0, 0]], np.uint8), white_gain=1.0)
+    assert red[0, 0] > 200
+    assert red[0, 3] < 15
+
+    camera_red = rgb_to_rgbw(
+        np.array([[180, 70, 55]], np.uint8), white_kelvin=3000, white_gain=1.0
+    )
+    assert camera_red[0, 0] > camera_red[0, 3]
+    assert camera_red[0, 0] > 100
+
+    dimmed = rgb_to_rgbw(
+        np.array([[180, 70, 55]], np.uint8), white_gain=0.35
+    )
+    assert dimmed[0, 3] < camera_red[0, 3]
+
+    rgb = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgb")
+    rgbw_off = encode_led_pixels(np.array([[10, 20, 30]], np.uint8), "rgbw_off")
+    rgbw = encode_led_pixels(
+        np.array([[10, 20, 30]], np.uint8), "rgbw", 3000, white_gain=1.0
+    )
+    assert rgb.shape == (1, 3)
+    assert list(rgb[0]) == [10, 20, 30]
+    assert rgbw_off.shape == (1, 4)
+    assert list(rgbw_off[0]) == [10, 20, 30, 0]
+    assert rgbw.shape == (1, 4)
+    assert rgbw[0, 3] == 10
+
+
+def test_ddp_rgbw_packets_are_four_bytes_per_led():
+    pixels = np.zeros((10, 4), np.uint8)
+    packets = build_packets(pixels, sequence=1)
+    assert int.from_bytes(packets[0][8:10], "big") == 40
+    assert packets[0][2] == 0
+
+
+def test_ddp_sink_rgb_is_three_bytes_per_led(monkeypatch):
+    from processor.output.ddp import DdpSink
+
+    sent: list[bytes] = []
+
+    class _FakeSock:
+        def setblocking(self, _flag):
+            return None
+
+        def sendto(self, packet, _addr):
+            sent.append(packet)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "processor.output.ddp.socket.socket", lambda *a, **k: _FakeSock()
+    )
+    sink = DdpSink(
+        DdpConfig(
+            enabled=True,
+            host="10.0.0.5",
+            leds_top=4,
+            color_mode="rgb",
+        )
+    )
+    sink.open(8, 8)
+    frame = np.full((8, 8, 3), (40, 80, 200), np.uint8)
+    assert sink.write(frame) is True
+    assert sent
+    assert int.from_bytes(sent[0][8:10], "big") == 12
+    assert sink.stats["color_mode"] == "rgb"
+
+
+def test_ddp_sink_rgbw_off_holds_w_at_zero(monkeypatch):
+    from processor.output.ddp import DdpSink
+
+    sent: list[bytes] = []
+
+    class _FakeSock:
+        def setblocking(self, _flag):
+            return None
+
+        def sendto(self, packet, _addr):
+            sent.append(packet)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "processor.output.ddp.socket.socket", lambda *a, **k: _FakeSock()
+    )
+    sink = DdpSink(
+        DdpConfig(
+            enabled=True,
+            host="10.0.0.5",
+            leds_top=4,
+            color_mode="rgbw_off",
+        )
+    )
+    sink.open(8, 8)
+    frame = np.full((8, 8, 3), (40, 80, 200), np.uint8)
+    assert sink.write(frame) is True
+    assert int.from_bytes(sent[0][8:10], "big") == 16
+    assert sent[0][10:][3::4] == b"\x00\x00\x00\x00"
+    assert sink.stats["color_mode"] == "rgbw_off"
 
 
 def test_quad_sampler_matches_warped_axis_aligned():
@@ -454,6 +590,45 @@ def test_quad_sampler_missing_corners_falls_back_on_ddp_sink():
     black = np.zeros((16, 16, 3), np.uint8)
     assert sink.write(black) is True
     sink.close()
+
+
+def test_ddp_hold_off_sends_black_then_stops(monkeypatch):
+    from processor.output.ddp import DdpSink
+
+    sent: list[bytes] = []
+
+    class _FakeSock:
+        def setblocking(self, _flag):
+            return None
+
+        def sendto(self, packet, _addr):
+            sent.append(packet)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "processor.output.ddp.socket.socket", lambda *a, **k: _FakeSock()
+    )
+    sink = DdpSink(
+        DdpConfig(enabled=True, host="10.0.0.5", leds_top=4, color_mode="rgb")
+    )
+    sink.open(8, 8)
+    assert sink.hold_off() is True
+    assert sent
+    payload = sent[0][10:]
+    assert payload == b"\x00" * 12
+    assert sink.stats["held_off"] is True
+
+    before = len(sent)
+    frame = np.full((8, 8, 3), (40, 80, 200), np.uint8)
+    assert sink.write(frame) is True
+    assert len(sent) == before
+
+    sink.resume()
+    assert sink.stats["held_off"] is False
+    assert sink.write(frame) is True
+    assert len(sent) == before + 1
 
 
 def test_factory_ddp_led_path_skips_v4l2(monkeypatch):

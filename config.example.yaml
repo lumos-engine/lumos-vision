@@ -153,6 +153,7 @@ logging:
 #   ae: auto
 #   awb: auto
 #   auto_restart: true
+#   stall_timeout_sec: 8.0          # restart if JPEGs stop while ffmpeg still lives
 
 # Optional: scrcpy fallback if Lumos Cam is not installed.
 # Wizard → Input type "scrcpy (phone fallback)". Absolute phone zoom restarts
@@ -217,3 +218,7 @@ logging:
 #     leds_right: 24
 #     leds_bottom: 42
 #     leds_left: 24
+#     color_mode: rgbw_off       # rgb | rgbw_off | rgbw
+#     rgb_order: rgb             # rgb | grb  (grb if Test G lights red)
+#     white_kelvin: 6500        # phosphor CCT when color_mode is rgbw
+#     white_gain: 0.35          # 0..1 — only for rgbw

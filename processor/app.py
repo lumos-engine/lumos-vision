@@ -25,10 +25,11 @@ from processor.camera.base import Frame, FrameSource
 from processor.camera.lumos import LumosPipeSource
 from processor.camera.factory import create_source
 from processor.config.loader import apply_updates, config_to_dict, save_config
-from processor.config.schema import Config, LumosCamConfig
+from processor.config.schema import Config, LumosCamConfig, normalize_led_path
 from processor.output.base import SinkGroup
 from processor.output.broker import BrokerHub
 from processor.output.factory import create_sinks
+from processor.output.ddp import DdpSink
 from processor.output.v4l2 import V4L2Sink
 from processor.pipeline.context import FrameContext, PipelineState
 from processor.pipeline.pipeline import Pipeline
@@ -36,6 +37,8 @@ from processor.pipeline.registry import apply_config as apply_pipeline_config
 from processor.pipeline.registry import build_pipeline
 from processor.stages.boundary import BoundaryStage
 from processor.utils.color_calibrate import ColorCalibrationSession, iso_now
+from processor.utils.led_calibrate import LedCalibrationSession
+from processor.led.rgbw import IDENTITY_RGB_FLAT, bytes_per_led
 from processor.utils.color_profiles import (
     bind_config,
     camera_for_slot,
@@ -52,7 +55,7 @@ from processor.utils.color_profiles import (
 from processor.utils.lumos_os import (
     apply_led_brightness,
     clamp_led_brightness,
-    set_vision_output,
+    sync_vision_output,
 )
 from processor.utils.hyperhdr_leds import refresh_video_grabber, set_led_device, set_video_grabber
 from processor.utils.logging import get_logger
@@ -64,6 +67,7 @@ from processor.utils.loopback import (
 )
 from processor.utils.lumos_cam import (
     LumosCamManager,
+    frame_stream_stalled,
     step_lumos_pan,
     step_lumos_zoom,
 )
@@ -223,6 +227,9 @@ class Processor:
 
         self._idle = False
         self._leds_off = False
+        #: None, ``"feed_stall"``, or ``"tv_idle"``. Only that event may turn LEDs back on.
+        self._leds_hold_reason: str | None = None
+        self._last_frame_at = 0.0
         self._last_power_check = 0.0
         self._black_frame: np.ndarray | None = None
         self._logged_reconnect_ping = False
@@ -235,8 +242,11 @@ class Processor:
         self._lumos = LumosCamManager()
         self._lumos_next_retry = 0.0
         self._lumos_transform_at = 0.0
+        self._last_no_frame_log = 0.0
         self._v4l2_next_repair = 0.0
         self._color_cal = ColorCalibrationSession()
+        self._led_cal = LedCalibrationSession()
+        self._led_test: str | None = None
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -274,7 +284,6 @@ class Processor:
             self._presence.reset(online=True)
             self._start_phone_capture_unlocked()
             self.source = self._make_source_unlocked().start()
-            self._set_leds_unlocked(True)
             self._apply_lumos_os_brightness_unlocked()
             self._sync_lumos_vision_output_unlocked()
             log.info(
@@ -348,8 +357,10 @@ class Processor:
                 frame = self.source.read(timeout=1.0)
                 if frame is None:
                     self._on_no_frame()
+                    self._maybe_log_stats(time.monotonic())
                     continue
 
+                self._note_feed_alive_unlocked()
                 self._frames_in += 1
                 self.input_fps.tick()
                 self._last_source = frame.image
@@ -418,9 +429,31 @@ class Processor:
                 self.brokers.publish(name, image)
 
     def _on_no_frame(self) -> None:
+        self._maybe_hold_leds_for_feed_stall_unlocked()
         source = self.source
-        if source is not None and not source.is_connected:
-            log.debug("Waiting for the camera to reconnect...")
+        now = time.monotonic()
+        if now - self._last_no_frame_log < 15.0:
+            return
+        if source is None:
+            self._last_no_frame_log = now
+            log.warning("No camera source — waiting for Lumos Cam / capture to come back")
+            return
+        stats = getattr(source, "stats", {}) or {}
+        age = stats.get("last_frame_age")
+        if source.is_connected and (age is None or float(age) < 3.0):
+            return
+        self._last_no_frame_log = now
+        if age is not None:
+            log.warning(
+                "No camera frame for %.0fs (source %s)",
+                float(age),
+                getattr(source, "name", "?"),
+            )
+        elif not source.is_connected:
+            log.warning(
+                "Waiting for the camera to reconnect (source %s)",
+                getattr(source, "name", "?"),
+            )
 
     # -- TV presence / idle ------------------------------------------------
 
@@ -497,7 +530,7 @@ class Processor:
         self._last_ctx = None
         self._idle = True
         self._logged_reconnect_ping = False
-        self._set_leds_unlocked(False)
+        self._hold_leds_off_unlocked("tv_idle")
         clock = datetime.now().strftime("%H:%M:%S")
         if not initial:
             log.info(
@@ -513,11 +546,11 @@ class Processor:
             )
 
     def _leave_idle_unlocked(self) -> None:
-        self._set_leds_unlocked(True)
         self._idle = False
         try:
             self._start_phone_capture_unlocked()
             self._recreate_source_unlocked()
+            self._release_leds_hold_unlocked("tv_idle")
             self._apply_lumos_os_brightness_unlocked()
             self._sync_lumos_vision_output_unlocked()
         except Exception:
@@ -525,7 +558,7 @@ class Processor:
             self._idle = True
             self._scrcpy.stop()
             self._lumos.stop()
-            self._set_leds_unlocked(False)
+            self._hold_leds_off_unlocked("tv_idle")
             return
         clock = datetime.now().strftime("%H:%M:%S")
         log.info(
@@ -558,6 +591,9 @@ class Processor:
         self.sinks.open(self.config.output.width, self.config.output.height)
         self._recover_v4l2_unlocked()
         self._nudge_hyperhdr_grabber_unlocked()
+        if self._leds_hold_reason:
+            self._apply_led_output_unlocked(False)
+        self._push_led_flood_unlocked()
         log.info(
             "Output sinks recreated: %s (led_path=%s)",
             ", ".join(s.name for s in self.sinks.sinks) or "none",
@@ -778,32 +814,136 @@ class Processor:
         except Exception:
             log.exception("Failed to recreate capture source after scrcpy restart")
 
+    def _lumos_stall_timeout_sec(self) -> float:
+        configured = float(self.config.lumos_cam.stall_timeout_sec or 0.0)
+        if configured > 0:
+            return configured
+        return max(8.0, float(self.config.camera.read_timeout or 8.0))
+
+    def _restart_lumos_capture_unlocked(self, reason: str) -> None:
+        log.warning("%s — restarting Lumos Cam", reason)
+        result = self._start_lumos_unlocked(restart=True)
+        if not result.get("ok") or not result.get("running"):
+            return
+        if result.get("ready") is False:
+            log.warning(
+                "Lumos Cam ffmpeg is up but no frames yet — opening the reader anyway"
+            )
+        try:
+            self._recreate_source_unlocked()
+        except Exception:
+            log.exception("Failed to recreate capture source after Lumos Cam restart")
+
     def _tick_lumos_watchdog(self) -> None:
         cfg = self.config.lumos_cam
         if self._idle or not cfg.enabled or not cfg.auto_restart:
             return
+        now = time.monotonic()
         if self._lumos.running:
-            now = time.monotonic()
             sync = getattr(self._lumos, "sync_output_transform", None)
             if callable(sync) and now >= self._lumos_transform_at:
                 self._lumos_transform_at = now + 1.5
                 sync(cfg)
+            source = self.source
+            if source is None:
+                if now < self._lumos_next_retry:
+                    return
+                interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
+                self._lumos_next_retry = now + interval
+                log.warning("Lumos Cam is running but capture source is gone — reopening")
+                try:
+                    self._recreate_source_unlocked()
+                except Exception:
+                    log.exception("Failed to reopen Lumos Cam capture source")
+                return
+            stats = getattr(source, "stats", None)
+            if (
+                isinstance(stats, dict)
+                and int(stats.get("frames") or 0) > 0
+                and frame_stream_stalled(
+                    stats.get("last_frame_age"), self._lumos_stall_timeout_sec()
+                )
+            ):
+                if now < self._lumos_next_retry:
+                    return
+                interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
+                self._lumos_next_retry = now + interval
+                self._hold_leds_off_unlocked("feed_stall")
+                self._restart_lumos_capture_unlocked(
+                    f"Lumos Cam stream stalled "
+                    f"(no frames for {float(stats.get('last_frame_age') or 0):.0f}s)"
+                )
             return
-        now = time.monotonic()
         if now < self._lumos_next_retry:
             return
         interval = max(2.0, float(cfg.restart_interval_sec or 5.0))
         self._lumos_next_retry = now + interval
         if not adb_device_ready(cfg.serial, adb=(cfg.adb or "adb")):
             return
-        log.info("Lumos Cam not running — restarting (phone reconnected?)")
-        result = self._start_lumos_unlocked(restart=True)
-        if not result.get("ok") or not result.get("running") or not result.get("ready", True):
+        self._restart_lumos_capture_unlocked("Lumos Cam not running (phone reconnected?)")
+
+    def _led_path(self) -> str:
+        return normalize_led_path(self.config.output.led_path)
+
+    def _feed_stall_timeout_sec(self) -> float:
+        if self.config.lumos_cam.enabled:
+            return self._lumos_stall_timeout_sec()
+        return max(8.0, float(self.config.camera.read_timeout or 8.0))
+
+    def _note_feed_alive_unlocked(self) -> None:
+        self._last_frame_at = time.monotonic()
+        self._release_leds_hold_unlocked("feed_stall")
+
+    def _maybe_hold_leds_for_feed_stall_unlocked(self) -> None:
+        if self._idle or not self._last_frame_at:
             return
-        try:
-            self._recreate_source_unlocked()
-        except Exception:
-            log.exception("Failed to recreate capture source after Lumos Cam restart")
+        if time.monotonic() - self._last_frame_at <= self._feed_stall_timeout_sec():
+            return
+        self._hold_leds_off_unlocked("feed_stall")
+
+    def _hold_leds_off_unlocked(self, reason: str) -> None:
+        """Turn LEDs off for ``reason`` without changing Lumos OS plugin/mode.
+
+        If LEDs are already off for another reason (or we never owned them),
+        do not take ownership — only the original holder may turn them back on.
+        """
+        if self._leds_hold_reason is not None:
+            return
+        if self._leds_off:
+            return
+        self._apply_led_output_unlocked(False)
+        self._leds_hold_reason = reason
+        log.info("LEDs held off (%s)", reason)
+
+    def _release_leds_hold_unlocked(self, reason: str) -> None:
+        if self._leds_hold_reason != reason:
+            return
+        self._apply_led_output_unlocked(True)
+        self._leds_hold_reason = None
+        log.info("LEDs restored after %s", reason)
+
+    def _apply_led_output_unlocked(self, enabled: bool) -> None:
+        if self._led_path() == "ddp":
+            self._set_ddp_leds_unlocked(enabled)
+            self._leds_off = not enabled
+            return
+        self._set_leds_unlocked(enabled)
+
+    def _set_ddp_leds_unlocked(self, enabled: bool) -> None:
+        sinks = self.sinks
+        if sinks is None:
+            return
+        for sink in sinks.sinks:
+            if getattr(sink, "name", "") != "ddp":
+                continue
+            if enabled:
+                resume = getattr(sink, "resume", None)
+                if callable(resume):
+                    resume()
+            else:
+                hold_off = getattr(sink, "hold_off", None)
+                if callable(hold_off):
+                    hold_off()
 
     def _set_leds_unlocked(self, enabled: bool) -> None:
         url = (self.config.power.hyperhdr_url or "").strip()
@@ -962,6 +1102,10 @@ class Processor:
                 self._recreate_sinks_unlocked()
             if "output.led_path" in updates:
                 self._sync_lumos_vision_output_unlocked()
+                if normalize_led_path(self.config.output.led_path) != "ddp":
+                    self._led_test = None
+                    if self._led_cal.state in {"running", "ready"}:
+                        self._led_cal.abort()
             log.info("Config updated: %s", ", ".join(sorted(updates)))
             if any(
                 key == "lumos_os" or key.startswith("lumos_os.") for key in updates
@@ -1644,14 +1788,14 @@ class Processor:
 
     def _apply_lumos_os_brightness_unlocked(self) -> dict[str, Any]:
         """Push the active slot's LED brightness to Lumos OS if HyperHDR is on."""
-        if self._idle:
+        if self._idle or self._leds_hold_reason:
             return {"ok": True, "skipped": True, "reason": "idle"}
         value = clamp_led_brightness(self.config.lumos_os.led_brightness)
         return apply_led_brightness(self.config.lumos_os.url, value)
 
     def _sync_lumos_vision_output_unlocked(self) -> dict[str, Any]:
-        """Ask Lumos OS to match Screen Sight's HyperHDR vs DDP LED path."""
-        return set_vision_output(
+        """Match HyperHDR vs DDP only if Lumos OS is already on a vision plugin."""
+        return sync_vision_output(
             self.config.lumos_os.url, self.config.output.led_path
         )
 
@@ -1840,6 +1984,178 @@ class Processor:
 
         return self.call(run)
 
+    def _ddp_sink_unlocked(self) -> DdpSink | None:
+        if self.sinks is None:
+            return None
+        for sink in self.sinks.sinks:
+            if isinstance(sink, DdpSink):
+                return sink
+        return None
+
+    def _led_color_status_unlocked(self) -> dict[str, Any]:
+        ddp = self.config.output.ddp
+        return {
+            **self._led_cal.status(),
+            "led_path": normalize_led_path(self.config.output.led_path),
+            "rgb_order": ddp.rgb_order,
+            "color_mode": ddp.color_mode,
+            "test": self._led_test or "off",
+            "config_matrix": list(ddp.color_matrix),
+            "config_calibrated_at": ddp.calibrated_at or "",
+        }
+
+    def _push_led_flood_unlocked(self) -> dict[str, Any]:
+        sink = self._ddp_sink_unlocked()
+        if sink is None:
+            if self._led_test or self._led_cal.state in {"running", "ready"}:
+                return {"ok": False, "error": "Direct DDP is not the live LED path"}
+            return {"ok": True, "skipped": True}
+        if self._led_test:
+            if self._led_test == "w":
+                if bytes_per_led(self.config.output.ddp.color_mode) < 4:
+                    return {"ok": False, "error": "W is only on RGBW strips"}
+                sink.flood((0, 0, 0), apply_matrix=False, white=True)
+            else:
+                rgb = {
+                    "r": (255, 0, 0),
+                    "g": (0, 255, 0),
+                    "b": (0, 0, 255),
+                }[self._led_test]
+                sink.flood(rgb, apply_matrix=False, white=False)
+            return {"ok": True, "test": self._led_test}
+        if self._led_cal.state in {"running", "ready"}:
+            sink.flood(self._led_cal.drive_rgb(), apply_matrix=False, white=False)
+            return {"ok": True, "patch": self._led_cal.patch[0]}
+        sink.clear_flood()
+        return {"ok": True}
+
+    def led_color_status(self) -> dict[str, Any]:
+        return self.call(lambda: {"ok": True, **self._led_color_status_unlocked()})
+
+    def _led_color_reply(
+        self, *, ok: bool, error: str = "", extra: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        payload = {**self._led_color_status_unlocked(), **(extra or {})}
+        payload["ok"] = ok
+        if error:
+            payload["error"] = error
+        return payload
+
+    def apply_led_color(self, body: dict[str, Any]) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            action = str(body.get("action") or "").strip().lower()
+            if normalize_led_path(self.config.output.led_path) != "ddp" and action not in {
+                "",
+                "status",
+            }:
+                return self._led_color_reply(
+                    ok=False, error="LED colour sync is only for Direct (DDP)"
+                )
+            try:
+                if action in {"", "status"}:
+                    pass
+                elif action == "test":
+                    channel = str(body.get("channel") or "off").strip().lower()
+                    if channel in {"", "off", "none"}:
+                        self._led_test = None
+                    elif channel in {"r", "g", "b", "w"}:
+                        self._led_test = channel
+                    else:
+                        raise ValueError("channel must be r, g, b, w, or off")
+                    pushed = self._push_led_flood_unlocked()
+                    if not pushed.get("ok"):
+                        self._led_test = None
+                        return self._led_color_reply(
+                            ok=False, error=str(pushed.get("error") or "flood failed")
+                        )
+                elif action == "start":
+                    self._led_test = None
+                    self._led_cal.start(self.config.output.ddp.color_matrix)
+                    self._push_led_flood_unlocked()
+                elif action == "match":
+                    self._led_cal.match()
+                    self._push_led_flood_unlocked()
+                elif action == "adjust":
+                    self._led_cal.begin_adjust()
+                    self._push_led_flood_unlocked()
+                elif action == "drive":
+                    self._led_cal.set_drive(
+                        int(body.get("r", 0)),
+                        int(body.get("g", 0)),
+                        int(body.get("b", 0)),
+                    )
+                    self._push_led_flood_unlocked()
+                elif action == "commit":
+                    self._led_cal.commit_adjust()
+                    self._push_led_flood_unlocked()
+                elif action == "next":
+                    self._led_cal.next_patch()
+                    self._push_led_flood_unlocked()
+                elif action == "prev":
+                    self._led_cal.prev_patch()
+                    self._push_led_flood_unlocked()
+                elif action == "goto":
+                    index = body.get("index")
+                    patch = body.get("patch")
+                    self._led_cal.goto(
+                        index=None if index is None else int(index),
+                        patch=None if patch is None else str(patch),
+                    )
+                    self._push_led_flood_unlocked()
+                elif action == "solve":
+                    self._led_cal.solve()
+                    self._push_led_flood_unlocked()
+                elif action == "apply":
+                    solution = self._led_cal.solution
+                    if solution is None or self._led_cal.state != "ready":
+                        return self._led_color_reply(
+                            ok=False, error="solve the LED patches first"
+                        )
+                    updates = {
+                        "output.ddp.color_matrix": list(solution),
+                        "output.ddp.calibrated_at": iso_now(),
+                    }
+                    self.config = apply_updates(self.config, updates)
+                    saved_path = str(self.save()) if body.get("save") else None
+                    self._led_test = None
+                    self._led_cal.abort()
+                    self._led_cal.state = "idle"
+                    if _updates_require_sink_recreate(updates):
+                        self._recreate_sinks_unlocked()
+                    else:
+                        self._push_led_flood_unlocked()
+                    log.info(
+                        "LED colour matrix applied%s",
+                        f" → {saved_path}" if saved_path else "",
+                    )
+                    return self._led_color_reply(ok=True, extra={"saved": saved_path})
+                elif action == "reset":
+                    updates = {
+                        "output.ddp.color_matrix": list(IDENTITY_RGB_FLAT),
+                        "output.ddp.calibrated_at": "",
+                    }
+                    self.config = apply_updates(self.config, updates)
+                    saved_path = str(self.save()) if body.get("save") else None
+                    self._led_test = None
+                    if self._led_cal.state in {"running", "ready"}:
+                        self._led_cal.start(IDENTITY_RGB_FLAT)
+                    if _updates_require_sink_recreate(updates):
+                        self._recreate_sinks_unlocked()
+                    else:
+                        self._push_led_flood_unlocked()
+                    return self._led_color_reply(ok=True, extra={"saved": saved_path})
+                elif action == "abort":
+                    self._led_test = None
+                    self._led_cal.abort()
+                    self._push_led_flood_unlocked()
+                else:
+                    raise ValueError(f"unknown LED colour action: {action}")
+            except (TypeError, ValueError) as exc:
+                return self._led_color_reply(ok=False, error=str(exc))
+            return self._led_color_reply(ok=True)
+
+        return self.call(run)
+
     def force_recalibration(self) -> bool:
         def run() -> bool:
             stage = self.pipeline.get("boundary")
@@ -1945,10 +2261,12 @@ class Processor:
                 "online": self._presence.online if self._power_enabled() else True,
                 "idle": self._idle,
                 "leds_off": self._leds_off,
+                "leds_hold_reason": self._leds_hold_reason,
             },
             "scrcpy": self._scrcpy.status(self.config.scrcpy).as_dict(),
             "lumos_cam": self._lumos.status(self.config.lumos_cam).as_dict(),
             "color_calibration": self._color_cal.status(),
+            "led_calibration": self._led_color_status_unlocked(),
             "color_profiles": profile_status(self.config.color),
         }
 

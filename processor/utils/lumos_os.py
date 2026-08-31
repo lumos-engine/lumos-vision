@@ -126,6 +126,10 @@ def _parse_json_body(raw: bytes) -> Any:
         return {"raw": raw.decode("utf-8", errors="replace")[:200]}
 
 
+#: Plugins Screen Sight is allowed to retarget via ``/vision/output``.
+_VISION_PLUGINS = frozenset({"hyperhdr", "lumos_vision", "ddp", "direct"})
+
+
 def normalize_vision_output_mode(value: Any) -> str | None:
     """Map Screen Sight ``led_path`` / aliases onto the Lumos OS vision mode."""
     text = str(value or "").strip().lower()
@@ -136,6 +140,19 @@ def normalize_vision_output_mode(value: Any) -> str | None:
     return None
 
 
+def vision_plugin_selected(status: Mapping[str, Any] | None) -> bool:
+    """True when the box is already on HyperHDR or Lumos Vision / Direct.
+
+    ``in_fallback`` (stream timeout / bias) still counts — we may restore the
+    vision mode, but we never steal the plugin from clock or a local UI app.
+    """
+    data = dict(status or {})
+    plugin = str(data.get("active_plugin") or "").strip().lower()
+    if plugin in _VISION_PLUGINS:
+        return True
+    return bool(data.get("hyperhdr_active"))
+
+
 def set_vision_output(
     base_url: str,
     mode: Any,
@@ -144,6 +161,9 @@ def set_vision_output(
     opener: Any = None,
 ) -> dict[str, Any]:
     """POST ``/api/v1/vision/output`` so the box plugin matches Screen Sight.
+
+    Body is only ``{"mode": "ddp"|"hyperhdr"}`` — never ``color_mode``. Direct
+    DDP colour (``rgb`` / ``rgbw_off`` / ``rgbw``) stays in Screen Sight config.
 
     Allowed on the box only when HyperHDR or Lumos Vision is selected (or the
     stream timed out). A 409 ``plugin_not_selected`` is logged, not raised.
@@ -179,6 +199,60 @@ def set_vision_output(
             resolved,
             result.get("error"),
         )
+    return result
+
+
+def sync_vision_output(
+    base_url: str,
+    mode: Any,
+    *,
+    timeout_sec: float = DEFAULT_TIMEOUT_SEC,
+    opener: Any = None,
+) -> dict[str, Any]:
+    """POST ``/vision/output`` only if Lumos OS is already on a vision plugin."""
+    host = normalize_base_url(base_url)
+    resolved = normalize_vision_output_mode(mode)
+    if not host:
+        return {"ok": True, "skipped": True, "reason": "no_url"}
+    if resolved is None:
+        return {"ok": False, "error": f"invalid vision output mode {mode!r}"}
+
+    status_result = fetch_status(host, timeout_sec=timeout_sec, opener=opener)
+    if status_result.get("skipped"):
+        return {**status_result, "mode": resolved}
+    if not status_result.get("ok"):
+        log.warning(
+            "Lumos OS status failed before vision output %s: %s",
+            resolved,
+            status_result.get("error"),
+        )
+        return {
+            "ok": False,
+            "error": status_result.get("error") or "status failed",
+            "mode": resolved,
+            "status": status_result,
+        }
+
+    payload = status_result.get("status_payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    if not vision_plugin_selected(payload):
+        log.info(
+            "Skipping Lumos OS vision output %s: plugin is %s",
+            resolved,
+            payload.get("active_plugin") or "(none)",
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "not_vision_plugin",
+            "mode": resolved,
+            "status_payload": payload,
+        }
+    result = set_vision_output(
+        host, resolved, timeout_sec=timeout_sec, opener=opener
+    )
+    result["status_payload"] = payload
     return result
 
 

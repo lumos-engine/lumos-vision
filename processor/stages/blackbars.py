@@ -689,8 +689,13 @@ class BlackBarStage(Stage):
             return None
         canvas = base.copy()
         height, width = canvas.shape[:2]
-        top, bottom = self._pixels["top"], self._pixels["bottom"]
-        left, right = self._pixels["left"], self._pixels["right"]
+        # ``_pixels`` is in probe space (160×90 in DDP). Draw from fractions
+        # so a 320×180 wizard preview is not under-cropped by half.
+        applied = self._applied_fractions()
+        top = int(round(height * applied["top"]))
+        bottom = int(round(height * applied["bottom"]))
+        left = int(round(width * applied["left"]))
+        right = int(round(width * applied["right"]))
 
         overlay = canvas.copy()
         if top:

@@ -1411,3 +1411,104 @@ def test_apply_scrcpy_source_does_not_snap_back_to_lumos(monkeypatch):
     finally:
         app.shutdown()
 
+
+def test_frame_stream_stalled_needs_a_real_gap():
+    from processor.utils.lumos_cam import frame_stream_stalled
+
+    assert frame_stream_stalled(None, 8.0) is False
+    assert frame_stream_stalled(3.0, 8.0) is False
+    assert frame_stream_stalled(8.1, 8.0) is True
+
+
+def test_lumos_watchdog_restarts_when_jpegs_stop(monkeypatch):
+    from processor.app import Processor
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "lumos"},
+            "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+            "lumos_cam": {
+                "enabled": True,
+                "auto_restart": True,
+                "stall_timeout_sec": 8.0,
+                "restart_interval_sec": 2.0,
+            },
+        }
+    )
+    app = Processor(config)
+
+    class _Mgr:
+        running = True
+
+    app._lumos = _Mgr()  # type: ignore[assignment]
+    starts: list[bool] = []
+    recreates = []
+
+    monkeypatch.setattr(
+        app,
+        "_start_lumos_unlocked",
+        lambda restart=False: starts.append(restart) or {"ok": True, "running": True, "ready": True},
+    )
+    monkeypatch.setattr(
+        app,
+        "_recreate_source_unlocked",
+        lambda: recreates.append(True) or {"ok": True},
+    )
+
+    class _Live:
+        stats = {"frames": 40, "last_frame_age": 1.0}
+
+    class _Stalled:
+        stats = {"frames": 40, "last_frame_age": 12.0}
+
+    app.source = _Live()  # type: ignore[assignment]
+    app._tick_lumos_watchdog()
+    assert starts == []
+
+    app.source = _Stalled()  # type: ignore[assignment]
+    app._tick_lumos_watchdog()
+    assert starts == [True]
+    assert recreates == [True]
+
+
+def test_lumos_watchdog_reopens_missing_source(monkeypatch):
+    from processor.app import Processor
+
+    config = Config.from_dict(
+        {
+            "camera": {"source": "lumos"},
+            "output": {"width": 320, "height": 180, "fps": 30, "v4l2": {"enabled": False}},
+            "logging": {"stats_interval": 0},
+            "lumos_cam": {"enabled": True, "auto_restart": True},
+        }
+    )
+    app = Processor(config)
+
+    class _Mgr:
+        running = True
+
+    app._lumos = _Mgr()  # type: ignore[assignment]
+    app.source = None
+    recreates = []
+    monkeypatch.setattr(
+        app,
+        "_recreate_source_unlocked",
+        lambda: recreates.append(True) or {"ok": True},
+    )
+    app._tick_lumos_watchdog()
+    assert recreates == [True]
+
+
+def test_fps_meter_reads_zero_after_ticks_stop(monkeypatch):
+    from processor.utils.timing import FpsMeter
+
+    now = 100.0
+    monkeypatch.setattr("processor.utils.timing.time.monotonic", lambda: now)
+    meter = FpsMeter()
+    meter.tick(100.0)
+    meter.tick(100.1)
+    assert meter.fps > 0
+    now = 103.0
+    assert meter.fps == 0.0
+
