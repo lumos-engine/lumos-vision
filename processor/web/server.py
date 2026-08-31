@@ -122,6 +122,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(
                     {"ok": True, **self.processor.color_profile_status()}
                 )
+            if route == "/api/led/color":
+                return self._send_json(self.processor.led_color_status())
             if route in (
                 "/api/calibrate/color",
                 "/api/calibrate/color/status",
@@ -244,6 +246,11 @@ class _Handler(BaseHTTPRequestHandler):
                     selection,
                     save=bool(body.get("save")),
                 )
+                return self._send_json(
+                    result, status=200 if result.get("ok") else 400
+                )
+            if route == "/api/led/color":
+                result = self.processor.apply_led_color(body)
                 return self._send_json(
                     result, status=200 if result.get("ok") else 400
                 )

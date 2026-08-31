@@ -29,6 +29,7 @@ from processor.config.schema import Config, LumosCamConfig, normalize_led_path
 from processor.output.base import SinkGroup
 from processor.output.broker import BrokerHub
 from processor.output.factory import create_sinks
+from processor.output.ddp import DdpSink
 from processor.output.v4l2 import V4L2Sink
 from processor.pipeline.context import FrameContext, PipelineState
 from processor.pipeline.pipeline import Pipeline
@@ -36,6 +37,8 @@ from processor.pipeline.registry import apply_config as apply_pipeline_config
 from processor.pipeline.registry import build_pipeline
 from processor.stages.boundary import BoundaryStage
 from processor.utils.color_calibrate import ColorCalibrationSession, iso_now
+from processor.utils.led_calibrate import LedCalibrationSession
+from processor.led.rgbw import IDENTITY_RGB_FLAT, bytes_per_led
 from processor.utils.color_profiles import (
     bind_config,
     camera_for_slot,
@@ -242,6 +245,8 @@ class Processor:
         self._last_no_frame_log = 0.0
         self._v4l2_next_repair = 0.0
         self._color_cal = ColorCalibrationSession()
+        self._led_cal = LedCalibrationSession()
+        self._led_test: str | None = None
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -588,6 +593,7 @@ class Processor:
         self._nudge_hyperhdr_grabber_unlocked()
         if self._leds_hold_reason:
             self._apply_led_output_unlocked(False)
+        self._push_led_flood_unlocked()
         log.info(
             "Output sinks recreated: %s (led_path=%s)",
             ", ".join(s.name for s in self.sinks.sinks) or "none",
@@ -1096,6 +1102,10 @@ class Processor:
                 self._recreate_sinks_unlocked()
             if "output.led_path" in updates:
                 self._sync_lumos_vision_output_unlocked()
+                if normalize_led_path(self.config.output.led_path) != "ddp":
+                    self._led_test = None
+                    if self._led_cal.state in {"running", "ready"}:
+                        self._led_cal.abort()
             log.info("Config updated: %s", ", ".join(sorted(updates)))
             if any(
                 key == "lumos_os" or key.startswith("lumos_os.") for key in updates
@@ -1974,6 +1984,178 @@ class Processor:
 
         return self.call(run)
 
+    def _ddp_sink_unlocked(self) -> DdpSink | None:
+        if self.sinks is None:
+            return None
+        for sink in self.sinks.sinks:
+            if isinstance(sink, DdpSink):
+                return sink
+        return None
+
+    def _led_color_status_unlocked(self) -> dict[str, Any]:
+        ddp = self.config.output.ddp
+        return {
+            **self._led_cal.status(),
+            "led_path": normalize_led_path(self.config.output.led_path),
+            "rgb_order": ddp.rgb_order,
+            "color_mode": ddp.color_mode,
+            "test": self._led_test or "off",
+            "config_matrix": list(ddp.color_matrix),
+            "config_calibrated_at": ddp.calibrated_at or "",
+        }
+
+    def _push_led_flood_unlocked(self) -> dict[str, Any]:
+        sink = self._ddp_sink_unlocked()
+        if sink is None:
+            if self._led_test or self._led_cal.state in {"running", "ready"}:
+                return {"ok": False, "error": "Direct DDP is not the live LED path"}
+            return {"ok": True, "skipped": True}
+        if self._led_test:
+            if self._led_test == "w":
+                if bytes_per_led(self.config.output.ddp.color_mode) < 4:
+                    return {"ok": False, "error": "W is only on RGBW strips"}
+                sink.flood((0, 0, 0), apply_matrix=False, white=True)
+            else:
+                rgb = {
+                    "r": (255, 0, 0),
+                    "g": (0, 255, 0),
+                    "b": (0, 0, 255),
+                }[self._led_test]
+                sink.flood(rgb, apply_matrix=False, white=False)
+            return {"ok": True, "test": self._led_test}
+        if self._led_cal.state in {"running", "ready"}:
+            sink.flood(self._led_cal.drive_rgb(), apply_matrix=False, white=False)
+            return {"ok": True, "patch": self._led_cal.patch[0]}
+        sink.clear_flood()
+        return {"ok": True}
+
+    def led_color_status(self) -> dict[str, Any]:
+        return self.call(lambda: {"ok": True, **self._led_color_status_unlocked()})
+
+    def _led_color_reply(
+        self, *, ok: bool, error: str = "", extra: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        payload = {**self._led_color_status_unlocked(), **(extra or {})}
+        payload["ok"] = ok
+        if error:
+            payload["error"] = error
+        return payload
+
+    def apply_led_color(self, body: dict[str, Any]) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            action = str(body.get("action") or "").strip().lower()
+            if normalize_led_path(self.config.output.led_path) != "ddp" and action not in {
+                "",
+                "status",
+            }:
+                return self._led_color_reply(
+                    ok=False, error="LED colour sync is only for Direct (DDP)"
+                )
+            try:
+                if action in {"", "status"}:
+                    pass
+                elif action == "test":
+                    channel = str(body.get("channel") or "off").strip().lower()
+                    if channel in {"", "off", "none"}:
+                        self._led_test = None
+                    elif channel in {"r", "g", "b", "w"}:
+                        self._led_test = channel
+                    else:
+                        raise ValueError("channel must be r, g, b, w, or off")
+                    pushed = self._push_led_flood_unlocked()
+                    if not pushed.get("ok"):
+                        self._led_test = None
+                        return self._led_color_reply(
+                            ok=False, error=str(pushed.get("error") or "flood failed")
+                        )
+                elif action == "start":
+                    self._led_test = None
+                    self._led_cal.start(self.config.output.ddp.color_matrix)
+                    self._push_led_flood_unlocked()
+                elif action == "match":
+                    self._led_cal.match()
+                    self._push_led_flood_unlocked()
+                elif action == "adjust":
+                    self._led_cal.begin_adjust()
+                    self._push_led_flood_unlocked()
+                elif action == "drive":
+                    self._led_cal.set_drive(
+                        int(body.get("r", 0)),
+                        int(body.get("g", 0)),
+                        int(body.get("b", 0)),
+                    )
+                    self._push_led_flood_unlocked()
+                elif action == "commit":
+                    self._led_cal.commit_adjust()
+                    self._push_led_flood_unlocked()
+                elif action == "next":
+                    self._led_cal.next_patch()
+                    self._push_led_flood_unlocked()
+                elif action == "prev":
+                    self._led_cal.prev_patch()
+                    self._push_led_flood_unlocked()
+                elif action == "goto":
+                    index = body.get("index")
+                    patch = body.get("patch")
+                    self._led_cal.goto(
+                        index=None if index is None else int(index),
+                        patch=None if patch is None else str(patch),
+                    )
+                    self._push_led_flood_unlocked()
+                elif action == "solve":
+                    self._led_cal.solve()
+                    self._push_led_flood_unlocked()
+                elif action == "apply":
+                    solution = self._led_cal.solution
+                    if solution is None or self._led_cal.state != "ready":
+                        return self._led_color_reply(
+                            ok=False, error="solve the LED patches first"
+                        )
+                    updates = {
+                        "output.ddp.color_matrix": list(solution),
+                        "output.ddp.calibrated_at": iso_now(),
+                    }
+                    self.config = apply_updates(self.config, updates)
+                    saved_path = str(self.save()) if body.get("save") else None
+                    self._led_test = None
+                    self._led_cal.abort()
+                    self._led_cal.state = "idle"
+                    if _updates_require_sink_recreate(updates):
+                        self._recreate_sinks_unlocked()
+                    else:
+                        self._push_led_flood_unlocked()
+                    log.info(
+                        "LED colour matrix applied%s",
+                        f" → {saved_path}" if saved_path else "",
+                    )
+                    return self._led_color_reply(ok=True, extra={"saved": saved_path})
+                elif action == "reset":
+                    updates = {
+                        "output.ddp.color_matrix": list(IDENTITY_RGB_FLAT),
+                        "output.ddp.calibrated_at": "",
+                    }
+                    self.config = apply_updates(self.config, updates)
+                    saved_path = str(self.save()) if body.get("save") else None
+                    self._led_test = None
+                    if self._led_cal.state in {"running", "ready"}:
+                        self._led_cal.start(IDENTITY_RGB_FLAT)
+                    if _updates_require_sink_recreate(updates):
+                        self._recreate_sinks_unlocked()
+                    else:
+                        self._push_led_flood_unlocked()
+                    return self._led_color_reply(ok=True, extra={"saved": saved_path})
+                elif action == "abort":
+                    self._led_test = None
+                    self._led_cal.abort()
+                    self._push_led_flood_unlocked()
+                else:
+                    raise ValueError(f"unknown LED colour action: {action}")
+            except (TypeError, ValueError) as exc:
+                return self._led_color_reply(ok=False, error=str(exc))
+            return self._led_color_reply(ok=True)
+
+        return self.call(run)
+
     def force_recalibration(self) -> bool:
         def run() -> bool:
             stage = self.pipeline.get("boundary")
@@ -2084,6 +2266,7 @@ class Processor:
             "scrcpy": self._scrcpy.status(self.config.scrcpy).as_dict(),
             "lumos_cam": self._lumos.status(self.config.lumos_cam).as_dict(),
             "color_calibration": self._color_cal.status(),
+            "led_calibration": self._led_color_status_unlocked(),
             "color_profiles": profile_status(self.config.color),
         }
 

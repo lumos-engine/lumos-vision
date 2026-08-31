@@ -249,6 +249,16 @@ const CONTROLS = [
         ],
       },
       {
+        path: 'output.ddp.rgb_order',
+        type: 'select',
+        label: 'LED wire order',
+        options: [
+          { value: 'rgb', label: 'RGB / RGBW' },
+          { value: 'grb', label: 'GRB / GRBW (try if green is missing)' },
+        ],
+        ddpOnly: true,
+      },
+      {
         path: 'output.ddp.white_kelvin',
         label: 'White LED temperature',
         min: 1800,
@@ -1764,6 +1774,208 @@ async function buildColorCalPanel() {
   });
 }
 
+async function ledColor(action, extra) {
+  return api('/api/led/color', { action, ...(extra || {}) });
+}
+
+function renderLedCal(cal) {
+  if (!cal || !$('led-cal-meta')) return;
+  const state = cal.state || 'idle';
+  const active = state === 'running' || state === 'ready';
+  const adjusting = cal.phase === 'adjusting';
+  const test = cal.test || 'off';
+  const pct = Math.round((Number(cal.progress) || 0) * 100);
+  const bar = $('led-cal-bar');
+  if (bar) bar.style.width = `${pct}%`;
+
+  const bits = [state];
+  if (cal.patch && cal.patch !== 'idle') bits.push(cal.patch);
+  if (cal.recorded != null && cal.total != null) {
+    bits.push(`${cal.recorded}/${cal.total}`);
+  }
+  if (test !== 'off') bits.push(`test ${test.toUpperCase()}`);
+  if (cal.error) bits.push(cal.error);
+  if (cal.config_calibrated_at) bits.push('saved');
+  $('led-cal-meta').textContent = bits.join(' · ');
+
+  const intended = cal.intended || [0, 0, 0];
+  const swatch = $('led-cal-swatch');
+  if (swatch) {
+    swatch.style.background = `rgb(${intended[0]},${intended[1]},${intended[2]})`;
+  }
+
+  const drive = cal.drive || [0, 0, 0];
+  for (const ch of ['r', 'g', 'b']) {
+    const input = $(`led-cal-drive-${ch}`);
+    const out = $(`led-cal-drive-${ch}-out`);
+    const idx = ch === 'r' ? 0 : ch === 'g' ? 1 : 2;
+    if (input && document.activeElement !== input) input.value = String(drive[idx]);
+    if (out) out.textContent = String(drive[idx]);
+    if (input) input.disabled = !active;
+  }
+  const driveBox = $('led-cal-drive');
+  if (driveBox) driveBox.hidden = !active || !adjusting;
+
+  const startBtn = $('btn-led-cal-start');
+  const abortBtn = $('btn-led-cal-abort');
+  const matchBtn = $('btn-led-cal-match');
+  const mismatchBtn = $('btn-led-cal-mismatch');
+  const commitBtn = $('btn-led-cal-commit');
+  const prevBtn = $('btn-led-cal-prev');
+  const nextBtn = $('btn-led-cal-next');
+  const solveBtn = $('btn-led-cal-solve');
+  const applyBtn = $('btn-led-cal-apply');
+  const saveBtn = $('btn-led-cal-save');
+  const resetBtn = $('btn-led-cal-reset');
+  if (startBtn) startBtn.disabled = active;
+  if (abortBtn) abortBtn.disabled = !active && test === 'off';
+  if (matchBtn) matchBtn.disabled = !active || adjusting;
+  if (mismatchBtn) mismatchBtn.disabled = !active || adjusting;
+  if (commitBtn) {
+    commitBtn.disabled = !active || !adjusting;
+    commitBtn.hidden = !adjusting;
+  }
+  if (prevBtn) prevBtn.disabled = !active || Number(cal.index) <= 0;
+  if (nextBtn) {
+    nextBtn.disabled = !active || Number(cal.index) >= Number(cal.total) - 1;
+  }
+  if (solveBtn) solveBtn.disabled = !cal.can_solve;
+  if (applyBtn) applyBtn.disabled = state !== 'ready';
+  if (saveBtn) saveBtn.disabled = state !== 'ready';
+  if (resetBtn) resetBtn.disabled = active;
+
+  const question = $('led-cal-question');
+  if (question) {
+    if (!active) {
+      question.textContent =
+        'Test R/G/B/W first. If Test G is red (or dark) and Test R is green, set wire order to GRB.';
+    } else if (adjusting) {
+      question.textContent =
+        'Move the sliders until the strip matches the swatch, then save this patch.';
+    } else {
+      question.textContent = `Does the strip match this ${cal.patch} swatch?`;
+    }
+  }
+
+  for (const ch of ['r', 'g', 'b', 'w', 'off']) {
+    const btn = $(`btn-led-test-${ch}`);
+    if (!btn) continue;
+    btn.classList.toggle('btn-primary', test === ch);
+    const rgbw = (cal.color_mode || 'rgbw') !== 'rgb';
+    if (ch === 'w') btn.disabled = !rgbw;
+  }
+}
+
+async function buildLedCalPanel() {
+  const root = $('led-cal-panel');
+  if (!root) return;
+  root.innerHTML = '';
+
+  const section = document.createElement('div');
+  section.className = 'control-group';
+  section.innerHTML = `
+    <h3>LED colour sync</h3>
+    <p class="hint">Direct only — not camera profiles. Floods the strip so you
+    can match output colour. Wire order first if green never appears.</p>
+    <div class="source-actions">
+      <button type="button" class="btn" id="btn-led-test-r">Test R</button>
+      <button type="button" class="btn" id="btn-led-test-g">Test G</button>
+      <button type="button" class="btn" id="btn-led-test-b">Test B</button>
+      <button type="button" class="btn" id="btn-led-test-w">Test W</button>
+      <button type="button" class="btn" id="btn-led-test-off">Stop test</button>
+    </div>
+    <div class="source-actions">
+      <button type="button" class="btn btn-primary" id="btn-led-cal-start">Start sync</button>
+      <button type="button" class="btn" id="btn-led-cal-prev">Prev</button>
+      <button type="button" class="btn" id="btn-led-cal-next">Next</button>
+      <button type="button" class="btn" id="btn-led-cal-match">Matches</button>
+      <button type="button" class="btn" id="btn-led-cal-mismatch">Doesn't match</button>
+      <button type="button" class="btn" id="btn-led-cal-commit" hidden>Save drive</button>
+      <button type="button" class="btn" id="btn-led-cal-solve">Solve</button>
+      <button type="button" class="btn" id="btn-led-cal-abort">Abort</button>
+      <button type="button" class="btn" id="btn-led-cal-apply">Apply</button>
+      <button type="button" class="btn" id="btn-led-cal-save">Apply &amp; Save</button>
+      <button type="button" class="btn" id="btn-led-cal-reset">Reset identity</button>
+    </div>
+    <div class="led-cal-swatch" id="led-cal-swatch"></div>
+    <p class="source-meta" id="led-cal-question">Test R/G/B/W first.</p>
+    <div class="led-cal-drive" id="led-cal-drive" hidden>
+      <label for="led-cal-drive-r">Drive R</label>
+      <input id="led-cal-drive-r" type="range" min="0" max="255" step="1" value="0">
+      <output id="led-cal-drive-r-out">0</output>
+      <label for="led-cal-drive-g">Drive G</label>
+      <input id="led-cal-drive-g" type="range" min="0" max="255" step="1" value="0">
+      <output id="led-cal-drive-g-out">0</output>
+      <label for="led-cal-drive-b">Drive B</label>
+      <input id="led-cal-drive-b" type="range" min="0" max="255" step="1" value="0">
+      <output id="led-cal-drive-b-out">0</output>
+    </div>
+    <div class="cal-progress"><span id="led-cal-bar"></span></div>
+    <p class="source-meta" id="led-cal-meta">idle</p>`;
+  root.append(section);
+
+  const run = async (action, extra) => {
+    try {
+      const result = await ledColor(action, extra);
+      if (!result.ok) throw new Error(result.error || `${action} failed`);
+      renderLedCal(result);
+      if (result.config) applyConfig(result.config);
+      return result;
+    } catch (err) {
+      toast(err.message, 'error');
+      return null;
+    }
+  };
+
+  for (const ch of ['r', 'g', 'b', 'w', 'off']) {
+    $(`btn-led-test-${ch}`)?.addEventListener('click', () =>
+      run('test', { channel: ch }),
+    );
+  }
+  $('btn-led-cal-start')?.addEventListener('click', () => run('start'));
+  $('btn-led-cal-abort')?.addEventListener('click', () => run('abort'));
+  $('btn-led-cal-match')?.addEventListener('click', () => run('match'));
+  $('btn-led-cal-mismatch')?.addEventListener('click', () => run('adjust'));
+  $('btn-led-cal-commit')?.addEventListener('click', () => run('commit'));
+  $('btn-led-cal-prev')?.addEventListener('click', () => run('prev'));
+  $('btn-led-cal-next')?.addEventListener('click', () => run('next'));
+  $('btn-led-cal-solve')?.addEventListener('click', async () => {
+    const result = await run('solve');
+    if (result) toast('LED matrix solved — Apply to keep it', 'ok');
+  });
+  $('btn-led-cal-apply')?.addEventListener('click', () => run('apply'));
+  $('btn-led-cal-save')?.addEventListener('click', () => run('apply', { save: true }));
+  $('btn-led-cal-reset')?.addEventListener('click', () => run('reset'));
+
+  const pushDrive = () => {
+    const r = Number($('led-cal-drive-r')?.value || 0);
+    const g = Number($('led-cal-drive-g')?.value || 0);
+    const b = Number($('led-cal-drive-b')?.value || 0);
+    for (const [id, val] of [
+      ['led-cal-drive-r-out', r],
+      ['led-cal-drive-g-out', g],
+      ['led-cal-drive-b-out', b],
+    ]) {
+      const out = $(id);
+      if (out) out.textContent = String(val);
+    }
+    ledColor('drive', { r, g, b }).then((result) => {
+      if (result?.ok) renderLedCal(result);
+    });
+  };
+  for (const ch of ['r', 'g', 'b']) {
+    $(`led-cal-drive-${ch}`)?.addEventListener('input', pushDrive);
+  }
+
+  renderLedCal({
+    state: 'idle',
+    test: 'off',
+    progress: 0,
+    intended: [0, 0, 0],
+    drive: [0, 0, 0],
+  });
+}
+
 async function buildSourcePanel() {
   const root = $('source-panel');
   if (!root) return;
@@ -2170,6 +2382,8 @@ function syncLedPathControls(config) {
       if (bound.row) bound.row.hidden = !show;
     }
   }
+  const ledCal = $('led-cal-panel');
+  if (ledCal) ledCal.hidden = !ddp;
 }
 
 // ------------------------------------------------------------ corner picker
@@ -2613,6 +2827,9 @@ async function refresh() {
   if (status.color_calibration) {
     renderColorCal(status.color_calibration);
   }
+  if (status.led_calibration) {
+    renderLedCal(status.led_calibration);
+  }
   if (status.color_profiles) {
     renderColorProfiles(status.color_profiles);
   }
@@ -2711,6 +2928,7 @@ async function init() {
   await buildScrcpyPanel();
   await buildColorProfilePanel();
   await buildColorCalPanel();
+  await buildLedCalPanel();
   await buildCameraControls();
   setupPicker();
   wireButtons();

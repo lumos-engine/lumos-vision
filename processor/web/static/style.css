@@ -326,6 +326,23 @@ select.compact { width: auto; padding: 5px 8px; font-size: 12px; }
 .cal-swatch.measured .pair {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
+.led-cal-swatch {
+  width: min(100%, 220px);
+  height: 72px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  grid-column: 1 / -1;
+}
+.led-cal-drive {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px 10px;
+  align-items: center;
+  grid-column: 1 / -1;
+}
+.led-cal-drive[hidden] {
+  display: none;
+}
 .cal-swatch .pair {
   display: flex;
   height: 28px;

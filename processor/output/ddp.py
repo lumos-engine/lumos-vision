@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 
 from processor.config.schema import DdpConfig
-from processor.led.rgbw import encode_led_pixels, normalize_color_mode
+from processor.led.rgbw import normalize_color_mode, wire_led_pixels
 from processor.led.sampler import LedLayout, LedSampler, panel_insets_from_meta
 from processor.output.base import Sink
 from processor.utils.logging import get_logger
@@ -96,6 +96,10 @@ class DdpSink(Sink):
         self._next_send = 0.0
         #: After ``hold_off``, skip further sends until ``resume``.
         self._held_off = False
+        #: Flood RGB (logical) while tests / LED cal pause camera sampling.
+        self._override: np.ndarray | None = None
+        self._override_apply_matrix = True
+        self._override_white = False
 
     def open(self, width: int, height: int) -> None:
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -111,6 +115,8 @@ class DdpSink(Sink):
     def write(self, image: np.ndarray, ctx: Any | None = None) -> bool:
         if self._socket is None:
             return False
+        if self._override is not None:
+            return self._send_override()
         if self._held_off:
             return True
 
@@ -124,6 +130,8 @@ class DdpSink(Sink):
 
     def hold_off(self) -> bool:
         """Send one black frame and stop so a dead stream does not sit on colour."""
+        if self._override is not None:
+            return True
         if self._held_off:
             return True
         count = self.sampler.layout.count
@@ -135,14 +143,53 @@ class DdpSink(Sink):
     def resume(self) -> None:
         self._held_off = False
 
-    def _send_pixels(self, rgb: np.ndarray) -> bool:
+    def flood(
+        self,
+        rgb: tuple[int, int, int] | np.ndarray,
+        *,
+        apply_matrix: bool = True,
+        white: bool = False,
+    ) -> bool:
+        """Bypass the camera and hold every LED at ``rgb`` (or W-only)."""
+        self._override = np.asarray(rgb, dtype=np.uint8).reshape(3)
+        self._override_apply_matrix = bool(apply_matrix)
+        self._override_white = bool(white)
+        return self._send_override()
+
+    def clear_flood(self) -> None:
+        self._override = None
+        self._override_apply_matrix = True
+        self._override_white = False
+
+    def _send_override(self) -> bool:
+        if self._override is None:
+            return True
+        count = self.sampler.layout.count
+        rgb = np.broadcast_to(self._override.reshape(1, 3), (count, 3)).copy()
+        return self._send_pixels(
+            rgb,
+            apply_matrix=self._override_apply_matrix,
+            white_flood=self._override_white,
+        )
+
+    def _send_pixels(
+        self,
+        rgb: np.ndarray,
+        *,
+        apply_matrix: bool = True,
+        white_flood: bool = False,
+    ) -> bool:
         if self._socket is None:
             return False
-        pixels = encode_led_pixels(
+        pixels = wire_led_pixels(
             rgb,
             self.config.color_mode,
+            rgb_order=self.config.rgb_order,
+            matrix=self.config.color_matrix,
             white_kelvin=float(self.config.white_kelvin or 3000),
             white_gain=float(self.config.white_gain),
+            apply_matrix=apply_matrix,
+            white_flood=white_flood,
         )
         self._sequence = (self._sequence % 15) + 1
         address = (self.config.host, self.config.port)
@@ -187,11 +234,13 @@ class DdpSink(Sink):
             "target": f"{self.config.host}:{self.config.port}",
             "leds": self.sampler.layout.count,
             "color_mode": normalize_color_mode(self.config.color_mode),
+            "rgb_order": self.config.rgb_order,
             "white_kelvin": int(self.config.white_kelvin or 3000),
             "white_gain": float(self.config.white_gain),
             "frames": self._frames,
             "errors": self._errors,
             "held_off": self._held_off,
+            "flood": self._override is not None,
         }
 
 
